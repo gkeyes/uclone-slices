@@ -11,10 +11,10 @@ while (( $# > 0 )); do
     case "$1" in
         --profile) [ "$#" -ge 2 ] || exit 2; PROFILE=$2; shift 2 ;;
         --output) [ "$#" -ge 2 ] || exit 2; TARGET_ROOT=$2; shift 2 ;;
-        *) printf '%s\n' 'usage: tools/package-kernelsu-preview.sh [--profile slotprobe|fitness] [--output directory]' >&2; exit 2 ;;
+        *) printf '%s\n' 'usage: tools/package-kernelsu-preview.sh [--profile slotprobe|fitness|generic] [--output directory]' >&2; exit 2 ;;
     esac
 done
-case "$PROFILE" in slotprobe|fitness) ;; *) exit 2 ;; esac
+case "$PROFILE" in slotprobe|fitness|generic) ;; *) exit 2 ;; esac
 BRIDGE_ROOT="$REPO_ROOT/slot-bridge/build/app-process/$PROFILE"
 BRIDGE_APK="$BRIDGE_ROOT/slot-bridge.apk"
 FSPROBE_ROOT="$REPO_ROOT/slot-fsprobe"

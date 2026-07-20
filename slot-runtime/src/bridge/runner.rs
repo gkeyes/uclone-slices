@@ -147,7 +147,7 @@ pub enum BridgeRunnerError {
 #[doc = "Injected typed command runner used by BridgeClient and tests."]
 pub trait BridgeCommandRunner: core::fmt::Debug {
     #[doc = "Runs one fixed command and returns its bounded stdout bytes."]
-    fn run(&mut self, command: BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError>;
+    fn run(&mut self, command: &BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError>;
 }
 
 #[doc = "Production runner with a fixed executable and strictly validated daemon classpaths."]
@@ -164,7 +164,7 @@ impl AppProcessRunner {
 }
 
 impl BridgeCommandRunner for AppProcessRunner {
-    fn run(&mut self, command: BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError> {
+    fn run(&mut self, command: &BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError> {
         if self.session.is_none() {
             let environment = ValidatedBootEnvironment::from_daemon_environment()
                 .map_err(BridgeRunnerError::Io)?;

@@ -1,6 +1,7 @@
 use crate::domain::{DataInodes, GateSnapshot, ManagedPackage, PackageName, UserId};
 
 mod codec;
+mod discovery;
 mod file;
 mod filesystem;
 mod retirement;
@@ -176,6 +177,11 @@ pub enum GateLeaseError {
 
 #[doc = "Injected durability boundary for `KernelSU` rescue gate state."]
 pub trait GateLeaseStore: core::fmt::Debug {
+    #[doc = "Enumerates recognizable active or transitional lease package names."]
+    fn package_names(&mut self) -> Result<Vec<PackageName>, GateLeaseError> {
+        Ok(Vec::new())
+    }
+
     #[doc = "Checks only whether a fixed lease or retirement artifact exists, without decoding it."]
     fn artifact_exists(&mut self, package: &PackageName) -> Result<bool, GateLeaseError>;
 

@@ -45,6 +45,8 @@ pub mod rescue;
 pub mod runtime;
 #[doc = "Fixed-command daemon service composition for Slots Preview operations."]
 pub mod service;
+#[doc = "Durable display and lifecycle metadata for immutable data-slot identifiers."]
+pub mod slot_metadata;
 #[doc = "Generated immutable build-time target profile constants."]
 pub mod target {
     include!(env!("UCLONE_TARGET_RS"));

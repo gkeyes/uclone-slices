@@ -2,12 +2,15 @@
 #include "sha256.h"
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <linux/fscrypt.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -69,15 +72,49 @@ static bool write_all(int descriptor, const char *data, size_t length) {
     return true;
 }
 
-int main(int argc, char *argv[]) {
+static int write_space(int descriptor, const struct stat *metadata) {
+    struct statvfs filesystem;
+    char output[96];
+    if (fstatvfs(descriptor, &filesystem) != 0 || filesystem.f_frsize == 0U ||
+        (uint64_t)filesystem.f_bavail > UINT64_MAX / (uint64_t)filesystem.f_frsize) {
+        return EXIT_METADATA;
+    }
+    const uint64_t available =
+        (uint64_t)filesystem.f_bavail * (uint64_t)filesystem.f_frsize;
+    const int length = snprintf(output, sizeof(output), "%" PRIu64 ":%" PRIu64 "\n",
+                                (uint64_t)metadata->st_dev, available);
+    if (length <= 0 || (size_t)length >= sizeof(output)) {
+        return EXIT_OUTPUT;
+    }
+    return write_all(STDOUT_FILENO, output, (size_t)length) ? EXIT_OK : EXIT_OUTPUT;
+}
+
+static int write_policy(int descriptor) {
     struct fscrypt_get_policy_ex_arg argument;
     struct sha256_context hash;
-    struct stat metadata;
     uint8_t digest[SHA256_DIGEST_BYTES];
     uint8_t encoded_size[8];
     char output[65];
 
-    if (argc != 3 || strcmp(argv[1], "policy") != 0) {
+    memset(&argument, 0, sizeof(argument));
+    argument.policy_size = sizeof(argument.policy);
+    if (ioctl(descriptor, FS_IOC_GET_ENCRYPTION_POLICY_EX, &argument) != 0 ||
+        !policy_shape_allowed(&argument)) {
+        return EXIT_POLICY;
+    }
+    encode_little_endian_u64(argument.policy_size, encoded_size);
+    sha256_init(&hash);
+    sha256_update(&hash, encoded_size, sizeof(encoded_size));
+    sha256_update(&hash, &argument.policy.version, (size_t)argument.policy_size);
+    sha256_final(&hash, digest);
+    encode_hex(digest, output);
+    return write_all(STDOUT_FILENO, output, sizeof(output)) ? EXIT_OK : EXIT_OUTPUT;
+}
+
+int main(int argc, char *argv[]) {
+    struct stat metadata;
+
+    if (argc != 3 || (strcmp(argv[1], "policy") != 0 && strcmp(argv[1], "space") != 0)) {
         return EXIT_CLI;
     }
     if (!fsprobe_path_allowed(argv[2])) {
@@ -95,22 +132,10 @@ int main(int argc, char *argv[]) {
         return EXIT_METADATA;
     }
 
-    memset(&argument, 0, sizeof(argument));
-    argument.policy_size = sizeof(argument.policy);
-    if (ioctl(descriptor, FS_IOC_GET_ENCRYPTION_POLICY_EX, &argument) != 0 ||
-        !policy_shape_allowed(&argument)) {
-        (void)close(descriptor);
-        return EXIT_POLICY;
-    }
+    const int result = strcmp(argv[1], "space") == 0 ? write_space(descriptor, &metadata)
+                                                     : write_policy(descriptor);
     if (close(descriptor) != 0) {
         return EXIT_POLICY;
     }
-
-    encode_little_endian_u64(argument.policy_size, encoded_size);
-    sha256_init(&hash);
-    sha256_update(&hash, encoded_size, sizeof(encoded_size));
-    sha256_update(&hash, &argument.policy.version, (size_t)argument.policy_size);
-    sha256_final(&hash, digest);
-    encode_hex(digest, output);
-    return write_all(STDOUT_FILENO, output, sizeof(output)) ? EXIT_OK : EXIT_OUTPUT;
+    return result;
 }

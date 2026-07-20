@@ -13,7 +13,51 @@ use super::{
 /// caller-supplied filesystem path or Android user id.
 pub trait ServicePlatform: core::fmt::Debug {
     /// Reads device and user-zero capability facts without mutating runtime state.
-    fn probe(&self, key: &PackageKey) -> Result<CapabilitySnapshot, ServiceError>;
+    fn probe(&self) -> Result<CapabilitySnapshot, ServiceError>;
+
+    /// Inspects one installed user-zero package without enrolling it.
+    fn inspect_package(&self, _key: &PackageKey) -> Result<super::PackageInspection, ServiceError> {
+        Err(ServiceError::InvalidRequest)
+    }
+
+    /// Lists durable managed-app rows without accepting caller paths.
+    fn list_managed_apps(&self) -> Result<Vec<super::ManagedAppInfo>, ServiceError> {
+        Err(ServiceError::InvalidRequest)
+    }
+
+    /// Lists Base and verified non-base slots for one managed package.
+    fn list_slots(&self, _key: &PackageKey) -> Result<Vec<super::SlotInfo>, ServiceError> {
+        Err(ServiceError::InvalidRequest)
+    }
+
+    /// Creates a runtime-named slot, materializes it, and switches transactionally.
+    fn create_slot(
+        &mut self,
+        _key: &PackageKey,
+        _display_name: crate::slot_metadata::SlotDisplayName,
+        _seed_mode: crate::slot_metadata::SlotSeedMode,
+    ) -> Result<SwitchExecution, ServiceError> {
+        Err(ServiceError::InvalidRequest)
+    }
+
+    /// Appends a display-only rename revision for one ready non-base slot.
+    fn rename_slot(
+        &mut self,
+        _key: &PackageKey,
+        _slot: &crate::domain::SlotId,
+        _display_name: crate::slot_metadata::SlotDisplayName,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::InvalidRequest)
+    }
+
+    /// Deletes paired storage for one inactive non-base slot and tombstones it.
+    fn delete_slot(
+        &mut self,
+        _key: &PackageKey,
+        _slot: &crate::domain::SlotId,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::InvalidRequest)
+    }
 
     /// Reads and cross-validates all package stores without mutating them.
     fn package_state(&self, key: &PackageKey) -> Result<PackageState, ServiceError>;
@@ -81,7 +125,12 @@ pub trait ServicePlatform: core::fmt::Debug {
 
     /// Materializes and catalogs both CE and DE for the fixed `preview` slot while
     /// retaining the already-proved execution gate.
-    fn materialize_preview(&mut self, package: &ManagedPackage) -> Result<SlotView, ServiceError>;
+    fn materialize_slot(
+        &mut self,
+        package: &ManagedPackage,
+        slot: &crate::domain::SlotId,
+        seed_mode: crate::slot_metadata::SlotSeedMode,
+    ) -> Result<SlotView, ServiceError>;
 
     /// Delegates to the runtime coordinator using only a typed catalog view.
     /// When `prepared_gate` is present, the coordinator must reuse that exact

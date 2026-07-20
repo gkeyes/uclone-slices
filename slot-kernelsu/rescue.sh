@@ -11,7 +11,7 @@ PROFILE_FILE=$SCRIPT_DIR/target-profile.sh
 [ -f "$PROFILE_FILE" ] && [ ! -L "$PROFILE_FILE" ] || exit 1
 . "$PROFILE_FILE"
 RUNTIME_ROOT=$UCLONE_RUNTIME_ROOT
-PACKAGE=$UCLONE_TARGET_PACKAGE
+PACKAGE=
 USER_ID=$UCLONE_TARGET_USER
 SLOTCTL_BIN="$SCRIPT_DIR/bin/slotctl"
 TOYBOX_BIN=/system/bin/toybox
@@ -35,6 +35,13 @@ safe_binary() {
     [ $((other & 2)) -eq 0 ] && [ $((group & 2)) -eq 0 ]
 }
 
+valid_package() {
+    [ "${#1}" -le 255 ] || return 1
+    printf '%s\n' "$1" |
+        "$TOYBOX_BIN" grep -E -x '[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+' \
+            >/dev/null 2>&1
+}
+
 package_is_disabled() {
     safe_binary "$TOYBOX_BIN" || return 1
     disabled_packages="$("$CMD_BIN" package list packages -d --user "$USER_ID" 2>/dev/null)" ||
@@ -46,10 +53,14 @@ package_is_disabled() {
 package_is_quiesced() {
     safe_binary "$TOYBOX_BIN" || return 1
     processes="$("$TOYBOX_BIN" ps -A -o NAME 2>/dev/null)" || return 1
-    printf '%s\n' "$processes" |
-        "$TOYBOX_BIN" grep -E -q "$UCLONE_TARGET_PROCESS_REGEX"
-    status=$?
-    [ "$status" -eq 1 ]
+    while IFS= read -r process; do
+        case "$process" in
+            "$PACKAGE"|"$PACKAGE":*) return 1 ;;
+        esac
+    done <<EOF
+$processes
+EOF
+    return 0
 }
 
 contain_package() {
@@ -90,12 +101,18 @@ fail_closed() {
 
 first_arg="${1:-}"
 second_arg="${2:-}"
-if [ "$first_arg" = "$PACKAGE" ] && [ "$second_arg" = "--to-base" ] && [ -z "${3:-}" ]; then
-    :
+if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
+    [ "$second_arg" = "--to-base" ] && [ -z "${3:-}" ] || exit 2
+    safe_binary "$TOYBOX_BIN" || exit 1
+    valid_package "$first_arg" || exit 2
+    PACKAGE=$first_arg
+elif [ "$first_arg" = "$UCLONE_TARGET_PACKAGE" ] &&
+    [ "$second_arg" = "--to-base" ] && [ -z "${3:-}" ]; then
+    PACKAGE=$UCLONE_TARGET_PACKAGE
 elif [ "$first_arg" = "--to-base" ] && [ -z "$second_arg" ] && [ -z "${3:-}" ]; then
-    :
+    PACKAGE=$UCLONE_TARGET_PACKAGE
 else
-    fail_closed "usage is rescue.sh [$PACKAGE] --to-base"
+    exit 2
 fi
 
 if [ -L "$RUNTIME_ROOT" ] || [ ! -d "$RUNTIME_ROOT" ]; then

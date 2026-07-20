@@ -21,6 +21,13 @@ pub trait MaterializationBackend: core::fmt::Debug {
         package: &ManagedPackage,
     ) -> Result<BaseAnchor, BackendFailure>;
 
+    #[doc = "Proves clone materialization has bounded free space before creating staging."]
+    fn verify_capacity(
+        &mut self,
+        package: &ManagedPackage,
+        base: &BaseAnchor,
+    ) -> Result<(), BackendFailure>;
+
     #[doc = "Inspects only the coordinator-derived staging and ready paths."]
     fn artifact_state(
         &mut self,

@@ -6,7 +6,6 @@ use super::RescueError;
 use crate::domain::{
     AppIdentity, BootId, CommitNonce, DataInodes, GateSnapshot, PackageKey, UserId,
 };
-use crate::protocol::ALLOWED_PACKAGE;
 
 mod implementation;
 

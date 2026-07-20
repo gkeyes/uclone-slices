@@ -4,4 +4,4 @@ mod observation;
 
 pub use identity::AppIdentity;
 pub use managed::ManagedPackage;
-pub use observation::PackageObservation;
+pub use observation::{PackageCompatibility, PackageObservation};

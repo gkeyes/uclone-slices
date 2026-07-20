@@ -6,11 +6,11 @@ PROFILE=slotprobe
 if [ "$#" -eq 2 ] && [ "$1" = --profile ]; then
     PROFILE=$2
 elif [ "$#" -ne 0 ]; then
-    printf '%s\n' 'usage: tools/test-emergency-containment.sh [--profile slotprobe|fitness]' >&2
+    printf '%s\n' 'usage: tools/test-emergency-containment.sh [--profile slotprobe|fitness|generic]' >&2
     exit 2
 fi
 case "$PROFILE" in
-    slotprobe|fitness) ;;
+    slotprobe|fitness|generic) ;;
     *) printf 'invalid target profile: %s\n' "$PROFILE" >&2; exit 2 ;;
 esac
 

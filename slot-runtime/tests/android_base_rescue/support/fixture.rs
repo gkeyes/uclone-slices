@@ -66,10 +66,6 @@ impl Fixture {
         self.0.borrow_mut().user0_unlocked = unlocked;
     }
 
-    pub(crate) fn set_preview_present(&self, present: bool) {
-        self.0.borrow_mut().preview_present = present;
-    }
-
     pub(crate) fn fail_on(&self, domain: Option<DataDomain>) {
         self.0.borrow_mut().fail_domain = domain;
     }

@@ -5,8 +5,8 @@ plugins {
 val selectedTargetProfile = providers.gradleProperty("targetProfile")
     .orElse("slotprobe")
     .get()
-if (selectedTargetProfile != "slotprobe" && selectedTargetProfile != "fitness") {
-    throw GradleException("targetProfile must be exactly slotprobe or fitness")
+if (selectedTargetProfile !in setOf("slotprobe", "fitness", "generic")) {
+    throw GradleException("targetProfile must be slotprobe, fitness, or generic")
 }
 val repositoryRoot = rootDir.parentFile
 val targetProfileOutput = layout.buildDirectory

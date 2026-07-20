@@ -9,7 +9,6 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt as _;
 
 use crate::android::MountCounts;
-use crate::bridge::ALLOWED_PACKAGE;
 use crate::domain::{DataInodes, PackageName, SlotId};
 use crate::layout::RuntimeLayout;
 
@@ -32,8 +31,7 @@ pub fn parse_canonical_mount_counts(
     input: &[u8],
     package: &PackageName,
 ) -> Result<MountCounts, FactError> {
-    if input.is_empty() || input.len() > MAX_MOUNTINFO_BYTES || package.as_str() != ALLOWED_PACKAGE
-    {
+    if input.is_empty() || input.len() > MAX_MOUNTINFO_BYTES {
         return Err(FactError::Invalid);
     }
 

@@ -6,7 +6,6 @@
 )]
 
 use crate::android::MountCounts;
-use crate::bridge::ALLOWED_PACKAGE;
 use crate::domain::{DataInodes, PackageName, SlotId};
 
 use super::{filesystem, procfs};
@@ -100,17 +99,14 @@ impl SystemFacts for StdSystemFacts {
     }
 
     fn canonical_inodes(&mut self, package: &PackageName) -> Result<DataInodes, FactError> {
-        require_package(package)?;
         filesystem::canonical_inodes(package)
     }
 
     fn mirror_inodes(&mut self, package: &PackageName) -> Result<DataInodes, FactError> {
-        require_package(package)?;
         filesystem::mirror_inodes(package)
     }
 
     fn canonical_mount_counts(&mut self, package: &PackageName) -> Result<MountCounts, FactError> {
-        require_package(package)?;
         filesystem::canonical_mount_counts(package)
     }
 
@@ -119,7 +115,6 @@ impl SystemFacts for StdSystemFacts {
         package: &PackageName,
         slot: &SlotId,
     ) -> Result<Option<DataInodes>, FactError> {
-        require_package(package)?;
         filesystem::slot_inodes(package, slot)
     }
 
@@ -128,7 +123,6 @@ impl SystemFacts for StdSystemFacts {
         package: &PackageName,
         uid: u32,
     ) -> Result<ProcessSet, FactError> {
-        require_package(package)?;
         if !(FIRST_APPLICATION_UID..PER_USER_UID_RANGE).contains(&uid) {
             return Err(FactError::Invalid);
         }
@@ -137,13 +131,5 @@ impl SystemFacts for StdSystemFacts {
 
     fn arm64_zygote_processes(&mut self) -> Result<ProcessSet, FactError> {
         procfs::arm64_zygote_processes()
-    }
-}
-
-fn require_package(package: &PackageName) -> Result<(), FactError> {
-    if package.as_str() == ALLOWED_PACKAGE {
-        Ok(())
-    } else {
-        Err(FactError::Invalid)
     }
 }

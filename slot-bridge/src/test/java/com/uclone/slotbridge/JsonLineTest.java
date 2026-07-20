@@ -76,15 +76,18 @@ public final class JsonLineTest {
 
     private static PackageSnapshot fixture(String versionName) throws BridgeFailure {
         return new PackageSnapshot(
-                PackagePolicy.ALLOWED_PACKAGE,
+                TargetProfile.PACKAGE,
                 10123,
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 1,
                 versionName,
                 "/data/app/example/base.apk",
-                PackagePolicy.pathsFor(PackagePolicy.ALLOWED_PACKAGE),
+                PackagePolicy.pathsFor(TargetProfile.PACKAGE),
                 new PackageManagerInodes(111, 222),
                 EnabledState.DEFAULT,
+                false,
+                false,
+                false,
                 false,
                 false);
     }

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::{RescueError, RescueId, RescueStep};
+use crate::domain::PackageName;
 
 mod file;
 mod shape;
@@ -23,11 +24,14 @@ pub(super) struct StorePaths {
     pub(super) owner_uid: u32,
 }
 
-pub(super) fn initialize(root: &Path) -> Result<StorePaths, RescueError> {
+pub(super) fn initialize(
+    root: &Path,
+    package_name: &PackageName,
+) -> Result<StorePaths, RescueError> {
     let owner_uid = shape::ensure_root(root)?;
     let packages = root.join(PACKAGES);
     shape::ensure_child_directory(&packages, owner_uid)?;
-    let package = packages.join(crate::protocol::ALLOWED_PACKAGE);
+    let package = packages.join(package_name.as_str());
     let rescue = package.join(RESCUE);
     let steps = rescue.join(STEPS);
     let paths = StorePaths {

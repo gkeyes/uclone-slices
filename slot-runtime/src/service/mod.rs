@@ -3,6 +3,7 @@
 mod commands;
 mod error;
 mod handler;
+mod management_commands;
 mod model;
 mod outcome;
 mod platform;
@@ -10,8 +11,8 @@ mod validation;
 
 pub use error::{EnrollmentPublicationError, ServiceError};
 pub use model::{
-    CapabilitySnapshot, ObservedGateState, PackageSnapshot, PackageState, RescueExecution,
-    SwitchExecution,
+    CapabilitySnapshot, ManagedAppInfo, ObservedGateState, PackageInspection, PackageSnapshot,
+    PackageState, RescueExecution, SlotInfo, SwitchExecution,
 };
 pub use platform::ServicePlatform;
 

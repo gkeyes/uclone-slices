@@ -83,6 +83,16 @@ discard_request() {
     "$TOYBOX_BIN" rm -f "$REQUEST_FILE" 2>/dev/null
 }
 
+run_reconcile() {
+    if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
+        "$TOYBOX_BIN" timeout -s 9 40 "$TOYBOX_BIN" nsenter -t 1 -m -- \
+            "$SLOTCTL_BIN" reconcile
+    else
+        "$TOYBOX_BIN" timeout -s 9 40 "$TOYBOX_BIN" nsenter -t 1 -m -- \
+            "$SLOTCTL_BIN" reconcile "$UCLONE_TARGET_PACKAGE"
+    fi
+}
+
 safe_binary "$TOYBOX_BIN" || exit 0
 safe_binary "$SLOTCTL_BIN" || exit 0
 safe_binary "$STATE_HELPER" || exit 0
@@ -105,8 +115,7 @@ prepare_request || exit 0
             [ "$delay" -ge 30 ] || delay=$((delay + 2))
             continue
         fi
-        frame="$("$TOYBOX_BIN" timeout -s 9 40 "$TOYBOX_BIN" nsenter -t 1 -m -- \
-            "$SLOTCTL_BIN" reconcile 2>>"$LOG_FILE")"
+        frame="$(run_reconcile 2>>"$LOG_FILE")"
         status=$?
         if [ "$status" -eq 0 ]; then
             classification="$(classify_reconcile_frame "$frame")"

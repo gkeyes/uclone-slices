@@ -14,7 +14,7 @@ pub use error::{
 };
 pub use fault::{FaultInjector, FaultPoint, NoFault, ScriptedFaultInjector};
 pub use model::{
-    ArtifactState, BaseAnchor, ContentDigest, ContentProof, DataDomain, DirectoryAnchor,
+    ArtifactState, BaseAnchor, ContentDigest, ContentProof, DataBytes, DataDomain, DirectoryAnchor,
     DomainCopyProof, MaterializationPaths, MaterializationResult, SlotMaterializationProof,
     TreeSafetyProof, UnsafeArtifact,
 };

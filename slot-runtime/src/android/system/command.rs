@@ -10,8 +10,7 @@ use std::path::Path;
 
 use crate::android::{AndroidCommand, CommandError, CommandKind, CommandRunner, DataDomain};
 use crate::bridge::{
-    ALLOWED_PACKAGE, ALLOWED_USER_ID, AppProcessRunner, BridgeClient, BridgeCommandRunner,
-    BridgeErrorCode,
+    ALLOWED_USER_ID, AppProcessRunner, BridgeClient, BridgeCommandRunner, BridgeErrorCode,
 };
 use crate::domain::{PackageEnabledState, PackageName, SlotId};
 use crate::layout::RuntimeLayout;
@@ -64,25 +63,24 @@ impl<R: BridgeCommandRunner, E> SystemCommandRunner<R, E> {
 
 impl<R: BridgeCommandRunner, E: ProcessExecutor> CommandRunner for SystemCommandRunner<R, E> {
     fn run(&mut self, command: &AndroidCommand) -> Result<(), CommandError> {
-        require_target(command)?;
         match command.kind() {
             CommandKind::DisableUser => {
                 require_no_paths(command)?;
-                self.set_enabled(PackageEnabledState::DisabledUser)
+                self.set_enabled(command.package_name(), PackageEnabledState::DisabledUser)
             }
             CommandKind::RestoreEnabled(state) => {
                 require_no_paths(command)?;
-                self.set_enabled(state)
+                self.set_enabled(command.package_name(), state)
             }
             CommandKind::RestoreSuspended(suspended) => {
                 require_no_paths(command)?;
                 self.bridge
-                    .set_suspended(ALLOWED_PACKAGE, ALLOWED_USER_ID, suspended)
+                    .set_suspended(command.package_name().as_str(), ALLOWED_USER_ID, suspended)
                     .map_err(|error| map_bridge_error(&error))
             }
             CommandKind::ForceStop => {
                 require_no_paths(command)?;
-                self.execute(&force_stop_invocation())
+                self.execute(&force_stop_invocation(command.package_name()))
             }
             CommandKind::Bind(domain) | CommandKind::Unmount(domain) => {
                 let invocation = mount_invocation(command, domain)?;
@@ -93,9 +91,13 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor> CommandRunner for SystemCommand
 }
 
 impl<R: BridgeCommandRunner, E> SystemCommandRunner<R, E> {
-    fn set_enabled(&mut self, state: PackageEnabledState) -> Result<(), CommandError> {
+    fn set_enabled(
+        &mut self,
+        package: &PackageName,
+        state: PackageEnabledState,
+    ) -> Result<(), CommandError> {
         self.bridge
-            .set_enabled(ALLOWED_PACKAGE, ALLOWED_USER_ID, state)
+            .set_enabled(package.as_str(), ALLOWED_USER_ID, state)
             .map_err(|error| map_bridge_error(&error))
     }
 }
@@ -114,14 +116,6 @@ impl<R, E: ProcessExecutor> SystemCommandRunner<R, E> {
     }
 }
 
-fn require_target(command: &AndroidCommand) -> Result<(), CommandError> {
-    if command.package_name().as_str() == ALLOWED_PACKAGE {
-        Ok(())
-    } else {
-        Err(CommandError::Rejected)
-    }
-}
-
 fn require_no_paths(command: &AndroidCommand) -> Result<(), CommandError> {
     if command.source().is_none() && command.target().is_none() {
         Ok(())
@@ -130,10 +124,15 @@ fn require_no_paths(command: &AndroidCommand) -> Result<(), CommandError> {
     }
 }
 
-pub fn force_stop_invocation() -> ProcessInvocation {
+pub fn force_stop_invocation(package: &PackageName) -> ProcessInvocation {
     ProcessInvocation::fixed(
         AM_PATH,
-        ["force-stop", "--user", "0", ALLOWED_PACKAGE].map(OsString::from),
+        [
+            OsString::from("force-stop"),
+            OsString::from("--user"),
+            OsString::from("0"),
+            OsString::from(package.as_str()),
+        ],
     )
 }
 

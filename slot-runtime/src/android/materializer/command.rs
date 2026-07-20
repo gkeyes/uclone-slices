@@ -42,6 +42,8 @@ pub enum MaterializerCommandKind {
     GetSelinux(DataDomain),
     #[doc = "Reads one root fscrypt-policy digest."]
     FscryptPolicy(DataDomain),
+    #[doc = "Reads available bytes and filesystem identity for one base domain."]
+    FreeSpace(DataDomain),
 }
 
 #[doc = "Opaque command built only from adapter-derived paths and fixed executables."]
@@ -129,6 +131,14 @@ impl MaterializerCommand {
         )
     }
 
+    pub(super) fn free_space(domain: DataDomain, target: &Path) -> Self {
+        Self::new(
+            MaterializerCommandKind::FreeSpace(domain),
+            FixedExecutable::FsProbe,
+            [OsString::from("space"), target.as_os_str().to_owned()],
+        )
+    }
+
     fn new<const N: usize>(
         kind: MaterializerCommandKind,
         executable: FixedExecutable,
@@ -155,7 +165,8 @@ impl MaterializerCommand {
             MaterializerCommandKind::Chown(_)
             | MaterializerCommandKind::Chmod(_)
             | MaterializerCommandKind::GetSelinux(_)
-            | MaterializerCommandKind::FscryptPolicy(_) => Self::FAST_EXECUTION_TIMEOUT,
+            | MaterializerCommandKind::FscryptPolicy(_)
+            | MaterializerCommandKind::FreeSpace(_) => Self::FAST_EXECUTION_TIMEOUT,
         }
     }
 

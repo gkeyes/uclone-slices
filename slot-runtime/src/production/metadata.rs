@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{Read as _, Result as IoResult};
 use std::path::Path;
 
-use crate::domain::{BootId, CommitNonce, TransactionId};
+use crate::domain::{BootId, CommitNonce, SlotId, TransactionId};
 use crate::rescue::{RescueError, RescueId, RescueMetadata, RescueMetadataSource};
 use crate::runtime::SwitchMetadata;
 use crate::service::ServiceError;
@@ -16,6 +16,13 @@ const MAX_TOKEN_BYTES_USIZE: usize = 65;
 pub trait MetadataSource: core::fmt::Debug {
     /// Returns fresh validated switch metadata for the current Linux boot.
     fn next(&mut self) -> Result<SwitchMetadata, ServiceError>;
+
+    /// Returns a fresh immutable slot identifier without accepting caller text.
+    fn next_slot_id(&mut self) -> Result<SlotId, ServiceError> {
+        let metadata = self.next()?;
+        SlotId::parse(&format!("slot-{}", metadata.transaction_id().as_str()))
+            .map_err(|_| ServiceError::Internal)
+    }
 }
 
 /// Fixed `/proc` metadata source used by the production Android daemon.

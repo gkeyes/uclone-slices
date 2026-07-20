@@ -4,6 +4,7 @@ use crate::materializer::{MaterializationBackend, MaterializationCoordinator, No
 use crate::reconcile::RecoveryBackend;
 use crate::runtime::{RuntimeError, SwitchCoordinator, SwitchRequest};
 use crate::service::{ServiceError, SwitchExecution};
+use crate::slot_metadata::{SlotRecordState, SlotSeedMode};
 
 use super::composition::ProductionPlatform;
 use super::metadata::MetadataSource;
@@ -18,12 +19,12 @@ where
     pub(super) fn do_materialize(
         &mut self,
         package: &ManagedPackage,
+        slot: &SlotId,
+        seed_mode: SlotSeedMode,
     ) -> Result<SlotView, ServiceError> {
-        let slot =
-            SlotId::parse(crate::target::PREVIEW_SLOT).map_err(|_| ServiceError::Internal)?;
         let mut faults = NoFault;
         let Ok(result) = MaterializationCoordinator::new(&mut self.materializer, &mut faults)
-            .materialize(package, &slot)
+            .materialize_with_seed(package, slot, seed_mode)
         else {
             self.mark_package_recovery(package)?;
             return Err(ServiceError::RecoveryRequired);
@@ -40,7 +41,7 @@ where
             Ok(SlotView::new(entry.slot_id().clone(), entry.inodes()))
         } else {
             let _ = MaterializationCoordinator::new(&mut self.materializer, &mut faults)
-                .cleanup_interrupted(package, &slot);
+                .cleanup_interrupted(package, slot);
             self.mark_package_recovery(package)?;
             Err(ServiceError::RecoveryRequired)
         }
@@ -52,6 +53,21 @@ where
         target: &SlotView,
         prepared_gate: Option<GateSnapshot>,
     ) -> Result<SwitchExecution, ServiceError> {
+        if !target.slot_id().is_base() {
+            let metadata = self
+                .stores
+                .slot_metadata
+                .latest(package.package_name(), target.slot_id());
+            match metadata {
+                Ok(Some(record)) if record.state() == SlotRecordState::Ready => {}
+                Ok(None) => {}
+                Ok(Some(_)) => return Err(ServiceError::Conflict),
+                Err(_) => {
+                    self.do_contain(package, ServiceError::RecoveryRequired)?;
+                    return Ok(SwitchExecution::RecoveryRequired);
+                }
+            }
+        }
         if let Some(expected) = prepared_gate {
             let Ok(actual) = self.runtime.capture_gate_snapshot(package) else {
                 self.do_contain(package, ServiceError::RecoveryRequired)?;
@@ -82,6 +98,27 @@ where
                 let execution = super::mapping::switch(value);
                 if execution == SwitchExecution::RecoveryRequired {
                     self.mark_package_recovery(package)?;
+                }
+                if matches!(execution, SwitchExecution::Committed(_))
+                    && !target.slot_id().is_base()
+                    && let Ok(Some(record)) = self
+                        .stores
+                        .slot_metadata
+                        .latest(package.package_name(), target.slot_id())
+                    && self
+                        .stores
+                        .slot_metadata
+                        .update(
+                            package.package_name(),
+                            target.slot_id(),
+                            record.display_name().clone(),
+                            SlotRecordState::Ready,
+                            package.identity().version_code(),
+                        )
+                        .is_err()
+                {
+                    self.do_contain(package, ServiceError::RecoveryRequired)?;
+                    return Ok(SwitchExecution::RecoveryRequired);
                 }
                 Ok(execution)
             }

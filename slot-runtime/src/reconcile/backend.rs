@@ -3,6 +3,9 @@ use crate::runtime::{PlatformError, RuntimeBackend};
 
 #[doc = "Platform operations needed only while reconciling a rebooted user0 view."]
 pub trait RecoveryBackend: RuntimeBackend {
+    #[doc = "Enumerates recognizable active gate leases before enrollment metadata is trusted."]
+    fn leased_packages(&mut self) -> Result<Vec<PackageName>, PlatformError>;
+
     #[doc = "Gates the allowlisted package only when a durable orphan lease artifact exists."]
     fn emergency_gate_if_leased(
         &mut self,
@@ -42,6 +45,10 @@ impl<T> RecoveryBackend for &mut T
 where
     T: RecoveryBackend + ?Sized,
 {
+    fn leased_packages(&mut self) -> Result<Vec<PackageName>, PlatformError> {
+        (**self).leased_packages()
+    }
+
     fn emergency_gate_if_leased(
         &mut self,
         package: &PackageName,

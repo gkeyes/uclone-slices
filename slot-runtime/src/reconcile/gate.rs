@@ -11,18 +11,19 @@ impl<B: RecoveryBackend> Reconciler<B> {
     pub(super) fn emergency_gate_discovered(
         &mut self,
         package_names: &[PackageName],
-        allowlisted: &PackageName,
     ) -> Result<BTreeMap<PackageName, GateSnapshot>, ReconcileError> {
         let mut snapshots = BTreeMap::new();
-        if let Some(snapshot) =
-            self.backend
-                .emergency_gate_if_leased(allowlisted)
-                .map_err(|source| ReconcileError::EmergencyGate {
-                    package: allowlisted.clone(),
-                    source,
-                })?
-        {
-            snapshots.insert(allowlisted.clone(), snapshot);
+        for package in package_names {
+            if let Some(snapshot) =
+                self.backend
+                    .emergency_gate_if_leased(package)
+                    .map_err(|source| ReconcileError::EmergencyGate {
+                        package: package.clone(),
+                        source,
+                    })?
+            {
+                snapshots.insert(package.clone(), snapshot);
+            }
         }
         let ungated: Vec<_> = package_names
             .iter()

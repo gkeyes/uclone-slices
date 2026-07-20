@@ -5,18 +5,27 @@ use super::{
     FIXED_RESCUE_JOURNAL_ROOT, RescueError, RescueEvent, RescueId, RescueSpec, RescueStep,
     RescueTransaction,
 };
+use crate::domain::PackageName;
 
 #[doc = "Filesystem-backed single-epoch emergency rescue journal."]
 #[derive(Debug, Clone)]
 pub struct RescueJournalStore {
     paths: StorePaths,
+    package: PackageName,
 }
 
 impl RescueJournalStore {
     #[doc = "Creates or opens a bounded rescue journal below a supplied host/runtime root."]
     pub fn new(root: impl AsRef<Path>) -> Result<Self, RescueError> {
+        let package = PackageName::parse(crate::protocol::ALLOWED_PACKAGE)?;
+        Self::for_package(root, &package)
+    }
+
+    #[doc = "Opens one package-scoped rescue journal below a supplied root."]
+    pub fn for_package(root: impl AsRef<Path>, package: &PackageName) -> Result<Self, RescueError> {
         Ok(Self {
-            paths: storage::initialize(root.as_ref())?,
+            paths: storage::initialize(root.as_ref(), package)?,
+            package: package.clone(),
         })
     }
 
@@ -25,9 +34,17 @@ impl RescueJournalStore {
         Self::new(FIXED_RESCUE_JOURNAL_ROOT)
     }
 
+    #[doc = "Opens one package-scoped journal at the production rescue root."]
+    pub fn fixed_for(package: &PackageName) -> Result<Self, RescueError> {
+        Self::for_package(FIXED_RESCUE_JOURNAL_ROOT, package)
+    }
+
     #[doc = "Durably prepares a new rescue or resumes only the exact same specification."]
     pub fn begin(&self, spec: &RescueSpec) -> Result<RescueTransaction, RescueError> {
         spec.validate()?;
+        if spec.package_key().package_name() != &self.package {
+            return Err(RescueError::SpecMismatch);
+        }
         if let Some(existing) = self.load()? {
             if existing.spec() != spec {
                 return Err(RescueError::SpecMismatch);

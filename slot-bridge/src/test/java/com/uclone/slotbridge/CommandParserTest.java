@@ -8,9 +8,11 @@ import static org.junit.Assert.fail;
 import org.junit.Test;
 
 public final class CommandParserTest {
+    private static final String PACKAGE = "com.example.one";
+
     @Test
     public void parsesEveryFixedCommandWhenArgumentsAreExact() throws BridgeFailure {
-        String packageName = PackagePolicy.ALLOWED_PACKAGE;
+        String packageName = PACKAGE;
 
         ParsedCommand device = CommandParser.parse(new String[] {"probe-device"});
         ParsedCommand probe = CommandParser.parse(new String[] {"probe-package", packageName});
@@ -28,25 +30,28 @@ public final class CommandParserTest {
     }
 
     @Test
-    public void rejectsPackageWhenItIsOutsideAllowlist() {
-        String[] argv = {"probe-package", "com.example.other"};
+    public void acceptsDifferentValidatedPackagesWithoutRebuild() throws BridgeFailure {
+        ParsedCommand one = CommandParser.parse(new String[] {"probe-package", PACKAGE});
+        ParsedCommand two = CommandParser.parse(
+                new String[] {"probe-package", "org.example.second"});
 
-        assertFailure(argv, ErrorCode.PACKAGE_NOT_ALLOWED);
+        assertEquals(PACKAGE, one.packageName());
+        assertEquals("org.example.second", two.packageName());
     }
 
     @Test
-    public void gateProbeRejectsForeignPackageAndUserArgument() {
+    public void gateProbeRejectsInvalidPackageAndUserArgument() {
         assertFailure(
-                new String[] {"probe-gate", "com.example.other"},
+                new String[] {"probe-gate", "com.example.other/../bad"},
                 ErrorCode.PACKAGE_NOT_ALLOWED);
         assertFailure(
-                new String[] {"probe-gate", PackagePolicy.ALLOWED_PACKAGE, "0"},
+                new String[] {"probe-gate", PACKAGE, "0"},
                 ErrorCode.INVALID_REQUEST);
     }
 
     @Test
     public void rejectsPathShapedPackageWhenCallerSuppliesPath() {
-        String[] argv = {"probe-package", "/data/user/0/" + PackagePolicy.ALLOWED_PACKAGE};
+        String[] argv = {"probe-package", "/data/user/0/" + PACKAGE};
 
         assertFailure(argv, ErrorCode.PACKAGE_NOT_ALLOWED);
     }
@@ -60,7 +65,7 @@ public final class CommandParserTest {
 
     @Test
     public void parsesBooleanOnlyWhenLowercaseAndCanonical() throws BridgeFailure {
-        String packageName = PackagePolicy.ALLOWED_PACKAGE;
+        String packageName = PACKAGE;
 
         ParsedCommand trueValue = CommandParser.parse(
                 new String[] {"set-suspended", packageName, "true"});

@@ -16,8 +16,7 @@ where
     Q: PackageProbe,
     T: MetadataSource,
 {
-    pub(super) fn do_probe(&self, key: &PackageKey) -> Result<CapabilitySnapshot, ServiceError> {
-        require_key(key)?;
+    pub(super) fn do_probe(&self) -> Result<CapabilitySnapshot, ServiceError> {
         let mut probe = self
             .probe
             .try_borrow_mut()
@@ -29,13 +28,7 @@ where
             .mount_namespace_proof()
             .map_err(|_| ServiceError::UnsupportedDevice)?
             .is_global();
-        let paired = probe
-            .view_proof(key.package_name(), key.user_id())
-            .is_ok_and(|proof| {
-                proof.canonical().inodes().ce() != proof.canonical().inodes().de()
-                    && proof.mirror_inodes().ce() != proof.mirror_inodes().de()
-                    && proof.zygote_inodes().ce() != proof.zygote_inodes().de()
-            });
+        let paired = global;
         Ok(CapabilitySnapshot::new(
             unlocked && global && paired,
             unlocked,

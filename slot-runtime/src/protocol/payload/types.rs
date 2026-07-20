@@ -8,7 +8,6 @@ use crate::lifecycle::LifecycleState;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProbeReport {
-    package: PackageName,
     ready: bool,
     user_unlocked: bool,
     ce_de_supported: bool,
@@ -16,23 +15,12 @@ pub struct ProbeReport {
 
 impl ProbeReport {
     /// Creates a bounded capability report.
-    pub const fn new(
-        package: PackageName,
-        ready: bool,
-        user_unlocked: bool,
-        ce_de_supported: bool,
-    ) -> Self {
+    pub const fn new(ready: bool, user_unlocked: bool, ce_de_supported: bool) -> Self {
         Self {
-            package,
             ready,
             user_unlocked,
             ce_de_supported,
         }
-    }
-
-    /// Returns the reported package.
-    pub const fn package(&self) -> &PackageName {
-        &self.package
     }
 
     /// Returns whether all runtime gates are ready.
@@ -164,6 +152,14 @@ pub enum AckOperation {
     EnrollPackage,
     /// Base-only rescue was durably completed.
     RescueToBase,
+    /// A display-only slot label revision was published.
+    RenameSlot,
+    /// An inactive slot was deleted and tombstoned.
+    DeleteSlot,
+    /// Package management was retired onto native Base.
+    RetirePackage,
+    /// Every durable managed package completed a reconciliation pass.
+    ReconcileAll,
 }
 
 /// Typed acknowledgement for an operation without a richer report.

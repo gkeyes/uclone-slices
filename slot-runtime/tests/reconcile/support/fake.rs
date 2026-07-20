@@ -192,6 +192,18 @@ impl RuntimeBackend for FakeBackend {
 }
 
 impl RecoveryBackend for FakeBackend {
+    fn leased_packages(&mut self) -> Result<Vec<PackageName>, PlatformError> {
+        if self.orphan_lease || self.corrupt_orphan_lease {
+            Ok(vec![PackageName::parse("com.uclone.slotprobe").map_err(
+                |_| PlatformError::CaptureGateSnapshot {
+                    detail: "invalid_fake_package".to_owned(),
+                },
+            )?])
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
     fn emergency_gate_if_leased(
         &mut self,
         package: &PackageName,

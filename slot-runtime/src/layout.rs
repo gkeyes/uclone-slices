@@ -79,6 +79,11 @@ impl RuntimeLayout {
         Self::root().join("catalog")
     }
 
+    #[doc = "Returns the append-only slot display and lifecycle metadata root."]
+    pub fn slot_metadata_root() -> PathBuf {
+        Self::root().join("slot-metadata")
+    }
+
     #[doc = "Returns the persisted execution-gate state directory."]
     pub fn gate_state_root() -> PathBuf {
         Self::root().join("state")

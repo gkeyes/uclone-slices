@@ -16,6 +16,20 @@ USER_ID=$UCLONE_TARGET_USER
 TOYBOX_BIN=/system/bin/toybox
 CMD_BIN=/system/bin/cmd
 AM_BIN=/system/bin/am
+RUNTIME_BIN=$SCRIPT_DIR/bin/ucloned
+
+root_has_artifact() {
+    root="$1"
+    if [ -L "$root" ] || { [ -e "$root" ] && [ ! -d "$root" ]; }; then
+        return 0
+    fi
+    [ -d "$root" ] || return 1
+    for entry in "$root"/*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        return 0
+    done
+    return 1
+}
 
 safe_binary() {
     binary="$1"
@@ -34,6 +48,24 @@ management_artifact_present() {
         return 0
     fi
     [ -d "$RUNTIME_ROOT" ] || return 1
+    if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
+        for root in \
+            "$RUNTIME_ROOT/enrollment/packages" \
+            "$RUNTIME_ROOT/catalog/packages" \
+            "$RUNTIME_ROOT/registry/packages" \
+            "$RUNTIME_ROOT/package-state/packages" \
+            "$RUNTIME_ROOT/enrollment-attempts/attempts" \
+            "$RUNTIME_ROOT/rescue-journal/packages" \
+            "/data/misc_de/$USER_ID/$UCLONE_MODULE/slots"
+        do
+            root_has_artifact "$root" && return 0
+        done
+        for path in "$RUNTIME_ROOT"/state/*.gate "$RUNTIME_ROOT"/state/.*.gate*; do
+            [ -e "$path" ] || [ -L "$path" ] || continue
+            return 0
+        done
+        return 1
+    fi
     for path in \
         "$RUNTIME_ROOT/enrollment/packages/$PACKAGE" \
         "$RUNTIME_ROOT/catalog/packages/$PACKAGE" \
@@ -54,28 +86,88 @@ management_artifact_present() {
     return 1
 }
 
+valid_package() {
+    [ "${#1}" -le 255 ] || return 1
+    printf '%s\n' "$1" |
+        "$TOYBOX_BIN" grep -E -x '[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+' \
+            >/dev/null 2>&1
+}
+
+discover_packages() {
+    for root in \
+        "$RUNTIME_ROOT/enrollment/packages" \
+        "$RUNTIME_ROOT/catalog/packages" \
+        "$RUNTIME_ROOT/registry/packages" \
+        "$RUNTIME_ROOT/package-state/packages" \
+        "$RUNTIME_ROOT/enrollment-attempts/attempts" \
+        "$RUNTIME_ROOT/rescue-journal/packages" \
+        "/data/misc_de/$USER_ID/$UCLONE_MODULE/slots"
+    do
+        [ -d "$root" ] && [ ! -L "$root" ] || continue
+        for entry in "$root"/*; do
+            [ -e "$entry" ] || [ -L "$entry" ] || continue
+            candidate=${entry##*/}
+            valid_package "$candidate" && printf '%s\n' "$candidate"
+        done
+    done
+    for entry in "$RUNTIME_ROOT"/state/*.gate "$RUNTIME_ROOT"/state/.*.gate*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        candidate=${entry##*/}
+        candidate=${candidate#.}
+        candidate=${candidate%%.gate*}
+        valid_package "$candidate" && printf '%s\n' "$candidate"
+    done
+}
+
 package_is_disabled() {
+    package="$1"
     disabled_packages="$("$CMD_BIN" package list packages -d --user "$USER_ID" 2>/dev/null)" ||
         return 1
     printf '%s\n' "$disabled_packages" |
-        "$TOYBOX_BIN" grep -F -x "package:$PACKAGE" >/dev/null 2>&1
+        "$TOYBOX_BIN" grep -F -x "package:$package" >/dev/null 2>&1
 }
 
 package_is_quiesced() {
+    package="$1"
     processes="$("$TOYBOX_BIN" ps -A -o NAME 2>/dev/null)" || return 1
-    printf '%s\n' "$processes" |
-        "$TOYBOX_BIN" grep -E -q "$UCLONE_TARGET_PROCESS_REGEX"
-    status=$?
-    [ "$status" -eq 1 ]
+    while IFS= read -r process; do
+        case "$process" in
+            "$package"|"$package":*) return 1 ;;
+        esac
+    done <<EOF
+$processes
+EOF
+    return 0
 }
 
 contain_once() {
+    package="$1"
     safe_binary "$TOYBOX_BIN" || return 1
     safe_binary "$CMD_BIN" || return 1
     safe_binary "$AM_BIN" || return 1
-    "$CMD_BIN" package disable-user --user "$USER_ID" "$PACKAGE" >/dev/null 2>&1 || return 1
-    "$AM_BIN" force-stop --user "$USER_ID" "$PACKAGE" >/dev/null 2>&1 || return 1
-    package_is_disabled && package_is_quiesced
+    "$CMD_BIN" package disable-user --user "$USER_ID" "$package" >/dev/null 2>&1 || return 1
+    "$AM_BIN" force-stop --user "$USER_ID" "$package" >/dev/null 2>&1 || return 1
+    package_is_disabled "$package" && package_is_quiesced "$package"
+}
+
+contain_discovered() {
+    packages="$(discover_packages)"
+    [ -n "$packages" ] || return 1
+    result=0
+    while IFS= read -r package; do
+        [ -n "$package" ] || continue
+        contain_once "$package" || result=1
+    done <<EOF
+$packages
+EOF
+    [ "$result" -eq 0 ]
+}
+
+contain_with_runtime() {
+    safe_binary "$RUNTIME_BIN" || return 1
+    result="$("$TOYBOX_BIN" timeout -s 9 30 "$TOYBOX_BIN" nsenter -t 1 -m -- \
+        "$RUNTIME_BIN" --startup-gate 2>/dev/null)" || return 1
+    [ "$result" = held ]
 }
 
 attempt_once() {
@@ -83,12 +175,21 @@ attempt_once() {
         printf '%s\n' not-managed
         return 0
     fi
-    if contain_once; then
+    if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
+        contain_with_runtime || contain_discovered || {
+            printf '%s\n' recovery-required
+            return 1
+        }
+    elif ! contain_once "$PACKAGE"; then
+        printf '%s\n' recovery-required
+        return 1
+    fi
+    if management_artifact_present; then
         printf '%s\n' held
         return 0
     fi
-    printf '%s\n' recovery-required
-    return 1
+    printf '%s\n' not-managed
+    return 0
 }
 
 case "${1:-}" in
@@ -99,7 +200,7 @@ case "${1:-}" in
     --watch)
         [ -z "${2:-}" ] || exit 2
         while management_artifact_present; do
-            contain_once || :
+            attempt_once >/dev/null 2>&1 || :
             if safe_binary "$TOYBOX_BIN"; then
                 "$TOYBOX_BIN" sleep 2
             else

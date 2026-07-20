@@ -50,7 +50,7 @@ impl AppProcessSession {
 
     pub(super) fn exchange(
         &mut self,
-        command: BridgeCommand,
+        command: &BridgeCommand,
     ) -> Result<Vec<u8>, BridgeRunnerError> {
         if let Some(status) = self.child.try_wait().map_err(BridgeRunnerError::Io)? {
             return Err(BridgeRunnerError::NonZeroExit {

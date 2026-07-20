@@ -50,6 +50,8 @@ impl DomainCopyProof {
 #[doc = "Ready and staging paths derived only from package and slot identifiers."]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializationPaths {
+    package: crate::domain::PackageName,
+    slot: SlotId,
     ready_ce: PathBuf,
     ready_de: PathBuf,
     staging_ce: PathBuf,
@@ -60,6 +62,8 @@ impl MaterializationPaths {
     pub(crate) fn derive(package: &ManagedPackage, slot: &SlotId) -> Self {
         let ready = RuntimeLayout::slot_paths(package.package_name(), slot);
         Self {
+            package: package.package_name().clone(),
+            slot: slot.clone(),
             ready_ce: ready.ce().to_path_buf(),
             ready_de: ready.de().to_path_buf(),
             staging_ce: ready
@@ -89,6 +93,14 @@ impl MaterializationPaths {
     #[doc = "Returns the fixed DE staging path."]
     pub fn staging_de(&self) -> &Path {
         &self.staging_de
+    }
+
+    pub(crate) const fn package(&self) -> &crate::domain::PackageName {
+        &self.package
+    }
+
+    pub(crate) const fn slot(&self) -> &SlotId {
+        &self.slot
     }
 }
 

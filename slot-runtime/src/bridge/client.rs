@@ -1,8 +1,8 @@
 use super::{
-    ALLOWED_PACKAGE, ALLOWED_USER_ID, BridgeCommand, BridgeError, BridgeErrorCode, BridgePayload,
-    BridgeResponse, BridgeRunnerError, DeviceSnapshot, MAX_OUTPUT_BYTES, PackageEnabledState,
-    PackageSnapshot,
+    ALLOWED_USER_ID, BridgeCommand, BridgeError, BridgeErrorCode, BridgePayload, BridgeResponse,
+    BridgeRunnerError, DeviceSnapshot, MAX_OUTPUT_BYTES, PackageEnabledState, PackageSnapshot,
 };
+use crate::domain::PackageName;
 
 /// Typed client that validates every request and response around an injected runner.
 #[derive(Debug)]
@@ -19,7 +19,7 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
     /// Reads the fixed user-0 device unlock state.
     pub fn query_device(&mut self, user_id: u32) -> Result<DeviceSnapshot, BridgeError> {
         require_user(user_id)?;
-        match self.execute(BridgeCommand::DeviceStatus)? {
+        match self.execute(&BridgeCommand::DeviceStatus)? {
             BridgePayload::Device(snapshot) if snapshot.user_id() == ALLOWED_USER_ID => {
                 Ok(snapshot)
             }
@@ -45,10 +45,10 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
         package: &str,
         user_id: u32,
     ) -> Result<PackageSnapshot, BridgeError> {
-        require_package(package)?;
+        let package = require_package(package)?;
         require_user(user_id)?;
-        match self.execute(BridgeCommand::PackageStatus)? {
-            BridgePayload::Package(snapshot) => validate_package_snapshot(snapshot),
+        match self.execute(&BridgeCommand::PackageStatus(package.clone()))? {
+            BridgePayload::Package(snapshot) => validate_package_snapshot(snapshot, &package),
             _ => Err(BridgeError::new(
                 BridgeErrorCode::InvalidResponse,
                 "package command returned the wrong payload type",
@@ -71,9 +71,9 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
         package: &str,
         user_id: u32,
     ) -> Result<crate::domain::GateSnapshot, BridgeError> {
-        require_package(package)?;
+        let package = require_package(package)?;
         require_user(user_id)?;
-        match self.execute(BridgeCommand::GateStatus)? {
+        match self.execute(&BridgeCommand::GateStatus(package))? {
             BridgePayload::Gate(snapshot) => Ok(snapshot.into_gate_snapshot()),
             _ => Err(BridgeError::new(
                 BridgeErrorCode::InvalidResponse,
@@ -89,9 +89,9 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
         user_id: u32,
         state: PackageEnabledState,
     ) -> Result<(), BridgeError> {
-        require_package(package)?;
+        let package = require_package(package)?;
         require_user(user_id)?;
-        let payload = self.execute(BridgeCommand::SetEnabled(state))?;
+        let payload = self.execute(&BridgeCommand::SetEnabled(package, state))?;
         require_ack(&payload)
     }
 
@@ -102,9 +102,9 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
         user_id: u32,
         suspended: bool,
     ) -> Result<(), BridgeError> {
-        require_package(package)?;
+        let package = require_package(package)?;
         require_user(user_id)?;
-        let payload = self.execute(BridgeCommand::SetSuspended(suspended))?;
+        let payload = self.execute(&BridgeCommand::SetSuspended(package, suspended))?;
         require_ack(&payload)
     }
 
@@ -113,7 +113,7 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
         self.runner
     }
 
-    fn execute(&mut self, command: BridgeCommand) -> Result<BridgePayload, BridgeError> {
+    fn execute(&mut self, command: &BridgeCommand) -> Result<BridgePayload, BridgeError> {
         let bytes = self
             .runner
             .run(command)
@@ -151,15 +151,13 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
     }
 }
 
-fn require_package(package: &str) -> Result<(), BridgeError> {
-    if package == ALLOWED_PACKAGE {
-        Ok(())
-    } else {
-        Err(BridgeError::new(
+fn require_package(package: &str) -> Result<PackageName, BridgeError> {
+    PackageName::parse(package).map_err(|_| {
+        BridgeError::new(
             BridgeErrorCode::PackageNotAllowed,
-            "package is outside the fixed allowlist",
-        ))
-    }
+            "package identifier is not valid",
+        )
+    })
 }
 
 fn require_user(user_id: u32) -> Result<(), BridgeError> {
@@ -173,8 +171,17 @@ fn require_user(user_id: u32) -> Result<(), BridgeError> {
     }
 }
 
-fn validate_package_snapshot(snapshot: PackageSnapshot) -> Result<PackageSnapshot, BridgeError> {
-    require_package(snapshot.package_name())?;
+fn validate_package_snapshot(
+    snapshot: PackageSnapshot,
+    expected: &PackageName,
+) -> Result<PackageSnapshot, BridgeError> {
+    let observed = require_package(snapshot.package_name())?;
+    if &observed != expected {
+        return Err(BridgeError::new(
+            BridgeErrorCode::RequestMismatch,
+            "package response does not match request",
+        ));
+    }
     require_user(snapshot.user_id())?;
     Ok(snapshot)
 }

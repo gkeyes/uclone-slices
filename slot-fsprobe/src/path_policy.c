@@ -1,18 +1,17 @@
 #include "path_policy.h"
 #include "target_profile.h"
 
+#include <ctype.h>
 #include <string.h>
 
-#define CANONICAL_CE UCLONE_TARGET_CE
-#define CANONICAL_DE UCLONE_TARGET_DE
-#define SLOT_CE UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/"
-#define SLOT_DE UCLONE_DE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/"
-#define STAGING_PREFIX '.'
+#define CANONICAL_CE_ROOT "/data/user/0/"
+#define CANONICAL_DE_ROOT "/data/user_de/0/"
+#define SLOT_CE_ROOT UCLONE_CE_SLOT_ROOT "/"
+#define SLOT_DE_ROOT UCLONE_DE_SLOT_ROOT "/"
 #define STAGING_SUFFIX ".staging"
 
 static bool normalized_absolute(const char *path, size_t length) {
     size_t segment_start = 1U;
-
     if (length < 2U || path[0] != '/' || path[length - 1U] == '/') {
         return false;
     }
@@ -32,29 +31,82 @@ static bool normalized_absolute(const char *path, size_t length) {
     return true;
 }
 
-static bool slot_component_allowed(const char *component, size_t length) {
-    const size_t preview_length = sizeof(UCLONE_PREVIEW_SLOT) - 1U;
-    const size_t suffix_length = sizeof(STAGING_SUFFIX) - 1U;
-
-    if (length == preview_length &&
-        memcmp(component, UCLONE_PREVIEW_SLOT, preview_length) == 0) {
-        return true;
-    }
-    return length == 1U + preview_length + suffix_length &&
-           component[0] == STAGING_PREFIX &&
-           memcmp(component + 1U, UCLONE_PREVIEW_SLOT, preview_length) == 0 &&
-           memcmp(component + 1U + preview_length, STAGING_SUFFIX, suffix_length) == 0;
-}
-
-static bool below_slot_root(const char *path, size_t length, const char *prefix,
-                            size_t prefix_length) {
-    if (length <= prefix_length || memcmp(path, prefix, prefix_length) != 0) {
+static bool package_segment(const char *value, size_t length) {
+    if (length == 0U || !isalpha((unsigned char)value[0])) {
         return false;
     }
-    const char *component = path + prefix_length;
-    const size_t component_length = length - prefix_length;
-    return memchr(component, '/', component_length) == NULL &&
-           slot_component_allowed(component, component_length);
+    for (size_t index = 1U; index < length; ++index) {
+        const unsigned char byte = (unsigned char)value[index];
+        if (!isalnum(byte) && byte != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool package_allowed(const char *value, size_t length) {
+    if (length == 0U || length > 255U) {
+        return false;
+    }
+    size_t start = 0U;
+    size_t segments = 0U;
+    for (size_t index = 0U; index <= length; ++index) {
+        if (index != length && value[index] != '.') {
+            continue;
+        }
+        if (!package_segment(value + start, index - start)) {
+            return false;
+        }
+        ++segments;
+        start = index + 1U;
+    }
+    return segments >= 2U;
+}
+
+static bool slot_id_allowed(const char *value, size_t length) {
+    if (length == 0U || length > 64U || value[0] < 'a' || value[0] > 'z') {
+        return false;
+    }
+    for (size_t index = 1U; index < length; ++index) {
+        const char byte = value[index];
+        if ((byte < 'a' || byte > 'z') && (byte < '0' || byte > '9') &&
+            byte != '-' && byte != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool slot_component_allowed(const char *value, size_t length) {
+    const size_t suffix = sizeof(STAGING_SUFFIX) - 1U;
+    if (slot_id_allowed(value, length)) {
+        return true;
+    }
+    return length > suffix + 1U && value[0] == '.' &&
+           memcmp(value + length - suffix, STAGING_SUFFIX, suffix) == 0 &&
+           slot_id_allowed(value + 1U, length - suffix - 1U);
+}
+
+static bool canonical_allowed(const char *path, size_t length, const char *root,
+                              size_t root_length) {
+    return length > root_length && memcmp(path, root, root_length) == 0 &&
+           memchr(path + root_length, '/', length - root_length) == NULL &&
+           package_allowed(path + root_length, length - root_length);
+}
+
+static bool slot_path_allowed(const char *path, size_t length, const char *root,
+                              size_t root_length) {
+    if (length <= root_length || memcmp(path, root, root_length) != 0) {
+        return false;
+    }
+    const char *package = path + root_length;
+    const char *separator = memchr(package, '/', length - root_length);
+    if (separator == NULL || !package_allowed(package, (size_t)(separator - package))) {
+        return false;
+    }
+    const char *slot = separator + 1;
+    const size_t slot_length = length - (size_t)(slot - path);
+    return memchr(slot, '/', slot_length) == NULL && slot_component_allowed(slot, slot_length);
 }
 
 bool fsprobe_path_allowed(const char *path) {
@@ -66,10 +118,10 @@ bool fsprobe_path_allowed(const char *path) {
         !normalized_absolute(path, length)) {
         return false;
     }
-    if ((length == sizeof(CANONICAL_CE) - 1U && strcmp(path, CANONICAL_CE) == 0) ||
-        (length == sizeof(CANONICAL_DE) - 1U && strcmp(path, CANONICAL_DE) == 0)) {
-        return true;
-    }
-    return below_slot_root(path, length, SLOT_CE, sizeof(SLOT_CE) - 1U) ||
-           below_slot_root(path, length, SLOT_DE, sizeof(SLOT_DE) - 1U);
+    return canonical_allowed(path, length, CANONICAL_CE_ROOT,
+                             sizeof(CANONICAL_CE_ROOT) - 1U) ||
+           canonical_allowed(path, length, CANONICAL_DE_ROOT,
+                             sizeof(CANONICAL_DE_ROOT) - 1U) ||
+           slot_path_allowed(path, length, SLOT_CE_ROOT, sizeof(SLOT_CE_ROOT) - 1U) ||
+           slot_path_allowed(path, length, SLOT_DE_ROOT, sizeof(SLOT_DE_ROOT) - 1U);
 }

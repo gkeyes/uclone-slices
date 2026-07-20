@@ -77,6 +77,9 @@ static void test_allowed_paths(void) {
                              ".staging",
         UCLONE_DE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/." UCLONE_PREVIEW_SLOT
                              ".staging",
+        "/data/user/0/com.asksky.fitness",
+        UCLONE_CE_SLOT_ROOT "/com.example.other/slot-123",
+        UCLONE_DE_SLOT_ROOT "/org.example.app/.work_2.staging",
     };
     for (size_t index = 0U; index < sizeof(ALLOWED) / sizeof(ALLOWED[0]); ++index) {
         check(fsprobe_path_allowed(ALLOWED[index]), ALLOWED[index]);
@@ -94,17 +97,16 @@ static void test_rejected_paths(void) {
         "/data/user/0/../0/" UCLONE_TARGET_PACKAGE,
         "/data/data/" UCLONE_TARGET_PACKAGE,
         "/data/user/1/" UCLONE_TARGET_PACKAGE,
-        UCLONE_TARGET_CE ".other",
+        UCLONE_TARGET_CE "-other",
         UCLONE_TARGET_CE "/files",
         "/data/misc_ce/0/uclone-slot-lab/slots/" UCLONE_TARGET_PACKAGE "/preview",
-        "/data/misc_ce/0/uclone-slices-preview/slots/com.other/preview",
+        "/data/misc_ce/0/uclone-slices-preview/slots/com/preview",
+        "/data/misc_ce/0/uclone-slices-preview/slots/1com.other/preview",
         UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE,
         UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/",
         UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/Preview",
         UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/0preview",
         UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/pre.view",
-        UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/foreign",
-        UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/.foreign.staging",
         UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/.staging",
         UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/.Preview.staging",
         UCLONE_CE_SLOT_ROOT "/" UCLONE_TARGET_PACKAGE "/.preview",
@@ -132,6 +134,6 @@ int main(void) {
     if (failures != 0) {
         return 1;
     }
-    (void)puts("PASS: SHA-256 vectors and fixed-path validation");
+    (void)puts("PASS: SHA-256 vectors and generic managed-path validation");
     return 0;
 }

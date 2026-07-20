@@ -1,10 +1,10 @@
 use crate::domain::{ManagedPackage, SlotId};
+use crate::slot_metadata::SlotSeedMode;
 
-use super::validation;
 use super::{
     ArtifactState, BackendFailure, BaseAnchor, DataDomain, FaultInjector, FaultPoint,
     MaterializationBackend, MaterializationError, MaterializationPaths, MaterializationResult,
-    MaterializationStage,
+    MaterializationStage, error::backend_failure, validation,
 };
 
 #[doc = "Paired CE/DE materialization coordinator that never restores the execution gate."]
@@ -30,12 +30,27 @@ where
         package: &ManagedPackage,
         slot: &SlotId,
     ) -> Result<MaterializationResult, MaterializationError> {
+        self.materialize_with_seed(package, slot, SlotSeedMode::CloneBase)
+    }
+
+    #[doc = "Materializes a blank or base-cloned slot while the gate remains held."]
+    pub fn materialize_with_seed(
+        &mut self,
+        package: &ManagedPackage,
+        slot: &SlotId,
+        seed_mode: SlotSeedMode,
+    ) -> Result<MaterializationResult, MaterializationError> {
         validation::request(package, slot)?;
         let paths = MaterializationPaths::derive(package, slot);
         let base = self.preflight(package)?;
+        if seed_mode == SlotSeedMode::CloneBase {
+            self.backend
+                .verify_capacity(package, &base)
+                .map_err(|source| backend_failure(MaterializationStage::Capacity, source))?;
+        }
         self.fault(FaultPoint::BaseVerified)?;
         self.prepare_artifacts(&paths)?;
-        let result = self.materialize_staging(package, slot, &paths, &base);
+        let result = self.materialize_staging(package, slot, &paths, &base, seed_mode);
         match result {
             Ok(value) => Ok(value),
             Err(error) => Err(self.cleanup_after(&paths, error)),
@@ -67,14 +82,14 @@ where
     fn preflight(&mut self, package: &ManagedPackage) -> Result<BaseAnchor, MaterializationError> {
         self.backend
             .verify_gate_held(package)
-            .map_err(|source| backend(MaterializationStage::Gate, source))?;
+            .map_err(|source| backend_failure(MaterializationStage::Gate, source))?;
         self.backend
             .verify_processes_quiesced(package)
-            .map_err(|source| backend(MaterializationStage::Quiesce, source))?;
+            .map_err(|source| backend_failure(MaterializationStage::Quiesce, source))?;
         let base = self
             .backend
             .capture_base_anchor(package)
-            .map_err(|source| backend(MaterializationStage::BaseAnchor, source))?;
+            .map_err(|source| backend_failure(MaterializationStage::BaseAnchor, source))?;
         validation::initial_base(package, &base)?;
         Ok(base)
     }
@@ -105,23 +120,28 @@ where
         slot: &SlotId,
         paths: &MaterializationPaths,
         base: &BaseAnchor,
+        seed_mode: SlotSeedMode,
     ) -> Result<MaterializationResult, MaterializationError> {
         self.backend
             .create_staging(paths)
-            .map_err(|source| backend(MaterializationStage::CreateStaging, source))?;
+            .map_err(|source| backend_failure(MaterializationStage::CreateStaging, source))?;
         self.fault(FaultPoint::StagingCreated)?;
-        self.copy(package, paths, base, DataDomain::Ce)?;
+        if seed_mode == SlotSeedMode::CloneBase {
+            self.copy(package, paths, base, DataDomain::Ce)?;
+        }
         self.fault(FaultPoint::CeCopied)?;
-        self.copy(package, paths, base, DataDomain::De)?;
+        if seed_mode == SlotSeedMode::CloneBase {
+            self.copy(package, paths, base, DataDomain::De)?;
+        }
         self.fault(FaultPoint::DeCopied)?;
         self.backend
             .apply_security(package, paths, base.security())
-            .map_err(|source| backend(MaterializationStage::ApplySecurity, source))?;
+            .map_err(|source| backend_failure(MaterializationStage::ApplySecurity, source))?;
         self.fault(FaultPoint::SecurityApplied)?;
         let staging = self
             .backend
             .inspect_staging(paths)
-            .map_err(|source| backend(MaterializationStage::InspectStaging, source))?;
+            .map_err(|source| backend_failure(MaterializationStage::InspectStaging, source))?;
         self.fault(FaultPoint::StagingInspected)?;
         self.sync(paths, DataDomain::Ce)?;
         self.fault(FaultPoint::CeSynced)?;
@@ -130,14 +150,14 @@ where
         let final_base = self
             .backend
             .capture_base_anchor(package)
-            .map_err(|source| backend(MaterializationStage::BaseAnchor, source))?;
+            .map_err(|source| backend_failure(MaterializationStage::BaseAnchor, source))?;
         validation::unchanged_base(base, &final_base)?;
-        validation::staging(package, base, &staging)?;
+        validation::staging(package, base, &staging, seed_mode)?;
         self.fault(FaultPoint::PairVerified)?;
         let published = self
             .backend
             .publish_ready(paths)
-            .map_err(|source| backend(MaterializationStage::Publish, source))?;
+            .map_err(|source| backend_failure(MaterializationStage::Publish, source))?;
         if published != staging {
             return Err(MaterializationError::PublicationMismatch);
         }
@@ -160,7 +180,7 @@ where
         let proof = self
             .backend
             .copy_domain(package, paths, domain)
-            .map_err(|source| backend(MaterializationStage::Copy(domain), source))?;
+            .map_err(|source| backend_failure(MaterializationStage::Copy(domain), source))?;
         validation::copied_domain(base, domain, &proof)
     }
 
@@ -171,7 +191,7 @@ where
     ) -> Result<(), MaterializationError> {
         self.backend
             .sync_domain(paths, domain)
-            .map_err(|source| backend(MaterializationStage::Sync(domain), source))
+            .map_err(|source| backend_failure(MaterializationStage::Sync(domain), source))
     }
 
     fn artifact_state(
@@ -180,7 +200,7 @@ where
     ) -> Result<ArtifactState, MaterializationError> {
         self.backend
             .artifact_state(paths)
-            .map_err(|source| backend(MaterializationStage::InspectArtifacts, source))
+            .map_err(|source| backend_failure(MaterializationStage::InspectArtifacts, source))
     }
 
     fn ensure_absent(
@@ -226,8 +246,4 @@ where
             Ok(())
         }
     }
-}
-
-const fn backend(stage: MaterializationStage, source: BackendFailure) -> MaterializationError {
-    MaterializationError::Backend { stage, source }
 }

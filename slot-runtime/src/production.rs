@@ -4,6 +4,7 @@ mod composition;
 mod containment;
 mod enrollment;
 mod enrollment_ops;
+mod management;
 mod mapping;
 mod metadata;
 mod reconciliation;
@@ -11,6 +12,7 @@ mod reconciliation_pending;
 mod reconciliation_safety;
 mod reconciliation_validation;
 mod rescue;
+mod slot_lifecycle;
 mod state;
 mod stores;
 mod switching;
@@ -54,6 +56,10 @@ mod tests {
             package_state: PackageStateStore::new(root.path().join("package-state")).unwrap(),
             journal: JournalStore::new(root.path().join("journal")).unwrap(),
             registry: RegistryStore::new(root.path().join("registry")).unwrap(),
+            slot_metadata: crate::slot_metadata::SlotMetadataStore::new(
+                root.path().join("slot-metadata"),
+            )
+            .unwrap(),
         };
         let runtime = AndroidBackend::new(SystemCommandRunner::new(), SystemPackageProbe::new());
         let materializer =

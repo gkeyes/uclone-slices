@@ -185,6 +185,10 @@ impl RuntimeBackend for FakeRescueBackend {
 }
 
 impl RecoveryBackend for FakeRescueBackend {
+    fn leased_packages(&mut self) -> Result<Vec<PackageName>, PlatformError> {
+        Ok(Vec::new())
+    }
+
     fn emergency_gate_if_leased(
         &mut self,
         _package: &PackageName,

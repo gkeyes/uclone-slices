@@ -14,6 +14,7 @@ use crate::layout::RuntimeLayout;
 use crate::package_state::{PackageStateRevision, PackageStateStore};
 use crate::registry::RegistryStore;
 use crate::service::ServiceError;
+use crate::slot_metadata::SlotMetadataStore;
 
 const MAX_ARTIFACT_BYTES: u64 = 1_048_576;
 
@@ -25,6 +26,7 @@ pub(super) struct ProductionStores {
     pub(super) package_state: PackageStateStore,
     pub(super) journal: JournalStore,
     pub(super) registry: RegistryStore,
+    pub(super) slot_metadata: SlotMetadataStore,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +49,8 @@ impl ProductionStores {
             journal: JournalStore::new(RuntimeLayout::journal_root())
                 .map_err(|_| ServiceError::Internal)?,
             registry: RegistryStore::new(RuntimeLayout::registry_root())
+                .map_err(|_| ServiceError::Internal)?,
+            slot_metadata: SlotMetadataStore::new(RuntimeLayout::slot_metadata_root())
                 .map_err(|_| ServiceError::Internal)?,
         })
     }

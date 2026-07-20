@@ -9,18 +9,13 @@ use std::os::unix::net::UnixStream;
 use std::thread;
 use std::time::Duration;
 
-use uclone_slot_runtime::domain::PackageName;
 use uclone_slot_runtime::protocol::{
-    ALLOWED_PACKAGE, Command, ProbeReport, ProtocolError, Request, RequestId, Response,
-    ResponsePayload, ResponseStatus, UnixClient, decode_request, encode_response,
+    Command, ProbeReport, ProtocolError, Request, RequestId, Response, ResponsePayload,
+    ResponseStatus, UnixClient, decode_request, encode_response,
 };
 
 fn id(value: &str) -> RequestId {
     RequestId::new(value).unwrap()
-}
-
-fn allowed() -> PackageName {
-    PackageName::parse(ALLOWED_PACKAGE).unwrap()
 }
 
 #[test]
@@ -44,7 +39,7 @@ fn unix_client_writes_one_frame_and_matches_response_id() {
         );
         let response = Response::ok(
             response_id,
-            ResponsePayload::ProbeReport(ProbeReport::new(allowed(), true, true, true)),
+            ResponsePayload::ProbeReport(ProbeReport::new(true, true, true)),
         )
         .unwrap();
         server_stream
@@ -65,7 +60,7 @@ fn unix_client_rejects_mismatched_response_request_id() {
     let server = thread::spawn(move || {
         let response = Response::ok(
             id("other"),
-            ResponsePayload::ProbeReport(ProbeReport::new(allowed(), true, true, true)),
+            ResponsePayload::ProbeReport(ProbeReport::new(true, true, true)),
         )
         .unwrap();
         server_stream

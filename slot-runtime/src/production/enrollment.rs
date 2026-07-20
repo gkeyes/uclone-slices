@@ -2,13 +2,24 @@ use crate::android::PackageProbe;
 use crate::domain::{ManagedPackage, PackageKey, SlotId, SlotView};
 use crate::lifecycle::LifecycleState;
 use crate::materializer::{BaseAnchor, MaterializationBackend};
-use crate::protocol::ALLOWED_PACKAGE;
 use crate::service::ServiceError;
 
 pub(super) fn initial_managed<Q: PackageProbe>(
     probe: &mut Q,
     key: &PackageKey,
 ) -> Result<ManagedPackage, ServiceError> {
+    let (package, compatibility) = inspect_candidate(probe, key)?;
+    if compatibility.is_supported() {
+        Ok(package)
+    } else {
+        Err(ServiceError::PackageNotAllowed)
+    }
+}
+
+pub(super) fn inspect_candidate<Q: PackageProbe>(
+    probe: &mut Q,
+    key: &PackageKey,
+) -> Result<(ManagedPackage, crate::domain::PackageCompatibility), ServiceError> {
     require_key(key)?;
     if !probe
         .user0_unlocked()
@@ -44,22 +55,15 @@ pub(super) fn initial_managed<Q: PackageProbe>(
     {
         return Err(ServiceError::RecoveryRequired);
     }
-    let preview = SlotId::parse(crate::target::PREVIEW_SLOT).map_err(|_| ServiceError::Internal)?;
-    if probe
-        .slot_inodes(key.package_name(), &preview)
-        .map_err(|_| ServiceError::RecoveryRequired)?
-        .is_some()
-    {
-        return Err(ServiceError::RecoveryRequired);
-    }
-    ManagedPackage::new(
+    let package = ManagedPackage::new(
         key.clone(),
         observation.identity().clone(),
         base,
         SlotView::new(SlotId::base(), base),
         LifecycleState::Normal,
     )
-    .map_err(|_| ServiceError::RecoveryRequired)
+    .map_err(|_| ServiceError::RecoveryRequired)?;
+    Ok((package, observation.compatibility()))
 }
 
 pub(super) fn capture_base<M: MaterializationBackend>(
@@ -85,9 +89,7 @@ pub(super) fn capture_base<M: MaterializationBackend>(
 }
 
 pub(super) fn require_key(key: &PackageKey) -> Result<(), ServiceError> {
-    if key.user_id() == crate::domain::UserId::PRIMARY
-        && key.package_name().as_str() == ALLOWED_PACKAGE
-    {
+    if key.user_id() == crate::domain::UserId::PRIMARY {
         Ok(())
     } else {
         Err(ServiceError::PackageNotAllowed)

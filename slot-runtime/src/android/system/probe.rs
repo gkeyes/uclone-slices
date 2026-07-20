@@ -1,19 +1,15 @@
-#![allow(
-    unreachable_pub,
-    dead_code,
-    unused_imports,
-    reason = "path-included integration fixtures select probe APIs independently"
-)]
+#![allow(unreachable_pub, dead_code, unused_imports)]
 
 use std::path::Path;
 
 use crate::android::{CanonicalView, MountNamespaceProof, PackageProbe, ProbeError, ViewProof};
 use crate::bridge::{
-    ALLOWED_PACKAGE, ALLOWED_USER_ID, AppProcessRunner, BridgeClient, BridgeCommandRunner,
-    BridgeErrorCode, PackageSnapshot,
+    ALLOWED_USER_ID, AppProcessRunner, BridgeClient, BridgeCommandRunner, BridgeErrorCode,
+    PackageSnapshot,
 };
 use crate::domain::{
-    AppIdentity, DataInodes, GateSnapshot, PackageName, PackageObservation, SlotId, UserId,
+    AppIdentity, DataInodes, GateSnapshot, PackageCompatibility, PackageName, PackageObservation,
+    SlotId, UserId,
 };
 use crate::layout::RuntimeLayout;
 
@@ -117,12 +113,17 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor, F: SystemFacts> PackageProbe
             snapshot.package_manager_de_inode(),
         )
         .map_err(|_| ProbeError::InvalidResponse)?;
-        Ok(PackageObservation::new(
+        Ok(PackageObservation::with_compatibility(
             identity,
             package_manager,
             canonical,
             active,
             snapshot.pending_install(),
+            PackageCompatibility::new(
+                snapshot.system_app(),
+                snapshot.shared_uid(),
+                snapshot.direct_boot_aware(),
+            ),
         ))
     }
 
@@ -133,7 +134,7 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor, F: SystemFacts> PackageProbe
     ) -> Result<GateSnapshot, ProbeError> {
         require_target(package, user_id)?;
         self.bridge
-            .query_gate(ALLOWED_PACKAGE, ALLOWED_USER_ID)
+            .query_gate(package.as_str(), ALLOWED_USER_ID)
             .map_err(|error| map_bridge_error(&error))
     }
 
@@ -209,7 +210,7 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor, F: SystemFacts> SystemPackagePr
         require_target(package, user_id)?;
         let snapshot = self
             .bridge
-            .query_package(ALLOWED_PACKAGE, ALLOWED_USER_ID)
+            .query_package(package.as_str(), ALLOWED_USER_ID)
             .map_err(|error| map_bridge_error(&error))?;
         let base = RuntimeLayout::slot_paths(package, &SlotId::base());
         if Path::new(snapshot.ce_data_path()) != base.ce()
@@ -222,8 +223,8 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor, F: SystemFacts> SystemPackagePr
     }
 }
 
-fn require_target(package: &PackageName, user_id: UserId) -> Result<(), ProbeError> {
-    if package.as_str() == ALLOWED_PACKAGE && user_id.get() == ALLOWED_USER_ID {
+const fn require_target(_package: &PackageName, user_id: UserId) -> Result<(), ProbeError> {
+    if user_id.get() == ALLOWED_USER_ID {
         Ok(())
     } else {
         Err(ProbeError::InvalidResponse)

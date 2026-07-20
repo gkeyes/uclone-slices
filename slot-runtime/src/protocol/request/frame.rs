@@ -1,6 +1,6 @@
 use serde::Deserialize as _;
 
-use super::{Request, WireRequest, from_wire};
+use super::Request;
 use crate::protocol::{ProtocolError, encode_json_line, frame_line};
 
 /// Encodes one request as a bounded JSON-lines frame.
@@ -12,7 +12,7 @@ pub fn encode_request(request: &Request) -> Result<Vec<u8>, ProtocolError> {
 pub fn decode_request(frame: &[u8]) -> Result<Request, ProtocolError> {
     let line = frame_line(frame)?;
     let mut deserializer = serde_json::Deserializer::from_slice(line);
-    let wire = WireRequest::deserialize(&mut deserializer)?;
+    let wire = super::wire::WireRequest::deserialize(&mut deserializer)?;
     deserializer.end().map_err(ProtocolError::Json)?;
-    from_wire(wire)
+    super::wire::from_wire(wire)
 }

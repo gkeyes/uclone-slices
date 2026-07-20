@@ -6,10 +6,7 @@ use service_support::{
     Call, FailurePoint, FakePlatform, allowed, preview_view, ready_base, request,
 };
 use uclone_slot_runtime::daemon::RequestHandler;
-use uclone_slot_runtime::domain::SlotId;
-use uclone_slot_runtime::protocol::{
-    Command, ErrorCode, ProtocolError, ReconcileOutcome, Request, RequestId, ResponsePayload,
-};
+use uclone_slot_runtime::protocol::{Command, ErrorCode, ReconcileOutcome, ResponsePayload};
 use uclone_slot_runtime::service::{PackageState, PreviewService, RescueExecution, ServiceError};
 
 #[test]
@@ -141,25 +138,6 @@ fn materialization_failure_never_runs_switch_or_restores_gate() {
 }
 
 #[test]
-fn switch_rejects_every_slot_except_fixed_preview_before_platform_access() {
-    // Given
-    let service = PreviewService::new(FakePlatform::with_state(ready_base()));
-
-    // When
-    let result = Request::new(
-        RequestId::new("foreign-slot").unwrap(),
-        Command::Switch {
-            package: allowed(),
-            slot: SlotId::parse("caller-path-like-slot").unwrap(),
-        },
-    );
-
-    // Then
-    assert!(matches!(result, Err(ProtocolError::SlotNotAllowed(_))));
-    assert!(service.platform().calls().is_empty());
-}
-
-#[test]
 fn rescue_rejects_an_unproved_offline_recovery() {
     let platform = FakePlatform::with_state(PackageState::RecoveryRequired)
         .with_rescue_execution(RescueExecution::RecoveryRequired);
@@ -180,7 +158,7 @@ fn reconciliation_reports_recovery_without_converting_it_to_success_enablement()
     let mut service = PreviewService::new(platform);
 
     // When
-    let response = service.handle(&request(Command::Reconcile));
+    let response = service.handle(&request(Command::ReconcilePackage { package: allowed() }));
 
     // Then
     assert!(matches!(

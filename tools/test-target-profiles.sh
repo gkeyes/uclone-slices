@@ -62,11 +62,9 @@ assert_source_contains() {
 
 verify_production_wiring() {
     assert_source_contains slot-runtime/build.rs 'UCLONE_TARGET_PROFILE'
-    assert_source_contains slot-runtime/src/protocol.rs \
-        'pub const ALLOWED_PACKAGE: &str = crate::target::PACKAGE;'
     assert_source_contains slot-bridge/build.gradle.kts 'generatedTargetProfile.resolve("java/bridge")'
     assert_source_contains slot-bridge/src/main/java/com/uclone/slotbridge/PackagePolicy.java \
-        'static final String ALLOWED_PACKAGE = TargetProfile.PACKAGE;'
+        'static final int ALLOWED_USER_ID = 0;'
     assert_source_contains slot-fsprobe/src/path_policy.c '#include "target_profile.h"'
     assert_source_contains slot-kernelsu/emergency-containment.sh '. "$PROFILE_FILE"'
     assert_source_contains slot-preview-controller/build.gradle.kts \
@@ -196,6 +194,7 @@ main() {
         EXIT HUP INT TERM
     verify_rendered_profile slotprobe com.uclone.slotprobe "$scratch/slotprobe"
     verify_rendered_profile fitness com.asksky.fitness "$scratch/fitness"
+    verify_rendered_profile generic com.uclone.slots.preview "$scratch/generic"
     verify_production_wiring
     if [ "$mode" = '--adversarial' ]; then
         verify_adversarial_boundaries

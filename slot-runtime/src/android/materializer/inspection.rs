@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::catalog::{PathSecurityProof, SecurityProfileProof};
 use crate::domain::DataInodes;
 use crate::materializer::{
-    BackendFailure, BaseAnchor, ContentProof, DataDomain, DirectoryAnchor,
+    BackendFailure, BaseAnchor, ContentProof, DataBytes, DataDomain, DirectoryAnchor,
     SlotMaterializationProof, TreeSafetyProof,
 };
 
@@ -35,6 +35,7 @@ pub(super) fn inspect_base<E: MaterializerExecutor>(
         anchor(&ce)?,
         anchor(&de)?,
         SecurityProfileProof::new(ce.security, de.security),
+        DataBytes::new(ce.tree.total_bytes(), de.tree.total_bytes()),
     )
     .map_err(|_| BackendFailure::new("base_proof_invalid"))
 }

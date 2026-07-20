@@ -21,7 +21,10 @@ fn package_payload() -> serde_json::Value {
         "packageManagerDeInode": 202,
         "enabledState": "enabled",
         "suspended": false,
-        "pendingInstall": false
+        "pendingInstall": false,
+        "systemApp": false,
+        "sharedUid": false,
+        "directBootAware": false
     })
 }
 
@@ -69,6 +72,9 @@ fn valid_package_response_is_typed_and_normalized() {
     assert_eq!(package.enabled_state(), PackageEnabledState::Enabled);
     assert!(!package.suspended());
     assert!(!package.pending_install());
+    assert!(!package.system_app());
+    assert!(!package.shared_uid());
+    assert!(!package.direct_boot_aware());
 }
 
 #[test]

@@ -1,7 +1,7 @@
 HOST_CC ?= cc
 TARGET_PROFILE ?= slotprobe
-ifneq ($(filter $(TARGET_PROFILE),slotprobe fitness),$(TARGET_PROFILE))
-$(error TARGET_PROFILE must be exactly slotprobe or fitness)
+ifneq ($(filter $(TARGET_PROFILE),slotprobe fitness generic),$(TARGET_PROFILE))
+$(error TARGET_PROFILE must be slotprobe, fitness, or generic)
 endif
 REPO_ROOT := $(abspath $(CURDIR)/..)
 PROFILE_OUTPUT := $(CURDIR)/build/generated/$(TARGET_PROFILE)

@@ -1,5 +1,8 @@
 use crate::domain::{ManagedPackage, SlotView};
 
+mod read;
+pub use read::{ManagedAppInfo, PackageInspection, SlotInfo};
+
 pub use crate::rescue::RescueExecution;
 
 /// Read-only device capability facts used to build a protocol probe report.
@@ -64,7 +67,7 @@ impl ObservedGateState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageSnapshot {
     managed: ManagedPackage,
-    preview: Option<SlotView>,
+    slots: Vec<SlotView>,
     gate: ObservedGateState,
 }
 
@@ -72,12 +75,12 @@ impl PackageSnapshot {
     /// Groups durable package state, optional fixed Preview catalog view, and live gate facts.
     pub const fn new(
         managed: ManagedPackage,
-        preview: Option<SlotView>,
+        slots: Vec<SlotView>,
         gate: ObservedGateState,
     ) -> Self {
         Self {
             managed,
-            preview,
+            slots,
             gate,
         }
     }
@@ -87,9 +90,14 @@ impl PackageSnapshot {
         &self.managed
     }
 
-    /// Returns the fixed Preview catalog view when it has been materialized.
-    pub const fn preview(&self) -> Option<&SlotView> {
-        self.preview.as_ref()
+    /// Returns every verified non-base catalog view.
+    pub fn slots(&self) -> &[SlotView] {
+        &self.slots
+    }
+
+    /// Returns one verified catalog view by immutable slot id.
+    pub fn slot(&self, slot: &crate::domain::SlotId) -> Option<&SlotView> {
+        self.slots.iter().find(|view| view.slot_id() == slot)
     }
 
     /// Returns read-only Android gate facts.

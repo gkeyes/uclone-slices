@@ -58,12 +58,54 @@ where
     Q: PackageProbe,
     T: MetadataSource + RescueMetadataSource,
 {
-    fn probe(&self, key: &PackageKey) -> Result<CapabilitySnapshot, ServiceError> {
-        self.do_probe(key)
+    fn probe(&self) -> Result<CapabilitySnapshot, ServiceError> {
+        self.do_probe()
+    }
+
+    fn inspect_package(
+        &self,
+        key: &PackageKey,
+    ) -> Result<crate::service::PackageInspection, ServiceError> {
+        self.do_inspect_package(key)
+    }
+
+    fn list_managed_apps(&self) -> Result<Vec<crate::service::ManagedAppInfo>, ServiceError> {
+        self.do_list_managed()
+    }
+
+    fn list_slots(&self, key: &PackageKey) -> Result<Vec<crate::service::SlotInfo>, ServiceError> {
+        self.do_list_slots(key)
+    }
+
+    fn create_slot(
+        &mut self,
+        key: &PackageKey,
+        display_name: crate::slot_metadata::SlotDisplayName,
+        seed_mode: crate::slot_metadata::SlotSeedMode,
+    ) -> Result<SwitchExecution, ServiceError> {
+        self.do_create_slot(key, display_name, seed_mode)
+    }
+
+    fn rename_slot(
+        &mut self,
+        key: &PackageKey,
+        slot: &crate::domain::SlotId,
+        display_name: crate::slot_metadata::SlotDisplayName,
+    ) -> Result<(), ServiceError> {
+        self.do_rename_slot(key, slot, display_name)
+    }
+
+    fn delete_slot(
+        &mut self,
+        key: &PackageKey,
+        slot: &crate::domain::SlotId,
+    ) -> Result<(), ServiceError> {
+        self.do_delete_slot(key, slot)
     }
 
     fn package_state(&self, key: &PackageKey) -> Result<PackageState, ServiceError> {
-        let rescue = RescueJournalStore::fixed().map_err(|_| ServiceError::RecoveryRequired)?;
+        let rescue = RescueJournalStore::fixed_for(key.package_name())
+            .map_err(|_| ServiceError::RecoveryRequired)?;
         if rescue
             .load()
             .map_err(|_| ServiceError::RecoveryRequired)?
@@ -153,8 +195,13 @@ where
         self.do_contain(package, class)
     }
 
-    fn materialize_preview(&mut self, package: &ManagedPackage) -> Result<SlotView, ServiceError> {
-        self.do_materialize(package)
+    fn materialize_slot(
+        &mut self,
+        package: &ManagedPackage,
+        slot: &crate::domain::SlotId,
+        seed_mode: crate::slot_metadata::SlotSeedMode,
+    ) -> Result<SlotView, ServiceError> {
+        self.do_materialize(package, slot, seed_mode)
     }
 
     fn switch_view(

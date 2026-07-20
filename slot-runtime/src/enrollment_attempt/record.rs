@@ -118,11 +118,9 @@ impl EnrollmentAttempt {
                 "unsupported schema or zero generation".to_owned(),
             ));
         }
-        if self.package_key.user_id() != UserId::PRIMARY
-            || self.package_key.package_name().as_str() != crate::protocol::ALLOWED_PACKAGE
-        {
+        if self.package_key.user_id() != UserId::PRIMARY {
             return Err(EnrollmentAttemptError::Corrupt(
-                "attempt package is outside the compiled user-zero allowlist".to_owned(),
+                "attempt package is outside Android user zero".to_owned(),
             ));
         }
         let expected_generation = previous.map_or(Ok(1), |value| {

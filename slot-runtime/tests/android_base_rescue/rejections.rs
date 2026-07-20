@@ -26,16 +26,16 @@ fn rejects_excess_mount_layers_without_unmounting() {
 }
 
 #[test]
-fn rejects_unknown_or_missing_preview_source_without_unmounting() {
+fn coherent_single_layer_source_is_rescued_without_catalog_dependency() {
     let (mut backend, fixture, package) = setup(DomainView::Preview, DomainView::Preview);
     let unknown = DataInodes::new(505, 606).unwrap();
     fixture.set_view(unknown, unknown, unknown);
 
-    assert_rejected_without_unmount(&mut backend, &fixture, &package);
-
-    let (mut backend, fixture, package) = setup(DomainView::Preview, DomainView::Preview);
-    fixture.set_preview_present(false);
-    assert_rejected_without_unmount(&mut backend, &fixture, &package);
+    backend
+        .restore_native_base_unconditionally(&package)
+        .unwrap();
+    assert_eq!(fixture.commands().len(), 2);
+    assert_eq!(fixture.view().canonical().inodes(), fixture.base());
 }
 
 #[test]
@@ -92,9 +92,12 @@ fn rejects_identity_pm_inode_or_install_drift_without_unmounting() {
 }
 
 #[test]
-fn rejects_non_allowlisted_package_before_any_probe_mutation() {
+fn accepts_any_valid_durably_managed_package() {
     let (mut backend, fixture, _) = setup(DomainView::Preview, DomainView::Preview);
     let package = managed("com.example.other");
 
-    assert_rejected_without_unmount(&mut backend, &fixture, &package);
+    backend
+        .restore_native_base_unconditionally(&package)
+        .unwrap();
+    assert_eq!(fixture.commands().len(), 2);
 }

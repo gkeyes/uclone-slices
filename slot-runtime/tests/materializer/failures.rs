@@ -11,7 +11,7 @@ use super::support::{Call, FakeBackend, base_anchor, managed_base, preview, secu
 
 #[test]
 fn gate_or_quiescence_failure_performs_no_filesystem_write() {
-    for failed in [Call::Gate, Call::Quiet] {
+    for failed in [Call::Gate, Call::Quiet, Call::Capacity] {
         let mut backend = FakeBackend::healthy();
         backend.fail_call = Some(failed);
         let mut faults = NoFault;
@@ -131,16 +131,22 @@ fn rejects_security_fscrypt_device_and_base_anchor_mismatch() {
 }
 
 #[test]
-fn rejects_base_illegal_and_repeated_slot_without_deleting_ready() {
-    for slot in [SlotId::base(), SlotId::parse("work").unwrap()] {
-        let mut backend = FakeBackend::healthy();
-        let mut faults = NoFault;
-        let error = MaterializationCoordinator::new(&mut backend, &mut faults)
-            .materialize(&managed_base(), &slot)
-            .unwrap_err();
-        assert!(matches!(error, MaterializationError::UnsupportedSlot(_)));
-        assert!(backend.calls.is_empty());
-    }
+fn rejects_base_and_repeated_slot_without_rejecting_runtime_ids() {
+    let mut backend = FakeBackend::healthy();
+    let mut faults = NoFault;
+    let error = MaterializationCoordinator::new(&mut backend, &mut faults)
+        .materialize(&managed_base(), &SlotId::base())
+        .unwrap_err();
+    assert!(matches!(error, MaterializationError::UnsupportedSlot(_)));
+    assert!(backend.calls.is_empty());
+
+    let mut backend = FakeBackend::healthy();
+    let mut faults = NoFault;
+    let work = SlotId::parse("work").unwrap();
+    let result = MaterializationCoordinator::new(&mut backend, &mut faults)
+        .materialize(&managed_base(), &work)
+        .unwrap();
+    assert_eq!(result.slot_id(), &work);
 
     let mut backend = FakeBackend::healthy();
     backend.artifacts = ArtifactState::ReadyOnly;

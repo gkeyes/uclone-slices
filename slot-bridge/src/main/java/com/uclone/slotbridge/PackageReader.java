@@ -10,6 +10,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class PackageReader {
+    private static final long PACKAGE_INFO_FLAGS =
+            PackageManager.GET_SIGNING_CERTIFICATES
+                    | PackageManager.GET_ACTIVITIES
+                    | PackageManager.GET_SERVICES
+                    | PackageManager.GET_RECEIVERS
+                    | PackageManager.GET_PROVIDERS;
     private static final Class<?>[] PACKAGE_INFO_TYPES = {
         String.class, long.class, int.class
     };
@@ -17,17 +23,21 @@ final class PackageReader {
     private static final int MAX_INSTALL_SESSIONS = 1024;
 
     private final Object packageManager;
+    private final String packageName;
 
-    PackageReader(Object packageManager) {
+    PackageReader(Object packageManager, String packageName) throws BridgeFailure {
+        if (!PackagePolicy.isAllowed(packageName)) {
+            throw new BridgeFailure("package", ErrorCode.PACKAGE_NOT_ALLOWED);
+        }
         this.packageManager = packageManager;
+        this.packageName = packageName;
     }
 
     PackageSnapshot read() throws BridgeFailure {
         flushRestrictions("package");
         PackageManagerInodes packageManagerInodes =
-                PackageRestrictionsParser.parse(FixedRestrictionsFile.read());
-        String packageName = PackagePolicy.ALLOWED_PACKAGE;
-        PackageInfo info = packageInfo(PackageManager.GET_SIGNING_CERTIFICATES, "package");
+                PackageRestrictionsParser.parse(FixedRestrictionsFile.read(), packageName);
+        PackageInfo info = packageInfo(PACKAGE_INFO_FLAGS, "package");
         ApplicationInfo applicationInfo = info.applicationInfo;
         if (applicationInfo == null) {
             throw new BridgeFailure("package", ErrorCode.INVALID_RESPONSE);
@@ -54,7 +64,10 @@ final class PackageReader {
                 packageManagerInodes,
                 enabledState("package"),
                 suspended("package"),
-                hasPendingInstall());
+                hasPendingInstall(),
+                PackageCompatibility.isSystemApp(applicationInfo),
+                info.sharedUserId != null,
+                PackageCompatibility.hasDirectBootAwareComponent(info));
     }
 
     GateSnapshot readGate() throws BridgeFailure {
@@ -82,7 +95,7 @@ final class PackageReader {
                 remoteFailure(requestId),
                 "getApplicationEnabledSetting",
                 PACKAGE_USER_TYPES,
-                PackagePolicy.ALLOWED_PACKAGE,
+                packageName,
                 PackagePolicy.ALLOWED_USER_ID);
         if (!(value instanceof Integer)) {
             throw new BridgeFailure(requestId, ErrorCode.INVALID_RESPONSE);
@@ -97,7 +110,7 @@ final class PackageReader {
                 remoteFailure(requestId),
                 "isPackageSuspendedForUser",
                 PACKAGE_USER_TYPES,
-                PackagePolicy.ALLOWED_PACKAGE,
+                packageName,
                 PackagePolicy.ALLOWED_USER_ID);
         if (!(value instanceof Boolean)) {
             throw new BridgeFailure(requestId, ErrorCode.INVALID_RESPONSE);
@@ -112,7 +125,7 @@ final class PackageReader {
                 remoteFailure(requestId),
                 "getPackageInfo",
                 PACKAGE_INFO_TYPES,
-                PackagePolicy.ALLOWED_PACKAGE,
+                packageName,
                 flags,
                 PackagePolicy.ALLOWED_USER_ID);
         if (value == null) {
@@ -131,7 +144,7 @@ final class PackageReader {
                 remoteFailure(requestId),
                 "getPackageUid",
                 PACKAGE_INFO_TYPES,
-                PackagePolicy.ALLOWED_PACKAGE,
+                packageName,
                 0L,
                 PackagePolicy.ALLOWED_USER_ID);
         if (!(value instanceof Integer)) {
@@ -172,7 +185,7 @@ final class PackageReader {
                 throw new BridgeFailure("package", ErrorCode.INVALID_RESPONSE);
             }
             PackageInstaller.SessionInfo info = (PackageInstaller.SessionInfo) session;
-            if (PackagePolicy.ALLOWED_PACKAGE.equals(info.getAppPackageName())) {
+            if (packageName.equals(info.getAppPackageName())) {
                 return true;
             }
         }
@@ -222,5 +235,9 @@ final class PackageReader {
 
     private static ErrorCode remoteFailure(String requestId) {
         return "package".equals(requestId) ? ErrorCode.INTERNAL : ErrorCode.COMMAND_FAILED;
+    }
+
+    String packageName() {
+        return packageName;
     }
 }

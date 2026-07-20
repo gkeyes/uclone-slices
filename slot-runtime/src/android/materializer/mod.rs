@@ -1,6 +1,7 @@
 #![doc = "Fixed-layout, fail-closed Android slot materialization adapter."]
 
 mod backend;
+mod capacity;
 mod command;
 mod evidence;
 mod executor;

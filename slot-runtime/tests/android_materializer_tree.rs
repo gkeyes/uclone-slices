@@ -44,6 +44,7 @@ fn digest_is_deterministic_and_content_sensitive() -> Result<(), Box<dyn Error>>
     let second = inspect_tree(root.path(), MaterializerLimits::PRODUCTION)?;
     assert_eq!(first.digest(), second.digest());
     assert_eq!(first.safety(), TreeSafetyProof::clean());
+    assert_eq!(first.total_bytes(), 9);
     assert_ne!(first.device_id(), 0);
     assert_ne!(first.inode(), 0);
     assert_eq!(

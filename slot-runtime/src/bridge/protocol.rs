@@ -3,6 +3,10 @@ use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use super::{BridgeError, PackageEnabledState, invalid_response};
 
 #[doc = "PackageManager facts returned by the fixed bridge."]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "wire facts remain explicit so compatibility failures are independently auditable"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageSnapshot {
@@ -21,10 +25,17 @@ pub struct PackageSnapshot {
     enabled_state: PackageEnabledState,
     suspended: bool,
     pending_install: bool,
+    system_app: bool,
+    shared_uid: bool,
+    direct_boot_aware: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "strict bridge wire shape mirrors the independently audited package facts"
+)]
 struct PackageSnapshotWire {
     package_name: String,
     user_id: u32,
@@ -41,6 +52,9 @@ struct PackageSnapshotWire {
     enabled_state: PackageEnabledState,
     suspended: bool,
     pending_install: bool,
+    system_app: bool,
+    shared_uid: bool,
+    direct_boot_aware: bool,
 }
 
 impl<'de> Deserialize<'de> for PackageSnapshot {
@@ -51,7 +65,7 @@ impl<'de> Deserialize<'de> for PackageSnapshot {
 
 impl PackageSnapshot {
     #[doc = "Constructs and validates package facts from the bridge boundary."]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     #[allow(
         clippy::similar_names,
         reason = "CE and DE inode arguments are an intentional paired storage fact"
@@ -71,6 +85,9 @@ impl PackageSnapshot {
         enabled_state: PackageEnabledState,
         suspended: bool,
         pending_install: bool,
+        system_app: bool,
+        shared_uid: bool,
+        direct_boot_aware: bool,
     ) -> Result<Self, BridgeError> {
         Self::from_wire(PackageSnapshotWire {
             package_name: package_name.to_owned(),
@@ -87,6 +104,9 @@ impl PackageSnapshot {
             enabled_state,
             suspended,
             pending_install,
+            system_app,
+            shared_uid,
+            direct_boot_aware,
         })
     }
 
@@ -137,6 +157,9 @@ impl PackageSnapshot {
             enabled_state: wire.enabled_state,
             suspended: wire.suspended,
             pending_install: wire.pending_install,
+            system_app: wire.system_app,
+            shared_uid: wire.shared_uid,
+            direct_boot_aware: wire.direct_boot_aware,
         })
     }
 
@@ -208,5 +231,20 @@ impl PackageSnapshot {
     #[doc = "Returns whether a pending install session was observed."]
     pub const fn pending_install(&self) -> bool {
         self.pending_install
+    }
+
+    #[doc = "Returns whether PackageManager classifies the package as a system App."]
+    pub const fn system_app(&self) -> bool {
+        self.system_app
+    }
+
+    #[doc = "Returns whether the package participates in a shared UID group."]
+    pub const fn shared_uid(&self) -> bool {
+        self.shared_uid
+    }
+
+    #[doc = "Returns whether any declared component is Direct Boot aware."]
+    pub const fn direct_boot_aware(&self) -> bool {
+        self.direct_boot_aware
     }
 }

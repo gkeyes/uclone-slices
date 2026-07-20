@@ -2,6 +2,8 @@
 #![allow(
     clippy::redundant_pub_crate,
     clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
     reason = "included production module keeps its original crate-relative visibility"
 )]
 #![allow(
@@ -33,9 +35,9 @@ struct FakeBridge {
 }
 
 impl BridgeCommandRunner for FakeBridge {
-    fn run(&mut self, command: BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError> {
+    fn run(&mut self, command: &BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError> {
         self.calls += 1;
-        if command == BridgeCommand::PackageStatus {
+        if matches!(command, BridgeCommand::PackageStatus(_)) {
             Ok(self.package.clone())
         } else {
             Err(BridgeRunnerError::Io(io::Error::other(
@@ -131,10 +133,20 @@ fn package_response(pm: DataInodes) -> Vec<u8> {
             "packageManagerDeInode": pm.de().get(),
             "enabledState": "enabled",
             "suspended": false,
-            "pendingInstall": false
+            "pendingInstall": false,
+            "systemApp": false,
+            "sharedUid": false,
+            "directBootAware": false
         }
     }))
     .unwrap()
+}
+
+fn incompatible_package_response(pm: DataInodes) -> Vec<u8> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&package_response(pm)).expect("package fixture");
+    value["payload"]["sharedUid"] = serde_json::json!(true);
+    serde_json::to_vec(&value).expect("package fixture encoding")
 }
 
 fn fake_facts(canonical: DataInodes, processes: Vec<u32>) -> FakeFacts {
@@ -179,6 +191,26 @@ fn observation_uses_persisted_pm_inodes_while_preview_is_active() {
         PackageLifecycleGuard::assess(&managed, &observed),
         GuardDecision::AllowSlot
     );
+}
+
+#[test]
+fn package_manager_compatibility_flags_reach_the_runtime_guard() {
+    let base = DataInodes::new(101, 202).unwrap();
+    let bridge = FakeBridge {
+        package: incompatible_package_response(base),
+        calls: 0,
+    };
+    let executor = FakeExecutor {
+        outputs: VecDeque::from([ProcessOutput::new(Some(0), b"101\n202\n".to_vec())]),
+        seen: Vec::new(),
+    };
+    let mut probe =
+        SystemPackageProbe::with_dependencies(bridge, executor, fake_facts(base, vec![81]));
+
+    let observed = probe.observe_package(&package(), UserId::PRIMARY).unwrap();
+
+    assert!(!observed.compatibility().is_supported());
+    assert!(observed.compatibility().shared_uid());
 }
 
 #[test]

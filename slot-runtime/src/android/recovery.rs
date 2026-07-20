@@ -8,17 +8,22 @@ use super::gate_snapshot;
 use super::lease::{
     EmergencyGateLease, EmergencyGatePhase, GateLease, GateLeaseStore, StoredGateLease,
 };
-use super::policy::{Stage, ensure_package_supported, ensure_supported, failure};
+use super::policy::{Stage, ensure_supported, failure};
 use super::probe::{PackageProbe, ProbeError};
 
 impl<R: CommandRunner, P: PackageProbe, L: GateLeaseStore> RecoveryBackend
     for AndroidBackend<R, P, L>
 {
+    fn leased_packages(&mut self) -> Result<Vec<PackageName>, PlatformError> {
+        self.gate_leases
+            .package_names()
+            .map_err(|error| failure(Stage::CaptureGate, &error.to_string()))
+    }
+
     fn emergency_gate_if_leased(
         &mut self,
         package: &PackageName,
     ) -> Result<Option<GateSnapshot>, PlatformError> {
-        ensure_package_supported(package, Stage::CaptureGate)?;
         if matches!(self.gate_leases.artifact_exists(package), Ok(false)) {
             return Ok(None);
         }
@@ -41,7 +46,6 @@ impl<R: CommandRunner, P: PackageProbe, L: GateLeaseStore> RecoveryBackend
     }
 
     fn emergency_gate(&mut self, package: &PackageName) -> Result<GateSnapshot, PlatformError> {
-        ensure_package_supported(package, Stage::CaptureGate)?;
         if self.gate_leases.artifact_exists(package) == Ok(false) {
             let snapshot = gate_snapshot::retry(&mut self.probe, package, UserId::PRIMARY)
                 .map_err(|error| failure(Stage::CaptureGate, error.code()))?;

@@ -9,10 +9,10 @@ use std::process::Command;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let profile = env::var("UCLONE_TARGET_PROFILE").unwrap_or_else(|_| "slotprobe".to_owned());
-    if !matches!(profile.as_str(), "slotprobe" | "fitness") {
+    if !matches!(profile.as_str(), "slotprobe" | "fitness" | "generic") {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "UCLONE_TARGET_PROFILE must be exactly slotprobe or fitness",
+            "UCLONE_TARGET_PROFILE must be exactly slotprobe, fitness, or generic",
         )
         .into());
     }

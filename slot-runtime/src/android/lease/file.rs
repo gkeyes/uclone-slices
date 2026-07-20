@@ -19,6 +19,10 @@ static UPGRADE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 pub struct FileGateLeaseStore;
 
 impl GateLeaseStore for FileGateLeaseStore {
+    fn package_names(&mut self) -> Result<Vec<PackageName>, GateLeaseError> {
+        super::discovery::package_names()
+    }
+
     fn artifact_exists(&mut self, package: &PackageName) -> Result<bool, GateLeaseError> {
         let Some(root) = existing_gate_root()? else {
             return Ok(false);

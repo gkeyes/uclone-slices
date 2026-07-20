@@ -11,9 +11,11 @@ use clap::{CommandFactory, Parser};
 use uclone_slot_runtime::cli::{Cli, CliCommand, Transport, execute, execute_request};
 use uclone_slot_runtime::domain::PackageName;
 use uclone_slot_runtime::protocol::{
-    ALLOWED_PACKAGE, Ack, AckOperation, Command, ErrorCode, ProtocolError, Request, Response,
-    ResponsePayload, ResponseStatus,
+    Ack, AckOperation, Command, ErrorCode, ProtocolError, Request, Response, ResponsePayload,
+    ResponseStatus,
 };
+
+const SAMPLE_PACKAGE: &str = "com.example.preview";
 
 #[derive(Debug)]
 struct FakeTransport {
@@ -48,14 +50,38 @@ fn success_response(request: &Request) -> Response {
 }
 
 #[test]
-fn parser_exposes_only_the_fixed_command_surface() {
+fn parser_exposes_only_the_typed_command_surface() {
     let cases = [
+        vec!["slotctl", "rpc"],
         vec!["slotctl", "probe"],
-        vec!["slotctl", "enroll", ALLOWED_PACKAGE],
-        vec!["slotctl", "status", ALLOWED_PACKAGE],
-        vec!["slotctl", "switch", ALLOWED_PACKAGE, "work"],
+        vec!["slotctl", "inspect", SAMPLE_PACKAGE],
+        vec!["slotctl", "apps"],
+        vec!["slotctl", "enroll", SAMPLE_PACKAGE],
+        vec!["slotctl", "status", SAMPLE_PACKAGE],
+        vec![
+            "slotctl",
+            "create",
+            SAMPLE_PACKAGE,
+            "--name",
+            "Work",
+            "--seed",
+            "blank",
+        ],
+        vec!["slotctl", "slots", SAMPLE_PACKAGE],
+        vec!["slotctl", "switch", SAMPLE_PACKAGE, "work"],
+        vec![
+            "slotctl",
+            "rename",
+            SAMPLE_PACKAGE,
+            "work",
+            "--name",
+            "Personal",
+        ],
+        vec!["slotctl", "delete", SAMPLE_PACKAGE, "work"],
         vec!["slotctl", "reconcile"],
-        vec!["slotctl", "rescue", ALLOWED_PACKAGE, "--to-base"],
+        vec!["slotctl", "reconcile", SAMPLE_PACKAGE],
+        vec!["slotctl", "retire", SAMPLE_PACKAGE],
+        vec!["slotctl", "rescue", SAMPLE_PACKAGE, "--to-base"],
     ];
     for args in cases {
         assert!(Cli::try_parse_from(args).is_ok());
@@ -70,31 +96,34 @@ fn parser_exposes_only_the_fixed_command_surface() {
 }
 
 #[test]
+fn rpc_has_no_shell_or_path_arguments_and_is_not_locally_synthesized() {
+    assert!(Cli::try_parse_from(["slotctl", "rpc", "/data"]).is_err());
+    let rpc = Cli::try_parse_from(["slotctl", "rpc"]).unwrap();
+    assert!(rpc.command.request().is_err());
+}
+
+#[test]
 fn rescue_requires_the_explicit_base_flag() {
-    let error = Cli::try_parse_from(["slotctl", "rescue", ALLOWED_PACKAGE]);
+    let error = Cli::try_parse_from(["slotctl", "rescue", SAMPLE_PACKAGE]);
     assert!(error.is_err());
 }
 
 #[test]
-fn request_conversion_uses_protocol_allowlist_and_bounded_ids() {
+fn request_conversion_accepts_valid_packages_and_uses_bounded_ids() {
     let command = CliCommand::Status {
-        package: ALLOWED_PACKAGE.to_owned(),
+        package: SAMPLE_PACKAGE.to_owned(),
     };
     let request = command.request().unwrap();
     assert!(request.request_id().as_str().len() <= 128);
     assert!(request.request_id().as_str().starts_with("slotctl-"));
     assert!(matches!(request.command(), Command::StatusPackage { .. }));
 
-    let rejected = CliCommand::Status {
-        package: "com.example.other".to_owned(),
+    let second = CliCommand::Status {
+        package: "org.example.other".to_owned(),
     }
-    .request();
-    assert!(matches!(
-        rejected,
-        Err(uclone_slot_runtime::cli::CliError::Protocol(
-            ProtocolError::PackageNotAllowed(_)
-        ))
-    ));
+    .request()
+    .unwrap();
+    assert!(matches!(second.command(), Command::StatusPackage { .. }));
 }
 #[test]
 fn injected_transport_prints_one_json_response_and_reports_daemon_error() {
@@ -121,7 +150,7 @@ fn injected_transport_prints_one_json_response_and_reports_daemon_error() {
 #[test]
 fn injected_transport_preserves_the_request_and_success_output() {
     let command = CliCommand::Enroll {
-        package: ALLOWED_PACKAGE.to_owned(),
+        package: SAMPLE_PACKAGE.to_owned(),
     };
     let request = command.request().unwrap();
     let mut transport = FakeTransport::response(success_response(&request));
@@ -139,7 +168,7 @@ fn injected_transport_preserves_the_request_and_success_output() {
 #[test]
 fn injected_transport_rejects_a_response_for_another_request_without_output() {
     let request = CliCommand::Probe.request().unwrap();
-    let other_request = CliCommand::Reconcile.request().unwrap();
+    let other_request = CliCommand::Reconcile { package: None }.request().unwrap();
     let mut transport = FakeTransport::response(Response::error(
         other_request.request_id().clone(),
         ErrorCode::Busy,
@@ -185,20 +214,6 @@ fn binary_help_and_invalid_command_are_manual_surface_checks() {
 }
 
 #[test]
-fn binary_rejects_well_formed_non_allowlisted_package_before_connecting() {
-    let binary = env!("CARGO_BIN_EXE_slotctl");
-    let rejected = ProcessCommand::new(binary)
-        .args(["status", "com.asksky.fitness"])
-        .output()
-        .unwrap();
-
-    assert!(!rejected.status.success());
-    let diagnostics = String::from_utf8_lossy(&rejected.stderr);
-    assert!(diagnostics.contains("not allowlisted"));
-    assert!(!diagnostics.contains("No such file or directory"));
-}
-
-#[test]
 fn package_parser_rejects_malformed_names_before_transport() {
     let command = CliCommand::Status {
         package: "not a package".to_owned(),
@@ -218,7 +233,7 @@ fn package_parser_rejects_malformed_names_before_transport() {
     assert!(output.is_empty());
     assert!(!diagnostics.is_empty());
     assert_eq!(
-        PackageName::parse("com.uclone.slotprobe").unwrap().as_str(),
-        ALLOWED_PACKAGE
+        PackageName::parse(SAMPLE_PACKAGE).unwrap().as_str(),
+        SAMPLE_PACKAGE
     );
 }

@@ -218,10 +218,11 @@ fn observation_is_returned_only_by_the_injected_probe() {
 }
 
 #[test]
-fn package_outside_initial_allowlist_is_rejected_without_side_effects() {
+fn any_valid_package_is_observed_through_the_injected_probe() {
     let package = managed("com.example.other");
+    let expected = observation(&package);
     let probe = FakeProbe {
-        observation: observation(&package),
+        observation: expected.clone(),
         observation_errors: VecDeque::new(),
         gates: VecDeque::new(),
         process_counts: VecDeque::from([Ok(0)]),
@@ -229,16 +230,11 @@ fn package_outside_initial_allowlist_is_rejected_without_side_effects() {
     };
     let mut backend = AndroidBackend::new(RecordingRunner::default(), probe);
 
-    let error = backend.acquire_gate(&package).unwrap_err();
+    let actual = backend.observe_package(&package).unwrap();
 
-    assert_eq!(
-        error,
-        PlatformError::AcquireGate {
-            detail: "package_not_allowlisted".to_owned(),
-        }
-    );
+    assert_eq!(actual, expected);
     assert!(backend.runner().commands.is_empty());
-    assert_eq!(backend.probe().probe_calls, 0);
+    assert_eq!(backend.probe().probe_calls, 1);
 }
 
 #[test]

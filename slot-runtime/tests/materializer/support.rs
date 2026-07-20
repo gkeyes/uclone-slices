@@ -6,9 +6,9 @@ use uclone_slot_runtime::domain::{
 };
 use uclone_slot_runtime::lifecycle::LifecycleState;
 use uclone_slot_runtime::materializer::{
-    ArtifactState, BackendFailure, BaseAnchor, ContentProof, DataDomain, DirectoryAnchor,
-    DomainCopyProof, MaterializationBackend, MaterializationPaths, SlotMaterializationProof,
-    TreeSafetyProof,
+    ArtifactState, BackendFailure, BaseAnchor, ContentProof, DataBytes, DataDomain,
+    DirectoryAnchor, DomainCopyProof, MaterializationBackend, MaterializationPaths,
+    SlotMaterializationProof, TreeSafetyProof,
 };
 
 pub(super) const CE_DIGEST: &str =
@@ -24,6 +24,7 @@ pub(super) enum Call {
     Gate,
     Quiet,
     Base,
+    Capacity,
     InspectArtifacts,
     Cleanup,
     Create,
@@ -90,6 +91,14 @@ impl MaterializationBackend for FakeBackend {
         self.base_samples
             .pop_front()
             .ok_or_else(|| BackendFailure::new("missing_base_sample"))
+    }
+
+    fn verify_capacity(
+        &mut self,
+        _: &ManagedPackage,
+        _: &BaseAnchor,
+    ) -> Result<(), BackendFailure> {
+        self.record(Call::Capacity)
     }
 
     fn artifact_state(
@@ -201,6 +210,7 @@ pub(super) fn base_anchor() -> BaseAnchor {
         DirectoryAnchor::new(11, CE_DIGEST).unwrap(),
         DirectoryAnchor::new(12, DE_DIGEST).unwrap(),
         security(),
+        DataBytes::new(4_096, 1_024),
     )
     .unwrap()
 }

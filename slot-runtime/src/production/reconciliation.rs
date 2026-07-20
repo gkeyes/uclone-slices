@@ -29,7 +29,11 @@ where
             .map_err(|_| ServiceError::RecoveryRequired)?;
         let Some(early) = early else {
             if attempt.is_none() && self.is_clean_unenrolled(key)? {
-                return Ok(ReconcileOutcome::Held);
+                return match self.runtime.emergency_gate_if_leased(key.package_name()) {
+                    Ok(Some(_)) => self.abort_pristine_orphan(key),
+                    Ok(None) => Ok(ReconcileOutcome::Held),
+                    Err(_) => Ok(enrollment_recovery()),
+                };
             }
             return Err(ServiceError::RecoveryRequired);
         };

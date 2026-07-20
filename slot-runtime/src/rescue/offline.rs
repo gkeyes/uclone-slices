@@ -72,7 +72,8 @@ where
         if !supported(key) {
             return RescueExecution::RecoveryRequired;
         }
-        let Ok(journal) = RescueJournalStore::new(&self.roots.journal) else {
+        let Ok(journal) = RescueJournalStore::for_package(&self.roots.journal, key.package_name())
+        else {
             return self.contain(key, RescueExecution::RecoveryRequired);
         };
         let Ok(anchors) = RescueAnchors::load(&self.roots.enrollment, &self.roots.catalog, key)
@@ -129,7 +130,8 @@ where
         if !supported(key) {
             return RescueStartup::RecoveryRequired;
         }
-        let Ok(journal) = RescueJournalStore::new(&self.roots.journal) else {
+        let Ok(journal) = RescueJournalStore::for_package(&self.roots.journal, key.package_name())
+        else {
             return self.startup_contain(key, RescueStartup::RecoveryRequired);
         };
         match journal.load() {

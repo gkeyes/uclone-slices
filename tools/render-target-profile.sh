@@ -9,14 +9,15 @@ fail() {
 }
 
 if (( $# != 2 )); then
-    fail 'usage is render-target-profile.sh <slotprobe|fitness> <existing-output-root>'
+    fail 'usage is render-target-profile.sh <slotprobe|fitness|generic> <existing-output-root>'
 fi
 
 profile="$1"
 case "$profile" in
     slotprobe) expected_package=com.uclone.slotprobe ;;
     fitness) expected_package=com.asksky.fitness ;;
-    *) fail 'profile must be exactly slotprobe or fitness' ;;
+    generic) expected_package=com.uclone.slots.preview ;;
+    *) fail 'profile must be exactly slotprobe, fitness, or generic' ;;
 esac
 
 output_input="$2"

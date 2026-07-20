@@ -5,6 +5,7 @@ use crate::materializer::{
     MaterializationPaths, SlotMaterializationProof, TreeSafetyProof,
 };
 
+use super::capacity;
 use super::command::MaterializerCommand;
 use super::evidence::run_quiet;
 use super::executor::MaterializerExecutor;
@@ -54,12 +55,18 @@ impl<E: MaterializerExecutor, P: PackageProbe> MaterializationBackend
         package: &ManagedPackage,
     ) -> Result<BaseAnchor, BackendFailure> {
         policy::ensure_supported(package)?;
-        inspect_base(
-            &mut self.executor,
-            policy::base(DataDomain::Ce),
-            policy::base(DataDomain::De),
-            self.limits,
-        )
+        let ce = policy::base(package.package_name(), DataDomain::Ce);
+        let de = policy::base(package.package_name(), DataDomain::De);
+        inspect_base(&mut self.executor, &ce, &de, self.limits)
+    }
+
+    fn verify_capacity(
+        &mut self,
+        package: &ManagedPackage,
+        base: &BaseAnchor,
+    ) -> Result<(), BackendFailure> {
+        policy::ensure_supported(package)?;
+        capacity::verify(&mut self.executor, package, base)
     }
 
     fn artifact_state(
@@ -103,17 +110,17 @@ impl<E: MaterializerExecutor, P: PackageProbe> MaterializationBackend
     ) -> Result<DomainCopyProof, BackendFailure> {
         policy::ensure_supported(package)?;
         Self::prepare_paths(paths, false)?;
-        let source = policy::base(domain);
+        let source = policy::base(package.package_name(), domain);
         let target = policy::staging(paths, domain);
-        let source_tree =
-            inspect_tree(source, self.limits).map_err(|error| BackendFailure::new(error.code()))?;
+        let source_tree = inspect_tree(&source, self.limits)
+            .map_err(|error| BackendFailure::new(error.code()))?;
         if source_tree.safety() != TreeSafetyProof::clean() {
             return Err(BackendFailure::new("base_tree_unsafe"));
         }
         fsops::ensure_real_directory(target, "staging_root_invalid")?;
         run_quiet(
             &mut self.executor,
-            &MaterializerCommand::copy(domain, source, target),
+            &MaterializerCommand::copy(domain, &source, target),
             "copy_command_failed",
         )?;
         let copied =

@@ -41,6 +41,12 @@ final class JsonLine {
                 .append(snapshot.suspended())
                 .append(",\"pendingInstall\":")
                 .append(snapshot.pendingInstall())
+                .append(",\"systemApp\":")
+                .append(snapshot.systemApp())
+                .append(",\"sharedUid\":")
+                .append(snapshot.sharedUid())
+                .append(",\"directBootAware\":")
+                .append(snapshot.directBootAware())
                 .append("}}");
         return finish(output);
     }

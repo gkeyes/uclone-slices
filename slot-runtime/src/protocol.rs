@@ -10,8 +10,9 @@ mod response;
 
 pub use client::{DEFAULT_CLIENT_TIMEOUT, UnixClient, read_response, write_request};
 pub use payload::{
-    Ack, AckOperation, PackageStatus, ProbeReport, ReconcileOutcome, ReconcileReport,
-    ResponsePayload, SwitchResult,
+    Ack, AckOperation, ManagedAppSummary, ManagedAppsReport, PackageInspectionReport,
+    PackageStatus, ProbeReport, ReconcileOutcome, ReconcileReport, ResponsePayload, SlotSummary,
+    SlotsReport, SwitchResult,
 };
 pub use request::{Command, Request, RequestId, decode_request, encode_request};
 pub use response::{ErrorCode, Response, ResponseStatus, decode_response, encode_response};
@@ -22,7 +23,7 @@ use framing::{encode_json_line, frame_line};
 pub const SCHEMA_VERSION: u32 = 1;
 /// Maximum encoded request or response frame, including its newline delimiter.
 pub const MAX_FRAME_SIZE: usize = 16 * 1024;
-/// Package permitted by the initial Preview control-plane allowlist.
+/// Legacy single-target profile package retained only for fixed regression fixtures.
 pub const ALLOWED_PACKAGE: &str = crate::target::PACKAGE;
 
 /// Protocol parsing, validation, framing, and transport failures.

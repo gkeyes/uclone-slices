@@ -59,6 +59,8 @@ pub enum MaterializationStage {
     Quiesce,
     #[doc = "Base inode and content anchoring."]
     BaseAnchor,
+    #[doc = "Free-space capacity preflight."]
+    Capacity,
     #[doc = "Staging and ready artifact inspection."]
     InspectArtifacts,
     #[doc = "Staging creation."]
@@ -170,4 +172,11 @@ impl MaterializationError {
             Self::CleanupFailed { .. } => "cleanup",
         }
     }
+}
+
+pub(super) const fn backend_failure(
+    stage: MaterializationStage,
+    source: BackendFailure,
+) -> MaterializationError {
+    MaterializationError::Backend { stage, source }
 }

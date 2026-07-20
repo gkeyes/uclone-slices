@@ -135,7 +135,6 @@ impl CommittedAnchors {
         use crate::lifecycle::LifecycleState;
         let managed = &proof.managed;
         if managed.user_id() != UserId::PRIMARY
-            || managed.package_name().as_str() != crate::protocol::ALLOWED_PACKAGE
             || !managed.active_slot().is_base()
             || managed.active_inodes() != managed.base_inodes()
             || managed.lifecycle_state() != LifecycleState::Normal

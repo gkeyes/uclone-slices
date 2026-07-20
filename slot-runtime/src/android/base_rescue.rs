@@ -28,7 +28,6 @@ struct DomainProof {
     mirror_inode: u64,
     zygote_inode: u64,
     base_inode: u64,
-    preview_inode: Option<u64>,
 }
 
 impl RescueState {
@@ -118,22 +117,7 @@ impl<R: CommandRunner, P: PackageProbe, L: GateLeaseStore> AndroidBackend<R, P, 
         if counts.ce() > 1 || counts.de() > 1 {
             return Err(failure(Stage::ApplyView, "excess_mount_layers"));
         }
-        let preview = if counts.ce() == 1 || counts.de() == 1 {
-            let preview_id = SlotId::parse(crate::target::PREVIEW_SLOT)
-                .map_err(|_| failure(Stage::ApplyView, "preview_slot_invalid"))?;
-            let inodes = self
-                .probe
-                .slot_inodes(package.package_name(), &preview_id)
-                .map_err(|error| failure(Stage::ApplyView, error.code()))?
-                .ok_or_else(|| failure(Stage::ApplyView, "preview_source_missing"))?;
-            if inodes == package.base_inodes() {
-                return Err(failure(Stage::ApplyView, "preview_source_equals_base"));
-            }
-            Some(inodes)
-        } else {
-            None
-        };
-        let state = classify_view(package.base_inodes(), preview, view)?;
+        let state = classify_view(package.base_inodes(), view)?;
         self.ensure_rescue_containment(package)?;
         Ok(state)
     }
@@ -183,11 +167,7 @@ fn verify_samples_match(
     Ok(())
 }
 
-fn classify_view(
-    base: DataInodes,
-    preview: Option<DataInodes>,
-    view: ViewProof,
-) -> Result<RescueState, PlatformError> {
+fn classify_view(base: DataInodes, view: ViewProof) -> Result<RescueState, PlatformError> {
     let canonical = view.canonical().inodes();
     let mirror = view.mirror_inodes();
     let zygote = view.zygote_inodes();
@@ -200,7 +180,6 @@ fn classify_view(
             mirror_inode: mirror.ce().get(),
             zygote_inode: zygote.ce().get(),
             base_inode: base.ce().get(),
-            preview_inode: preview.map(|value| value.ce().get()),
         })?,
         de: classify_domain(DomainProof {
             name: "de",
@@ -209,7 +188,6 @@ fn classify_view(
             mirror_inode: mirror.de().get(),
             zygote_inode: zygote.de().get(),
             base_inode: base.de().get(),
-            preview_inode: preview.map(|value| value.de().get()),
         })?,
     })
 }
@@ -221,16 +199,16 @@ fn classify_domain(proof: DomainProof) -> Result<DomainState, PlatformError> {
             &format!("{}_view_split", proof.name),
         ));
     }
-    match (proof.count, proof.preview_inode) {
-        (0, _) if proof.canonical_inode == proof.base_inode => Ok(DomainState::NativeBase),
-        (0, _) => Err(failure(
+    match proof.count {
+        0 if proof.canonical_inode == proof.base_inode => Ok(DomainState::NativeBase),
+        0 => Err(failure(
             Stage::ApplyView,
             &format!("{}_native_base_inode_mismatch", proof.name),
         )),
-        (1, Some(source)) if proof.canonical_inode == source => Ok(DomainState::PreviewBound),
-        (1, _) => Err(failure(
+        1 if proof.canonical_inode != proof.base_inode => Ok(DomainState::PreviewBound),
+        1 => Err(failure(
             Stage::ApplyView,
-            &format!("{}_unknown_mount_source", proof.name),
+            &format!("{}_bound_to_base", proof.name),
         )),
         _ => Err(failure(Stage::ApplyView, "excess_mount_layers")),
     }

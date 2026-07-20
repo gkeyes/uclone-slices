@@ -134,5 +134,7 @@ fn stores(root: &std::path::Path) -> ProductionStores {
         package_state: PackageStateStore::new(root.join("package-state")).unwrap(),
         journal: JournalStore::new(root.join("journal")).unwrap(),
         registry: RegistryStore::new(root.join("registry")).unwrap(),
+        slot_metadata: crate::slot_metadata::SlotMetadataStore::new(root.join("slot-metadata"))
+            .unwrap(),
     }
 }

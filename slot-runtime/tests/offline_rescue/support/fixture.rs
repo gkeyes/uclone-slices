@@ -91,7 +91,7 @@ impl Fixture {
     }
 
     pub(crate) fn journal(&self) -> RescueJournalStore {
-        RescueJournalStore::new(&self.rescue).unwrap()
+        RescueJournalStore::for_package(&self.rescue, self.managed.package_name()).unwrap()
     }
 
     pub(crate) fn corrupt_ordinary_stores(&self) {

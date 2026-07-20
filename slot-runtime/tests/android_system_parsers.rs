@@ -14,10 +14,6 @@ mod android {
     pub(crate) use crate::runtime::android::MountCounts;
 }
 
-mod bridge {
-    pub(crate) use crate::runtime::bridge::ALLOWED_PACKAGE;
-}
-
 mod domain {
     pub(crate) use crate::runtime::domain::{DataInodes, PackageName, SlotId};
 }
@@ -113,12 +109,12 @@ fn accepts_only_kernel_mount_escapes() {
 }
 
 #[test]
-fn rejects_mountinfo_when_package_or_line_is_invalid() {
+fn ignores_other_packages_and_rejects_invalid_mountinfo_lines() {
     let valid = mount_line("/data/user/0/com.uclone.slotprobe");
     let other = PackageName::parse("com.example.other").unwrap();
     assert_eq!(
         parse::parse_canonical_mount_counts(valid.as_bytes(), &other),
-        Err(FactError::Invalid)
+        Ok(android::MountCounts::new(0, 0))
     );
 
     let malformed = [

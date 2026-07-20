@@ -8,10 +8,10 @@ if (( $# == 0 )); then
 elif (( $# == 2 )) && [ "$1" = --profile ]; then
     PROFILE=$2
 else
-    printf '%s\n' 'usage: tools/build-slot-runtime-android.sh [--profile slotprobe|fitness]' >&2
+    printf '%s\n' 'usage: tools/build-slot-runtime-android.sh [--profile slotprobe|fitness|generic]' >&2
     exit 2
 fi
-case "$PROFILE" in slotprobe|fitness) ;; *) exit 2 ;; esac
+case "$PROFILE" in slotprobe|fitness|generic) ;; *) exit 2 ;; esac
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)"

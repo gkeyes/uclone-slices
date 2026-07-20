@@ -7,10 +7,10 @@ if [ "$#" -eq 0 ]; then
 elif [ "$#" -eq 2 ] && [ "$1" = --profile ]; then
     PROFILE=$2
 else
-    printf '%s\n' 'usage: tools/test-kernelsu-boot-flow.sh [--profile slotprobe|fitness]' >&2
+    printf '%s\n' 'usage: tools/test-kernelsu-boot-flow.sh [--profile slotprobe|fitness|generic]' >&2
     exit 2
 fi
-case "$PROFILE" in slotprobe|fitness) ;; *) exit 2 ;; esac
+case "$PROFILE" in slotprobe|fitness|generic) ;; *) exit 2 ;; esac
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
@@ -35,16 +35,23 @@ done
 # A locked result must stay pending; only a non-locked success may be terminal.
 # shellcheck disable=SC1090
 . "$STATE_HELPER"
-locked="{\"status\":\"ok\",\"payload\":{\"kind\":\"reconcile_report\",\"data\":{\"package\":\"$UCLONE_TARGET_PACKAGE\",\"outcome\":{\"kind\":\"locked\"}}}}"
-restored="${locked/\"locked\"/\"restored_base\"}"
-recovery="${locked/\"locked\"/\"recovery_required\"}"
-if [ "$PROFILE" = slotprobe ]; then foreign_package=com.asksky.fitness; else foreign_package=com.uclone.slotprobe; fi
-foreign="${locked/$UCLONE_TARGET_PACKAGE/$foreign_package}"
-
-[ "$(classify_reconcile_frame "$locked")" = locked ] || fail 'locked frame was not classified as pending'
-[ "$(classify_reconcile_frame "$restored")" = terminal ] || fail 'restored frame was not terminal'
-[ "$(classify_reconcile_frame "$recovery")" = terminal ] || fail 'recovery-required frame was not terminal'
-[ "$(classify_reconcile_frame "$foreign")" = invalid ] || fail 'foreign package frame was accepted'
+if [ "$PROFILE" = generic ]; then
+    complete='{"status":"ok","payload":{"kind":"ack","data":{"operation":"reconcile_all"}}}'
+    [ "$(classify_reconcile_frame "$complete")" = terminal ] ||
+        fail 'generic reconcile-all acknowledgement was not terminal'
+    [ "$(classify_reconcile_frame '{"status":"error","error_code":"user_locked"}')" = invalid ] ||
+        fail 'generic locked error was accepted as terminal'
+else
+    locked="{\"status\":\"ok\",\"payload\":{\"kind\":\"reconcile_report\",\"data\":{\"package\":\"$UCLONE_TARGET_PACKAGE\",\"outcome\":{\"kind\":\"locked\"}}}}"
+    restored="${locked/\"locked\"/\"restored_base\"}"
+    recovery="${locked/\"locked\"/\"recovery_required\"}"
+    if [ "$PROFILE" = slotprobe ]; then foreign_package=com.asksky.fitness; else foreign_package=com.uclone.slotprobe; fi
+    foreign="${locked/$UCLONE_TARGET_PACKAGE/$foreign_package}"
+    [ "$(classify_reconcile_frame "$locked")" = locked ] || fail 'locked frame was not classified as pending'
+    [ "$(classify_reconcile_frame "$restored")" = terminal ] || fail 'restored frame was not terminal'
+    [ "$(classify_reconcile_frame "$recovery")" = terminal ] || fail 'recovery-required frame was not terminal'
+    [ "$(classify_reconcile_frame "$foreign")" = invalid ] || fail 'foreign package frame was accepted'
+fi
 [ "$(classify_reconcile_frame 'not-json')" = invalid ] || fail 'invalid frame was accepted'
 [ "$(reconcile_marker_action locked)" = retain ] || fail 'locked outcome would consume the marker'
 [ "$(reconcile_marker_action invalid)" = retain ] || fail 'invalid outcome would consume the marker'
@@ -95,7 +102,7 @@ grep -F 'crate::target::FSPROBE_PATH' "$MATERIALIZER_COMMAND" >/dev/null || fail
 grep -F 'PACKAGE=$UCLONE_TARGET_PACKAGE' "$EMERGENCY" >/dev/null || fail 'emergency containment does not load the compiled target'
 grep -F 'enrollment-attempts/attempts/$PACKAGE' "$EMERGENCY" >/dev/null || fail 'emergency containment checks the wrong enrollment-attempt path'
 grep -F 'rescue-journal/packages/$PACKAGE' "$EMERGENCY" >/dev/null || fail 'emergency containment omits rescue journal state'
-grep -F 'package_is_disabled && package_is_quiesced' "$EMERGENCY" >/dev/null || fail 'emergency containment does not prove both safety conditions'
+grep -F 'package_is_disabled "$package" && package_is_quiesced "$package"' "$EMERGENCY" >/dev/null || fail 'emergency containment does not prove both safety conditions'
 if grep -E 'com[.](uclone[.]slotprobe|asksky[.]fitness)' "$EMERGENCY" >/dev/null; then
     fail 'emergency containment retains a stale literal package'
 fi

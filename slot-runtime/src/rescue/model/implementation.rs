@@ -1,6 +1,6 @@
 use super::{
-    ALLOWED_PACKAGE, AppIdentity, BootId, CommitNonce, DataInodes, GateSnapshot, PackageKey,
-    RescueDisposition, RescueError, RescueId, RescueSpec, SCHEMA_VERSION, UserId,
+    AppIdentity, BootId, CommitNonce, DataInodes, GateSnapshot, PackageKey, RescueDisposition,
+    RescueError, RescueId, RescueSpec, SCHEMA_VERSION, UserId,
 };
 
 impl RescueSpec {
@@ -93,9 +93,7 @@ impl RescueSpec {
                 "unsupported specification schema".to_owned(),
             ));
         }
-        if self.package_key.user_id() != UserId::PRIMARY
-            || self.package_key.package_name().as_str() != ALLOWED_PACKAGE
-        {
+        if self.package_key.user_id() != UserId::PRIMARY {
             return Err(RescueError::UnsupportedPackage);
         }
         if !valid_digest(&self.enrollment_sha256) || !valid_digest(&self.base_manifest_sha256) {

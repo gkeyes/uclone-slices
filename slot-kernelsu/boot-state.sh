@@ -5,6 +5,17 @@
 
 classify_reconcile_frame() {
     frame="$1"
+    if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
+        case "$frame" in
+            *'"status":"ok"'*'"kind":"ack"'*'"operation":"reconcile_all"'*)
+                printf '%s\n' terminal
+                ;;
+            *)
+                printf '%s\n' invalid
+                ;;
+        esac
+        return 0
+    fi
     package_field="\"package\":\"$UCLONE_TARGET_PACKAGE\""
     case "$frame" in
         *'"status":"ok"'*'"kind":"reconcile_report"'*"$package_field"*) ;;

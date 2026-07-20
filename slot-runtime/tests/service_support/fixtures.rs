@@ -23,7 +23,7 @@ pub(crate) fn managed_base() -> ManagedPackage {
 pub(crate) fn ready_base() -> PackageState {
     PackageState::Ready(Box::new(PackageSnapshot::new(
         managed_base(),
-        None,
+        Vec::new(),
         ObservedGateState::new(true, false),
     )))
 }

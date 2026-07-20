@@ -12,12 +12,14 @@ import java.nio.charset.StandardCharsets;
 import org.junit.Test;
 
 public final class PackageRestrictionsParserTest {
+    private static final String PACKAGE = "com.example.target";
+
     @Test
     public void readsUniqueAllowlistedPackageInodesFromApi36Shape() throws BridgeFailure {
         String xml = "<?xml version='1.0' encoding='utf-8'?>"
                 + "<package-restrictions>"
                 + "<pkg name='com.example.other' ceDataInode='1' deDataInode='2'/>"
-                + "<pkg name='" + PackagePolicy.ALLOWED_PACKAGE
+                + "<pkg name='" + PACKAGE
                 + "' ceDataInode='123456' deDataInode='789012'"
                 + " stopped='true'><enabled-components><item name='A'/></enabled-components></pkg>"
                 + "</package-restrictions>";
@@ -36,7 +38,7 @@ public final class PackageRestrictionsParserTest {
 
     @Test
     public void rejectsDuplicateAllowlistedPackage() {
-        String entry = "<pkg name='" + PackagePolicy.ALLOWED_PACKAGE
+        String entry = "<pkg name='" + PACKAGE
                 + "' ceDataInode='1' deDataInode='2'/>";
         assertInvalid("<package-restrictions>" + entry + entry + "</package-restrictions>");
     }
@@ -66,7 +68,7 @@ public final class PackageRestrictionsParserTest {
     @Test
     public void rejectsMalformedUtf8() {
         try {
-            PackageRestrictionsParser.parse(new byte[] {(byte) 0xc3, 0x28});
+            PackageRestrictionsParser.parse(new byte[] {(byte) 0xc3, 0x28}, PACKAGE);
             fail("expected BridgeFailure");
         } catch (BridgeFailure failure) {
             assertEquals(ErrorCode.INVALID_RESPONSE, failure.code());
@@ -81,6 +83,7 @@ public final class PackageRestrictionsParserTest {
 
         PackageManagerInodes result = PackageRestrictionsParser.parse(
                 abx,
+                PACKAGE,
                 input -> {
                     received.set(input);
                     return xml;
@@ -99,6 +102,7 @@ public final class PackageRestrictionsParserTest {
         try {
             PackageRestrictionsParser.parse(
                     withNul,
+                    PACKAGE,
                     input -> {
                         called.set(true);
                         return xml;
@@ -115,6 +119,7 @@ public final class PackageRestrictionsParserTest {
         try {
             PackageRestrictionsParser.parse(
                     new byte[] {'A', 'B', 'X', 0},
+                    PACKAGE,
                     input -> {
                         throw new BridgeFailure("decoder", ErrorCode.COMMAND_FAILED);
                     });
@@ -129,6 +134,7 @@ public final class PackageRestrictionsParserTest {
         try {
             PackageRestrictionsParser.parse(
                     new byte[] {'A', 'B', 'X', 0},
+                    PACKAGE,
                     input -> {
                         throw new BridgeFailure("decoder", ErrorCode.RUNNER_UNAVAILABLE);
                     });
@@ -144,6 +150,7 @@ public final class PackageRestrictionsParserTest {
         try {
             PackageRestrictionsParser.parse(
                     new byte[] {'A', 'B', 'X', 0},
+                    PACKAGE,
                     input -> oversized);
             fail("expected BridgeFailure");
         } catch (BridgeFailure failure) {
@@ -152,7 +159,8 @@ public final class PackageRestrictionsParserTest {
     }
 
     private static PackageManagerInodes parse(String xml) throws BridgeFailure {
-        return PackageRestrictionsParser.parse(xml.getBytes(StandardCharsets.UTF_8));
+        return PackageRestrictionsParser.parse(
+                xml.getBytes(StandardCharsets.UTF_8), PACKAGE);
     }
 
     private static void assertInvalid(String xml) {
@@ -170,7 +178,7 @@ public final class PackageRestrictionsParserTest {
 
     private static String targetEntry(String ce, String de) {
         String ceAttribute = ce == null ? "" : " ceDataInode='" + ce + "'";
-        return "<pkg name='" + PackagePolicy.ALLOWED_PACKAGE + "'"
+        return "<pkg name='" + PACKAGE + "'"
                 + ceAttribute
                 + " deDataInode='"
                 + de

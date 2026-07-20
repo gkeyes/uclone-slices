@@ -18,7 +18,7 @@ where
     T: RescueMetadataSource,
     F: RescueFaultInjector,
 {
-    fn probe(&self, _key: &PackageKey) -> Result<CapabilitySnapshot, ServiceError> {
+    fn probe(&self) -> Result<CapabilitySnapshot, ServiceError> {
         Ok(CapabilitySnapshot::new(false, false, true))
     }
 
@@ -96,7 +96,12 @@ where
         Err(ServiceError::RecoveryRequired)
     }
 
-    fn materialize_preview(&mut self, _package: &ManagedPackage) -> Result<SlotView, ServiceError> {
+    fn materialize_slot(
+        &mut self,
+        _package: &ManagedPackage,
+        _slot: &crate::domain::SlotId,
+        _seed_mode: crate::slot_metadata::SlotSeedMode,
+    ) -> Result<SlotView, ServiceError> {
         Err(ServiceError::RecoveryRequired)
     }
 

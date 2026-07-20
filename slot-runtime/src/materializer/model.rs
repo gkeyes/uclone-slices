@@ -3,9 +3,11 @@ use crate::domain::DataInodes;
 
 use super::MaterializationProofError;
 
+mod bytes;
 mod proofs;
 mod result;
 
+pub use bytes::DataBytes;
 pub use proofs::{DomainCopyProof, MaterializationPaths, SlotMaterializationProof};
 pub use result::MaterializationResult;
 
@@ -115,6 +117,7 @@ pub struct BaseAnchor {
     ce: DirectoryAnchor,
     de: DirectoryAnchor,
     security: SecurityProfileProof,
+    bytes: DataBytes,
 }
 
 impl BaseAnchor {
@@ -124,6 +127,7 @@ impl BaseAnchor {
         ce: DirectoryAnchor,
         de: DirectoryAnchor,
         security: SecurityProfileProof,
+        bytes: DataBytes,
     ) -> Result<Self, MaterializationProofError> {
         if ce.device_id() == de.device_id() && inodes.ce() == inodes.de() {
             return Err(MaterializationProofError::DuplicateDirectoryIdentity);
@@ -133,6 +137,7 @@ impl BaseAnchor {
             ce,
             de,
             security,
+            bytes,
         })
     }
 
@@ -152,6 +157,11 @@ impl BaseAnchor {
     #[doc = "Returns the expected CE/DE security profile."]
     pub const fn security(&self) -> &SecurityProfileProof {
         &self.security
+    }
+
+    #[doc = "Returns bounded regular-file byte counts used for capacity preflight."]
+    pub const fn bytes(&self) -> DataBytes {
+        self.bytes
     }
 
     #[doc = "Returns a proof with replacement inodes for deterministic tests."]

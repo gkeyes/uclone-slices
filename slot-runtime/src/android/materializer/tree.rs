@@ -93,6 +93,7 @@ impl Walker {
                 root_metadata.gid(),
                 root_metadata.mode() & 0o7777,
             ),
+            walker.total_bytes,
         ))
     }
     fn visit(&mut self, path: &Path, relative: &Path, depth: usize) -> Result<(), TreeError> {

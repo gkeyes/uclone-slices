@@ -58,10 +58,10 @@ pub(super) fn load<Q: PackageProbe>(
     if state.package_key() != *key || has_unfinished(&journal, key) {
         return Ok(PackageState::RecoveryRequired);
     }
-    let Some((base, preview)) = catalog_views(&catalog, key, &enrolled) else {
+    let Some((base, slots)) = catalog_views(&catalog, key, &enrolled) else {
         return Ok(PackageState::RecoveryRequired);
     };
-    let Some(active) = active_view(&enrolled, registry.as_ref(), base, preview.as_ref()) else {
+    let Some(active) = active_view(&enrolled, registry.as_ref(), base, &slots) else {
         return Ok(PackageState::RecoveryRequired);
     };
     if !registry_matches_journal(registry.as_ref(), &journal) {
@@ -78,6 +78,9 @@ pub(super) fn load<Q: PackageProbe>(
     let observation = probe
         .observe_package(key.package_name(), key.user_id())
         .map_err(|_| ServiceError::RecoveryRequired)?;
+    if !observation.compatibility().is_supported() {
+        return Ok(PackageState::Quarantined);
+    }
     match PackageLifecycleGuard::assess(&managed, &observation) {
         GuardDecision::Quarantine => return Ok(PackageState::Quarantined),
         GuardDecision::RecoveryRequired(_) | GuardDecision::RequireSafeUpdateWindow => {
@@ -96,7 +99,7 @@ pub(super) fn load<Q: PackageProbe>(
     );
     Ok(PackageState::Ready(Box::new(PackageSnapshot::new(
         managed,
-        preview,
+        slots,
         ObservedGateState::new(enabled, gate.suspended()),
     ))))
 }
@@ -105,8 +108,8 @@ pub(super) fn catalog_views(
     entries: &[CatalogEntry],
     key: &PackageKey,
     enrolled: &ManagedPackage,
-) -> Option<(SlotView, Option<SlotView>)> {
-    if entries.is_empty() || entries.len() > 2 {
+) -> Option<(SlotView, Vec<SlotView>)> {
+    if entries.is_empty() || entries.len() > 64 {
         return None;
     }
     let base = entries.iter().find(|entry| entry.slot_id().is_base())?;
@@ -116,17 +119,22 @@ pub(super) fn catalog_views(
     {
         return None;
     }
-    let preview = entries.iter().find(|entry| !entry.slot_id().is_base());
-    if preview.is_some_and(|entry| {
-        entry.slot_id().as_str() != crate::target::PREVIEW_SLOT
-            || entry.package_key() != key
-            || entry.enrolled_identity() != enrolled.identity()
-    }) {
+    let slots = entries
+        .iter()
+        .filter(|entry| !entry.slot_id().is_base())
+        .collect::<Vec<_>>();
+    if slots
+        .iter()
+        .any(|entry| entry.package_key() != key || entry.enrolled_identity() != enrolled.identity())
+    {
         return None;
     }
     Some((
         SlotView::new(SlotId::base(), base.inodes()),
-        preview.map(|entry| SlotView::new(entry.slot_id().clone(), entry.inodes())),
+        slots
+            .into_iter()
+            .map(|entry| SlotView::new(entry.slot_id().clone(), entry.inodes()))
+            .collect(),
     ))
 }
 
@@ -134,7 +142,7 @@ fn active_view(
     enrolled: &ManagedPackage,
     revision: Option<&PackageRevision>,
     base: SlotView,
-    preview: Option<&SlotView>,
+    slots: &[SlotView],
 ) -> Option<SlotView> {
     let Some(revision) = revision else {
         return Some(base);
@@ -148,8 +156,9 @@ fn active_view(
     if revision.active_slot().is_base() {
         (revision.active_inodes() == base.inodes()).then_some(base)
     } else {
-        preview
-            .filter(|view| {
+        slots
+            .iter()
+            .find(|view| {
                 view.slot_id() == revision.active_slot()
                     && view.inodes() == revision.active_inodes()
             })

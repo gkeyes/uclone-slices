@@ -3,6 +3,7 @@ use super::{
     MAX_BOOT_CLASSPATH_BYTES, ValidatedBootEnvironment,
 };
 use crate::bridge::{ALLOWED_PACKAGE, BridgeCommand, PackageEnabledState};
+use crate::domain::PackageName;
 
 const CURRENT_BOOTCLASSPATH: &str =
     "/apex/com.android.art/javalib/core-oj.jar:/system/framework/framework.jar";
@@ -100,12 +101,13 @@ fn rejects_classpath_larger_than_64_kibibytes() {
 
 #[test]
 fn persistent_session_requests_keep_only_fixed_bridge_arguments() {
+    let package = PackageName::parse(ALLOWED_PACKAGE).unwrap();
     assert_eq!(
-        BridgeCommand::GateStatus.session_request(),
+        BridgeCommand::GateStatus(package.clone()).session_request(),
         format!("probe-gate\t{ALLOWED_PACKAGE}\n").into_bytes()
     );
     assert_eq!(
-        BridgeCommand::SetEnabled(PackageEnabledState::DisabledUser).session_request(),
+        BridgeCommand::SetEnabled(package, PackageEnabledState::DisabledUser).session_request(),
         format!("set-enabled\t{ALLOWED_PACKAGE}\tdisabled_user\n").into_bytes()
     );
 }

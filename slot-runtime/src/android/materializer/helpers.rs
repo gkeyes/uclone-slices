@@ -62,7 +62,11 @@ impl<E: MaterializerExecutor, P: PackageProbe> AndroidMaterializer<E, P> {
     ) -> Result<(), BackendFailure> {
         policy::validate_paths(paths)?;
         for domain in [DataDomain::Ce, DataDomain::De] {
-            fsops::ensure_storage_parent(policy::anchor(domain), policy::parent(domain), create)?;
+            fsops::ensure_storage_parent(
+                policy::anchor(domain),
+                policy::parent(paths, domain),
+                create,
+            )?;
         }
         Ok(())
     }

@@ -24,13 +24,17 @@ final class PackageRestrictionsParser {
 
     private PackageRestrictionsParser() {}
 
-    static PackageManagerInodes parse(byte[] bytes) throws BridgeFailure {
-        return parse(bytes, SYSTEM_ABX_DECODER);
+    static PackageManagerInodes parse(byte[] bytes, String packageName) throws BridgeFailure {
+        return parse(bytes, packageName, SYSTEM_ABX_DECODER);
     }
 
-    static PackageManagerInodes parse(byte[] bytes, AbxDecoderRunner decoder)
+    static PackageManagerInodes parse(
+            byte[] bytes, String packageName, AbxDecoderRunner decoder)
             throws BridgeFailure {
-        if (bytes == null || bytes.length == 0 || bytes.length > MAX_XML_BYTES) {
+        if (!PackagePolicy.isAllowed(packageName)
+                || bytes == null
+                || bytes.length == 0
+                || bytes.length > MAX_XML_BYTES) {
             throw invalid();
         }
         byte[] xmlBytes = bytes;
@@ -51,7 +55,7 @@ final class PackageRestrictionsParser {
         if (xml.contains("<!DOCTYPE") || xml.contains("<!ENTITY") || xml.indexOf('\0') >= 0) {
             throw invalid();
         }
-        RestrictionsHandler handler = new RestrictionsHandler();
+        RestrictionsHandler handler = new RestrictionsHandler(packageName);
         try {
             SAXParserFactory factory = SAXParserFactory.newInstance();
             factory.setNamespaceAware(true);
@@ -101,12 +105,17 @@ final class PackageRestrictionsParser {
     }
 
     private static final class RestrictionsHandler extends DefaultHandler {
+        private final String packageName;
         private int depth;
         private boolean rootSeen;
         private boolean rootClosed;
         private boolean targetSeen;
         private long ceInode;
         private long deInode;
+
+        RestrictionsHandler(String packageName) {
+            this.packageName = packageName;
+        }
 
         @Override
         public void startElement(String uri, String localName, String qName, Attributes attributes)
@@ -121,7 +130,7 @@ final class PackageRestrictionsParser {
                 }
                 rootSeen = true;
             } else if ("pkg".equals(name)
-                    && PackagePolicy.ALLOWED_PACKAGE.equals(attributes.getValue("name"))) {
+                    && packageName.equals(attributes.getValue("name"))) {
                 if (!uri.isEmpty() || depth != 1 || targetSeen) {
                     throw new SAXException();
                 }

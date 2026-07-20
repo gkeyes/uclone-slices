@@ -4,10 +4,88 @@ mod service_support;
 
 use service_support::{Call, FakePlatform, allowed, preview_view, ready_base, request};
 use uclone_slot_runtime::daemon::RequestHandler;
+use uclone_slot_runtime::domain::SlotId;
 use uclone_slot_runtime::protocol::{
     AckOperation, Command, ReconcileOutcome, ResponsePayload, ResponseStatus,
 };
 use uclone_slot_runtime::service::PreviewService;
+use uclone_slot_runtime::slot_metadata::{SlotDisplayName, SlotSeedMode};
+
+#[test]
+fn general_management_commands_return_typed_payloads() {
+    let mut service = PreviewService::new(FakePlatform::with_state(ready_base()));
+
+    let inspected = service.handle(&request(Command::InspectPackage { package: allowed() }));
+    assert!(matches!(
+        inspected.payload(),
+        Some(ResponsePayload::PackageInspection(report)) if report.compatible()
+    ));
+
+    let apps = service.handle(&request(Command::ListManagedApps));
+    assert!(matches!(
+        apps.payload(),
+        Some(ResponsePayload::ManagedApps(report)) if report.apps().len() == 1
+    ));
+
+    let slots = service.handle(&request(Command::ListSlots { package: allowed() }));
+    assert!(matches!(
+        slots.payload(),
+        Some(ResponsePayload::Slots(report)) if report.slots().len() == 1
+    ));
+
+    let created = service.handle(&request(Command::CreateSlot {
+        package: allowed(),
+        display_name: SlotDisplayName::parse("Fresh space").unwrap(),
+        seed_mode: SlotSeedMode::Blank,
+    }));
+    assert!(matches!(
+        created.payload(),
+        Some(ResponsePayload::SwitchResult(result)) if result.slot() == preview_view().slot_id()
+    ));
+
+    for (command, expected) in [
+        (
+            Command::RenameSlot {
+                package: allowed(),
+                slot: SlotId::parse("preview").unwrap(),
+                display_name: SlotDisplayName::parse("Personal").unwrap(),
+            },
+            AckOperation::RenameSlot,
+        ),
+        (
+            Command::DeleteSlot {
+                package: allowed(),
+                slot: SlotId::parse("preview").unwrap(),
+            },
+            AckOperation::DeleteSlot,
+        ),
+    ] {
+        let response = service.handle(&request(command));
+        assert!(matches!(
+            response.payload(),
+            Some(ResponsePayload::Ack(ack)) if ack.operation() == expected
+        ));
+    }
+}
+
+#[test]
+fn reconcile_all_retries_instead_of_acknowledging_a_locked_user() {
+    let platform = FakePlatform::with_state(ready_base())
+        .with_reconcile_outcome(uclone_slot_runtime::reconcile::ReconcileOutcome::Locked);
+    let mut service = PreviewService::new(platform);
+
+    let response = service.handle(&request(Command::Reconcile));
+
+    assert_eq!(response.status(), ResponseStatus::Error);
+    assert_eq!(
+        response.error_code(),
+        Some(uclone_slot_runtime::protocol::ErrorCode::UserLocked),
+    );
+    assert_eq!(
+        service.platform().calls(),
+        vec![Call::ListManaged, Call::Reconcile]
+    );
+}
 
 #[test]
 #[allow(
@@ -128,7 +206,7 @@ fn all_commands_return_typed_payloads_when_platform_proofs_succeed() {
 
     // When / Then: two-phase reconciliation is delegated
     service.platform().clear_calls();
-    let response = service.handle(&request(Command::Reconcile));
+    let response = service.handle(&request(Command::ReconcilePackage { package: allowed() }));
     assert!(matches!(
         response.payload(),
         Some(ResponsePayload::ReconcileReport(report))

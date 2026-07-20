@@ -83,6 +83,7 @@ pub(super) struct TreeInspection {
     uid: u32,
     gid: u32,
     mode: u32,
+    total_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +112,7 @@ impl TreeInspection {
         digest: String,
         safety: TreeSafetyProof,
         root: TreeRootMetadata,
+        total_bytes: u64,
     ) -> Self {
         Self {
             digest,
@@ -120,6 +122,7 @@ impl TreeInspection {
             uid: root.uid,
             gid: root.gid,
             mode: root.mode,
+            total_bytes,
         }
     }
 
@@ -156,6 +159,10 @@ impl TreeInspection {
     #[doc = "Returns the root permission and special mode bits."]
     pub(super) const fn mode(&self) -> u32 {
         self.mode
+    }
+
+    pub(super) const fn total_bytes(&self) -> u64 {
+        self.total_bytes
     }
 
     pub(super) fn is_clean(&self) -> bool {

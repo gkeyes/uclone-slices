@@ -68,9 +68,8 @@ fn rejects_hard_link_and_symlink_step_artifacts() {
 }
 
 #[test]
-fn rejects_unknown_fields_and_invalid_fixed_package_spec() {
-    let unsupported = support::spec_for_package("com.example.other").unwrap_err();
-    assert!(unsupported.to_string().contains("allowlisted"));
+fn rejects_unknown_fields_and_accepts_another_valid_user_zero_package() {
+    assert!(support::spec_for_package("com.example.other").is_ok());
 
     let root = TempDir::new().unwrap();
     let store = support::store(&root);

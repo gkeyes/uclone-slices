@@ -12,6 +12,9 @@ final class PackageSnapshot {
     private final EnabledState enabledState;
     private final boolean suspended;
     private final boolean pendingInstall;
+    private final boolean systemApp;
+    private final boolean sharedUid;
+    private final boolean directBootAware;
 
     PackageSnapshot(
             String packageName,
@@ -24,7 +27,10 @@ final class PackageSnapshot {
             PackageManagerInodes packageManagerInodes,
             EnabledState enabledState,
             boolean suspended,
-            boolean pendingInstall) {
+            boolean pendingInstall,
+            boolean systemApp,
+            boolean sharedUid,
+            boolean directBootAware) {
         this.packageName = packageName;
         this.uid = uid;
         this.signatureSha256 = signatureSha256;
@@ -36,6 +42,9 @@ final class PackageSnapshot {
         this.enabledState = enabledState;
         this.suspended = suspended;
         this.pendingInstall = pendingInstall;
+        this.systemApp = systemApp;
+        this.sharedUid = sharedUid;
+        this.directBootAware = directBootAware;
     }
 
     String packageName() {
@@ -80,5 +89,17 @@ final class PackageSnapshot {
 
     boolean pendingInstall() {
         return pendingInstall;
+    }
+
+    boolean systemApp() {
+        return systemApp;
+    }
+
+    boolean sharedUid() {
+        return sharedUid;
+    }
+
+    boolean directBootAware() {
+        return directBootAware;
     }
 }

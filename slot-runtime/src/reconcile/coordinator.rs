@@ -1,7 +1,6 @@
 use crate::domain::{GateSnapshot, ManagedPackage, PackageName};
 use crate::enrollment::EnrollmentStore;
 use crate::journal::{JournalEvent, JournalStep, JournalStore, Transaction};
-use crate::protocol::ALLOWED_PACKAGE;
 use crate::registry::RegistryStore;
 
 use super::backend::RecoveryBackend;
@@ -51,15 +50,15 @@ impl<B: RecoveryBackend> Reconciler<B> {
             return Ok(ReconcileReport::new(results));
         }
         let scan = self.enrollment.package_names()?;
-        let allowlisted = PackageName::parse(ALLOWED_PACKAGE)
-            .map_err(|_| ReconcileError::InvalidAllowlistConfiguration)?;
         let mut package_names = scan.package_names().to_vec();
-        if scan.corrupt_artifact() {
-            package_names.push(allowlisted.clone());
-        }
+        package_names.extend(
+            self.backend
+                .leased_packages()
+                .map_err(ReconcileError::LeaseDiscovery)?,
+        );
         package_names.sort();
         package_names.dedup();
-        let snapshots = self.emergency_gate_discovered(&package_names, &allowlisted)?;
+        let snapshots = self.emergency_gate_discovered(&package_names)?;
         let packages = self.enrollment.list()?;
         let transactions = self.journal.list().ok();
         self.orphaned = snapshots

@@ -3,7 +3,6 @@ use std::{fs, io};
 
 use crate::domain::{PackageKey, UserId};
 use crate::layout::RuntimeLayout;
-use crate::protocol::ALLOWED_PACKAGE;
 
 #[derive(Debug, Clone)]
 pub(super) struct RescueRoots {
@@ -105,7 +104,7 @@ pub(super) fn management_artifacts_present(
 }
 
 pub(super) fn supported(key: &PackageKey) -> bool {
-    key.user_id() == UserId::PRIMARY && key.package_name().as_str() == ALLOWED_PACKAGE
+    key.user_id() == UserId::PRIMARY
 }
 
 #[cfg(test)]
@@ -117,6 +116,7 @@ mod tests {
 
     use super::*;
     use crate::domain::PackageName;
+    use crate::protocol::ALLOWED_PACKAGE;
 
     fn fixture() -> (TempDir, RescueRoots, PackageKey) {
         let root = TempDir::new().unwrap();

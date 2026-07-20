@@ -1,10 +1,19 @@
 #![doc = "Typed bridge client boundary tests."]
+#![allow(
+    clippy::unwrap_used,
+    reason = "fixed valid package literals are test fixture invariants"
+)]
 
 use serde_json::json;
 use uclone_slot_runtime::bridge::{
     ALLOWED_PACKAGE, BridgeClient, BridgeCommand, BridgeErrorCode, BridgeRunnerError,
     MAX_OUTPUT_BYTES, PackageEnabledState,
 };
+use uclone_slot_runtime::domain::PackageName;
+
+fn package_name(raw: &str) -> PackageName {
+    PackageName::parse(raw).unwrap()
+}
 
 #[derive(Debug)]
 struct FakeRunner {
@@ -29,8 +38,8 @@ impl FakeRunner {
 }
 
 impl uclone_slot_runtime::bridge::BridgeCommandRunner for FakeRunner {
-    fn run(&mut self, command: BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError> {
-        self.seen.push(command);
+    fn run(&mut self, command: &BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError> {
+        self.seen.push(command.clone());
         match &self.result {
             Ok(bytes) => Ok(bytes.clone()),
             Err(BridgeRunnerError::NonZeroExit { status }) => {
@@ -66,7 +75,8 @@ fn package_bytes(package: &str, user_id: u32) -> Vec<u8> {
             "deDataPath": format!("/data/user_de/0/{package}"),
             "packageManagerCeInode": 101,
             "packageManagerDeInode": 202,
-            "enabledState": "enabled", "suspended": false, "pendingInstall": false
+            "enabledState": "enabled", "suspended": false, "pendingInstall": false,
+            "systemApp": false, "sharedUid": false, "directBootAware": false
         }
     }))
     .unwrap_or_default()
@@ -98,13 +108,16 @@ fn lightweight_gate_query_uses_its_fixed_payload_without_package_metadata() {
 
     assert_eq!(gate.enabled_state(), PackageEnabledState::DisabledUser);
     assert!(gate.suspended());
-    assert_eq!(client.into_inner().seen, vec![BridgeCommand::GateStatus]);
+    assert_eq!(
+        client.into_inner().seen,
+        vec![BridgeCommand::GateStatus(package_name(ALLOWED_PACKAGE))]
+    );
 }
 
 #[test]
 fn mismatched_package_user_and_injection_are_rejected_before_runner() {
     for package in [
-        "com.other.app",
+        "single",
         "com.uclone.slotprobe;id",
         "com.uclone.slotprobe $(id)",
     ] {
@@ -134,7 +147,7 @@ fn response_package_and_user_mismatch_are_rejected() {
             .query_package(ALLOWED_PACKAGE, 0)
             .unwrap_err()
             .code(),
-        BridgeErrorCode::PackageNotAllowed
+        BridgeErrorCode::RequestMismatch
     );
     let mut user_client = BridgeClient::new(FakeRunner::ok(package_bytes(ALLOWED_PACKAGE, 10)));
     assert_eq!(
@@ -215,12 +228,18 @@ fn typed_mutations_require_ack_and_fixed_target() {
     );
     assert_eq!(
         client.into_inner().seen,
-        vec![BridgeCommand::SetEnabled(PackageEnabledState::Disabled)]
+        vec![BridgeCommand::SetEnabled(
+            package_name(ALLOWED_PACKAGE),
+            PackageEnabledState::Disabled
+        )]
     );
     let mut client = BridgeClient::new(FakeRunner::ok(ack_bytes("set-suspended")));
     assert!(client.set_suspended(ALLOWED_PACKAGE, 0, true).is_ok());
     assert_eq!(
         client.into_inner().seen,
-        vec![BridgeCommand::SetSuspended(true)]
+        vec![BridgeCommand::SetSuspended(
+            package_name(ALLOWED_PACKAGE),
+            true
+        )]
     );
 }

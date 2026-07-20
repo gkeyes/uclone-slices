@@ -1,6 +1,6 @@
 use crate::domain::{PackageName, SlotId, SlotView};
 use crate::protocol::{
-    Ack, AckOperation, PackageStatus, ProbeReport, ReconcileReport, ResponsePayload, SwitchResult,
+    Ack, AckOperation, PackageStatus, ProbeReport, ResponsePayload, SwitchResult,
 };
 
 use super::outcome;
@@ -11,10 +11,8 @@ use super::{
 
 impl<P: ServicePlatform> PreviewService<P> {
     pub(super) fn probe_command(&self) -> Result<ResponsePayload, ServiceError> {
-        let key = validation::allowlisted_key()?;
-        let capabilities = self.platform.probe(&key)?;
+        let capabilities = self.platform.probe()?;
         Ok(ResponsePayload::ProbeReport(ProbeReport::new(
-            key.package_name().clone(),
             capabilities.ready(),
             capabilities.user_unlocked(),
             capabilities.ce_de_supported(),
@@ -25,7 +23,7 @@ impl<P: ServicePlatform> PreviewService<P> {
         &self,
         package: &PackageName,
     ) -> Result<ResponsePayload, ServiceError> {
-        let key = validation::package_key(package)?;
+        let key = validation::package_key(package);
         let snapshot = validation::snapshot(&key, self.platform.package_state(&key)?)?;
         validation::reportable(snapshot.managed())?;
         let gate = snapshot.gate();
@@ -42,7 +40,7 @@ impl<P: ServicePlatform> PreviewService<P> {
         &mut self,
         package: &PackageName,
     ) -> Result<ResponsePayload, ServiceError> {
-        let key = validation::package_key(package)?;
+        let key = validation::package_key(package);
         match self.platform.package_state(&key)? {
             PackageState::Absent => {}
             state => {
@@ -93,8 +91,7 @@ impl<P: ServicePlatform> PreviewService<P> {
         package: &PackageName,
         requested: &SlotId,
     ) -> Result<ResponsePayload, ServiceError> {
-        validation::requested_slot(requested)?;
-        let key = validation::package_key(package)?;
+        let key = validation::package_key(package);
         let snapshot = validation::snapshot(&key, self.platform.package_state(&key)?)?;
         let managed = snapshot.managed();
         validation::switchable(managed)?;
@@ -110,9 +107,9 @@ impl<P: ServicePlatform> PreviewService<P> {
             if !managed.active_slot().is_base() {
                 return Err(ServiceError::RecoveryRequired);
             }
-            match snapshot.preview() {
+            match snapshot.slot(requested) {
                 Some(target) => (target.clone(), None),
-                None => self.prepare_first_switch(&key, managed)?,
+                None => self.prepare_first_switch(&key, managed, requested)?,
             }
         };
         if !target.slot_id().is_base() {
@@ -136,20 +133,11 @@ impl<P: ServicePlatform> PreviewService<P> {
         outcome::switched(package, &target, execution)
     }
 
-    pub(super) fn reconcile_command(&mut self) -> Result<ResponsePayload, ServiceError> {
-        let key = validation::allowlisted_key()?;
-        let reconciled = self.platform.reconcile_two_phase(&key)?;
-        Ok(ResponsePayload::ReconcileReport(ReconcileReport::new(
-            key.package_name().clone(),
-            outcome::reconcile(reconciled),
-        )))
-    }
-
     pub(super) fn rescue_command(
         &mut self,
         package: &PackageName,
     ) -> Result<ResponsePayload, ServiceError> {
-        let key = validation::package_key(package)?;
+        let key = validation::package_key(package);
         outcome::rescued(self.platform.rescue_to_base(&key)?)
     }
 
@@ -201,6 +189,7 @@ impl<P: ServicePlatform> PreviewService<P> {
         &mut self,
         key: &crate::domain::PackageKey,
         managed: &crate::domain::ManagedPackage,
+        slot: &SlotId,
     ) -> Result<(SlotView, Option<crate::domain::GateSnapshot>), ServiceError> {
         let gate = self.platform.capture_gate(key)?;
         self.platform
@@ -211,7 +200,7 @@ impl<P: ServicePlatform> PreviewService<P> {
             .map_err(ServiceError::after_gate)?;
         let target = self
             .platform
-            .materialize_preview(managed)
+            .materialize_slot(managed, slot, crate::slot_metadata::SlotSeedMode::CloneBase)
             .map_err(ServiceError::after_gate)?;
         validation::preview_target(managed, &target).map_err(ServiceError::after_gate)?;
         Ok((target, Some(gate)))

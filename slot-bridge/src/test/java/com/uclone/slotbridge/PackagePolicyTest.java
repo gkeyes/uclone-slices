@@ -7,21 +7,23 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public final class PackagePolicyTest {
+    private static final String PACKAGE = "com.example.valid_2";
+
     @Test
-    public void computesCanonicalUserZeroPathsWhenPackageIsAllowlisted() throws BridgeFailure {
-        String packageName = PackagePolicy.ALLOWED_PACKAGE;
+    public void computesCanonicalUserZeroPathsForValidatedPackage() throws BridgeFailure {
+        PackagePaths paths = PackagePolicy.pathsFor(PACKAGE);
 
-        PackagePaths paths = PackagePolicy.pathsFor(packageName);
-
-        assertEquals(TargetProfile.TARGET_CE, paths.ceDataPath());
-        assertEquals(TargetProfile.TARGET_DE, paths.deDataPath());
+        assertEquals("/data/user/0/" + PACKAGE, paths.ceDataPath());
+        assertEquals("/data/user_de/0/" + PACKAGE, paths.deDataPath());
     }
 
     @Test
-    public void allowlistRequiresExactPackageSpelling() {
-        assertTrue(PackagePolicy.isAllowed(PackagePolicy.ALLOWED_PACKAGE));
-        assertFalse(PackagePolicy.isAllowed(PackagePolicy.ALLOWED_PACKAGE + ".beta"));
-        assertFalse(PackagePolicy.isAllowed(PackagePolicy.ALLOWED_PACKAGE.toUpperCase()));
-        assertFalse(PackagePolicy.isAllowed(PackagePolicy.ALLOWED_PACKAGE + "/../other"));
+    public void acceptsJavaStylePackageAndRejectsPathOrShellSyntax() {
+        assertTrue(PackagePolicy.isAllowed(PACKAGE));
+        assertTrue(PackagePolicy.isAllowed("Com.Example.App"));
+        assertFalse(PackagePolicy.isAllowed("single"));
+        assertFalse(PackagePolicy.isAllowed("com.2bad.app"));
+        assertFalse(PackagePolicy.isAllowed(PACKAGE + "/../other"));
+        assertFalse(PackagePolicy.isAllowed(PACKAGE + ";id"));
     }
 }

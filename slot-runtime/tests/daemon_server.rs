@@ -19,10 +19,9 @@ use tempfile::TempDir;
 use uclone_slot_runtime::daemon::{DaemonError, DaemonServer, MutationGuard, RequestHandler};
 #[cfg(target_os = "macos")]
 use uclone_slot_runtime::daemon::{RuntimeLock, RuntimeLockError};
-use uclone_slot_runtime::domain::PackageName;
 use uclone_slot_runtime::protocol::{
-    ALLOWED_PACKAGE, Command, ErrorCode, ProbeReport, Request, RequestId, Response,
-    ResponsePayload, ResponseStatus, UnixClient, decode_response, encode_request,
+    Command, ErrorCode, ProbeReport, Request, RequestId, Response, ResponsePayload, ResponseStatus,
+    UnixClient, decode_response, encode_request,
 };
 
 fn id(value: &str) -> RequestId {
@@ -36,12 +35,7 @@ fn probe() -> Request {
 fn probe_response(request: &Request) -> Response {
     Response::ok(
         request.request_id().clone(),
-        ResponsePayload::ProbeReport(ProbeReport::new(
-            PackageName::parse(ALLOWED_PACKAGE).unwrap(),
-            true,
-            true,
-            true,
-        )),
+        ResponsePayload::ProbeReport(ProbeReport::new(true, true, true)),
     )
     .unwrap()
 }

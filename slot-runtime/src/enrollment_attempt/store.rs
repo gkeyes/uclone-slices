@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::{PackageKey, UserId};
 use crate::layout::RuntimeLayout;
-use crate::protocol::ALLOWED_PACKAGE;
 
 use super::EnrollmentAttemptError;
 use super::storage;
@@ -40,9 +39,9 @@ impl EnrollmentAttemptStore {
 }
 
 pub(super) fn validate_key(package: &PackageKey) -> Result<(), EnrollmentAttemptError> {
-    if package.user_id() != UserId::PRIMARY || package.package_name().as_str() != ALLOWED_PACKAGE {
+    if package.user_id() != UserId::PRIMARY {
         return Err(EnrollmentAttemptError::Invalid(
-            "only compiled allowlisted user 0 is supported".to_owned(),
+            "only Android user 0 is supported".to_owned(),
         ));
     }
     Ok(())

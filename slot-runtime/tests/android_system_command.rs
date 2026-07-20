@@ -27,7 +27,8 @@ fn arguments(invocation: &system::ProcessInvocation) -> Vec<&OsStr> {
 
 #[test]
 fn force_stop_uses_only_fixed_am_argv() {
-    let invocation = system::force_stop_invocation();
+    let package = PackageName::parse("com.uclone.slotprobe").unwrap();
+    let invocation = system::force_stop_invocation(&package);
 
     assert_eq!(invocation.program(), "/system/bin/am");
     assert_eq!(

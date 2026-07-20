@@ -61,10 +61,10 @@ where
         if lifecycle == LifecycleState::Quarantined {
             return Ok(Some(ReconcileOutcome::Quarantined));
         }
-        let Some((_, preview)) = super::state::catalog_views(&catalog, key, &package) else {
+        let Some((_, slots)) = super::state::catalog_views(&catalog, key, &package) else {
             return self.recovery(&package);
         };
-        if preview.is_some()
+        if !slots.is_empty()
             && matches!(
                 lifecycle,
                 LifecycleState::RecoveryRequired | LifecycleState::RepairWaiting
@@ -75,7 +75,7 @@ where
         if lifecycle != LifecycleState::Normal {
             return self.recovery(&package);
         }
-        if preview.is_some() {
+        if !slots.is_empty() {
             return Ok(None);
         }
         if self.has_committed_history(key)? {

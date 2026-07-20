@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use crate::domain::{ManagedPackage, UserId};
+use crate::domain::{ManagedPackage, PackageName, SlotId, UserId};
+use crate::layout::RuntimeLayout;
 use crate::materializer::{BackendFailure, DataDomain, MaterializationPaths};
-use crate::target;
 
 const ANCHOR_CE: &str = "/data/misc_ce/0";
 const ANCHOR_DE: &str = "/data/misc_de/0";
@@ -11,27 +11,35 @@ pub(super) fn ensure_supported(package: &ManagedPackage) -> Result<(), BackendFa
     if package.user_id() != UserId::PRIMARY {
         return Err(BackendFailure::new("user_not_supported"));
     }
-    if package.package_name().as_str() != target::PACKAGE {
-        return Err(BackendFailure::new("package_not_allowlisted"));
-    }
     Ok(())
 }
 
 pub(super) fn validate_paths(paths: &MaterializationPaths) -> Result<(), BackendFailure> {
-    if paths.ready_ce() != Path::new(target::PREVIEW_CE)
-        || paths.ready_de() != Path::new(target::PREVIEW_DE)
-        || paths.staging_ce() != Path::new(target::STAGING_CE)
-        || paths.staging_de() != Path::new(target::STAGING_DE)
+    if paths.slot().is_base() {
+        return Err(BackendFailure::new("materialization_paths_rejected"));
+    }
+    let expected = RuntimeLayout::slot_paths(paths.package(), paths.slot());
+    if paths.ready_ce() != expected.ce()
+        || paths.ready_de() != expected.de()
+        || paths.staging_ce()
+            != expected
+                .ce()
+                .with_file_name(format!(".{}.staging", paths.slot().as_str()))
+        || paths.staging_de()
+            != expected
+                .de()
+                .with_file_name(format!(".{}.staging", paths.slot().as_str()))
     {
         return Err(BackendFailure::new("materialization_paths_rejected"));
     }
     Ok(())
 }
 
-pub(super) fn base(domain: DataDomain) -> &'static Path {
+pub(super) fn base(package: &PackageName, domain: DataDomain) -> std::path::PathBuf {
+    let base = RuntimeLayout::slot_paths(package, &SlotId::base());
     match domain {
-        DataDomain::Ce => Path::new(target::TARGET_CE),
-        DataDomain::De => Path::new(target::TARGET_DE),
+        DataDomain::Ce => base.ce().to_path_buf(),
+        DataDomain::De => base.de().to_path_buf(),
     }
 }
 
@@ -49,9 +57,15 @@ pub(super) fn anchor(domain: DataDomain) -> &'static Path {
     }
 }
 
-pub(super) fn parent(domain: DataDomain) -> &'static Path {
+pub(super) fn parent(paths: &MaterializationPaths, domain: DataDomain) -> &Path {
     match domain {
-        DataDomain::Ce => Path::new(target::TARGET_CE_SLOT_ROOT),
-        DataDomain::De => Path::new(target::TARGET_DE_SLOT_ROOT),
+        DataDomain::Ce => paths
+            .ready_ce()
+            .parent()
+            .unwrap_or_else(|| paths.ready_ce()),
+        DataDomain::De => paths
+            .ready_de()
+            .parent()
+            .unwrap_or_else(|| paths.ready_de()),
     }
 }

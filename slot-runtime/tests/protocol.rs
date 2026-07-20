@@ -13,6 +13,7 @@ use uclone_slot_runtime::protocol::{
     encode_request, encode_response,
 };
 use uclone_slot_runtime::reconcile::ReconcileReason;
+use uclone_slot_runtime::slot_metadata::{SlotDisplayName, SlotSeedMode};
 use uclone_slot_runtime::target::PREVIEW_SLOT;
 
 fn id(value: &str) -> RequestId {
@@ -29,15 +30,36 @@ fn allowed() -> PackageName {
 
 #[test]
 fn all_fixed_commands_round_trip_as_strict_json_lines() {
-    let commands = [
+    let slot = SlotId::parse(PREVIEW_SLOT).unwrap();
+    let label = SlotDisplayName::parse("Work profile").unwrap();
+    let commands = vec![
         Command::Probe,
+        Command::InspectPackage { package: allowed() },
+        Command::ListManagedApps,
         Command::EnrollPackage { package: allowed() },
         Command::StatusPackage { package: allowed() },
+        Command::CreateSlot {
+            package: allowed(),
+            display_name: label.clone(),
+            seed_mode: SlotSeedMode::Blank,
+        },
+        Command::ListSlots { package: allowed() },
         Command::Switch {
             package: allowed(),
-            slot: SlotId::parse(PREVIEW_SLOT).unwrap(),
+            slot: slot.clone(),
+        },
+        Command::RenameSlot {
+            package: allowed(),
+            slot: slot.clone(),
+            display_name: label,
+        },
+        Command::DeleteSlot {
+            package: allowed(),
+            slot,
         },
         Command::Reconcile,
+        Command::ReconcilePackage { package: allowed() },
+        Command::RetirePackage { package: allowed() },
         Command::RescueToBase { package: allowed() },
     ];
 
@@ -72,18 +94,19 @@ fn wire_shape_rejects_schema_drift_and_unscoped_fields() {
 }
 
 #[test]
-fn package_allowlist_is_checked_before_commands_leave_deserialization() {
+fn any_well_formed_package_is_accepted_without_accepting_paths() {
     let package = package("com.example.other");
     let request = Request::new(id("r1"), Command::StatusPackage { package });
-    assert!(matches!(request, Err(ProtocolError::PackageNotAllowed(_))));
+    assert!(request.is_ok());
 
     let wire = br#"{"schema_version":1,"request_id":"r1","command":"status_package","package":"com.example.other"}
 "#;
-    assert!(matches!(
-        decode_request(wire),
-        Err(ProtocolError::PackageNotAllowed(_))
-    ));
-    assert!(serde_json::from_slice::<Request>(wire).is_err());
+    assert!(decode_request(wire).is_ok());
+    assert!(serde_json::from_slice::<Request>(wire).is_ok());
+
+    let path = br#"{"schema_version":1,"request_id":"r1","command":"status_package","package":"../../data"}
+"#;
+    assert!(matches!(decode_request(path), Err(ProtocolError::Json(_))));
 }
 
 #[test]
@@ -136,7 +159,7 @@ fn response_round_trip_has_typed_status_and_error_code() {
 #[test]
 fn success_payloads_are_typed_bounded_and_round_trip() {
     let payloads = [
-        ResponsePayload::ProbeReport(ProbeReport::new(allowed(), true, true, true)),
+        ResponsePayload::ProbeReport(ProbeReport::new(true, true, true)),
         ResponsePayload::PackageStatus(PackageStatus::new(
             allowed(),
             SlotId::base(),
@@ -208,19 +231,17 @@ fn response_payload_and_status_invariants_fail_closed() {
         Err(ProtocolError::Json(_))
     ));
 
-    let unallowlisted = Response::ok(
+    let generic = Response::ok(
         id("r1"),
-        ResponsePayload::ProbeReport(ProbeReport::new(
+        ResponsePayload::PackageStatus(PackageStatus::new(
             package("com.example.other"),
+            SlotId::base(),
+            LifecycleState::Normal,
             true,
-            true,
-            true,
+            false,
         )),
     );
-    assert!(matches!(
-        unallowlisted,
-        Err(ProtocolError::PackageNotAllowed(_))
-    ));
+    assert!(generic.is_ok());
 }
 
 #[test]

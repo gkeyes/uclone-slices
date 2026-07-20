@@ -19,6 +19,7 @@ pub use runner::{AppProcessRunner, BridgeCommandRunner, BridgeRunnerError};
 use std::fmt;
 
 pub use crate::domain::PackageEnabledState;
+use crate::domain::PackageName;
 
 /// Current bridge response schema.
 pub const BRIDGE_SCHEMA_VERSION: u32 = 1;
@@ -36,60 +37,46 @@ pub const BRIDGE_CLASSPATH: &str = crate::target::BRIDGE_CLASSPATH;
 /// Fixed Java entry point loaded by app_process.
 pub const BRIDGE_MAIN_CLASS: &str = "com.uclone.slotbridge.Main";
 
-const DEVICE_ARGS: &[&str] = &["/system/bin", BRIDGE_MAIN_CLASS, "probe-device"];
-const PACKAGE_ARGS: &[&str] = &[
-    "/system/bin",
-    BRIDGE_MAIN_CLASS,
-    "probe-package",
-    ALLOWED_PACKAGE,
-];
-const GATE_ARGS: &[&str] = &[
-    "/system/bin",
-    BRIDGE_MAIN_CLASS,
-    "probe-gate",
-    ALLOWED_PACKAGE,
-];
-
 /// The fixed bridge operation. It carries no caller-controlled strings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BridgeCommand {
     /// Read whether user 0's credential-encrypted device state is unlocked.
     DeviceStatus,
-    /// Read the allowlisted package's user 0 PackageManager state.
-    PackageStatus,
-    /// Read only the allowlisted package's enabled and suspended state.
-    GateStatus,
-    /// Set the allowlisted package's enabled-state enum for user 0.
-    SetEnabled(PackageEnabledState),
-    /// Set the allowlisted package's suspension state for user 0.
-    SetSuspended(bool),
+    /// Read a validated package's user 0 PackageManager state.
+    PackageStatus(PackageName),
+    /// Read only a validated package's enabled and suspended state.
+    GateStatus(PackageName),
+    /// Set a validated package's enabled-state enum for user 0.
+    SetEnabled(PackageName, PackageEnabledState),
+    /// Set a validated package's suspension state for user 0.
+    SetSuspended(PackageName, bool),
 }
 
 impl BridgeCommand {
     /// Returns the exact argv passed after the fixed executable path.
-    pub fn argv(self) -> Vec<&'static str> {
+    pub fn argv(&self) -> Vec<String> {
         match self {
-            Self::DeviceStatus => DEVICE_ARGS.to_vec(),
-            Self::PackageStatus => PACKAGE_ARGS.to_vec(),
-            Self::GateStatus => GATE_ARGS.to_vec(),
-            Self::SetEnabled(state) => vec![
-                "/system/bin",
-                BRIDGE_MAIN_CLASS,
-                "set-enabled",
-                ALLOWED_PACKAGE,
-                enabled_state_arg(state),
+            Self::DeviceStatus => fixed_args("probe-device"),
+            Self::PackageStatus(package) => package_args("probe-package", package),
+            Self::GateStatus(package) => package_args("probe-gate", package),
+            Self::SetEnabled(package, state) => vec![
+                "/system/bin".into(),
+                BRIDGE_MAIN_CLASS.into(),
+                "set-enabled".into(),
+                package.as_str().into(),
+                enabled_state_arg(*state).into(),
             ],
-            Self::SetSuspended(suspended) => vec![
-                "/system/bin",
-                BRIDGE_MAIN_CLASS,
-                "set-suspended",
-                ALLOWED_PACKAGE,
-                if suspended { "true" } else { "false" },
+            Self::SetSuspended(package, suspended) => vec![
+                "/system/bin".into(),
+                BRIDGE_MAIN_CLASS.into(),
+                "set-suspended".into(),
+                package.as_str().into(),
+                if *suspended { "true" } else { "false" }.into(),
             ],
         }
     }
 
-    pub(crate) fn session_request(self) -> Vec<u8> {
+    pub(crate) fn session_request(&self) -> Vec<u8> {
         let mut request = self
             .argv()
             .into_iter()
@@ -102,25 +89,42 @@ impl BridgeCommand {
     }
 
     /// Returns the fixed request id echoed by the Java bridge.
-    pub const fn request_id(self) -> &'static str {
+    pub const fn request_id(&self) -> &'static str {
         match self {
             Self::DeviceStatus => "device",
-            Self::PackageStatus => "package",
-            Self::GateStatus => "gate",
-            Self::SetEnabled(_) => "set-enabled",
-            Self::SetSuspended(_) => "set-suspended",
+            Self::PackageStatus(_) => "package",
+            Self::GateStatus(_) => "gate",
+            Self::SetEnabled(_, _) => "set-enabled",
+            Self::SetSuspended(_, _) => "set-suspended",
         }
     }
 
     /// Returns the expected tagged payload name for this operation.
-    pub const fn payload_name(self) -> &'static str {
+    pub const fn payload_name(&self) -> &'static str {
         match self {
             Self::DeviceStatus => "device",
-            Self::PackageStatus => "package",
-            Self::GateStatus => "gate",
-            Self::SetEnabled(_) | Self::SetSuspended(_) => "ack",
+            Self::PackageStatus(_) => "package",
+            Self::GateStatus(_) => "gate",
+            Self::SetEnabled(_, _) | Self::SetSuspended(_, _) => "ack",
         }
     }
+}
+
+fn fixed_args(operation: &str) -> Vec<String> {
+    vec![
+        "/system/bin".into(),
+        BRIDGE_MAIN_CLASS.into(),
+        operation.into(),
+    ]
+}
+
+fn package_args(operation: &str, package: &PackageName) -> Vec<String> {
+    vec![
+        "/system/bin".into(),
+        BRIDGE_MAIN_CLASS.into(),
+        operation.into(),
+        package.as_str().into(),
+    ]
 }
 
 const fn enabled_state_arg(state: PackageEnabledState) -> &'static str {

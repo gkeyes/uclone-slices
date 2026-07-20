@@ -9,9 +9,9 @@ pub enum ReconcileError {
     #[doc = "Enrollment enumeration could not identify every managed package."]
     #[error(transparent)]
     Enrollment(#[from] EnrollmentError),
-    #[doc = "The compiled Preview allowlist entry is not a valid package name."]
-    #[error("invalid compiled Preview package allowlist")]
-    InvalidAllowlistConfiguration,
+    #[doc = "The runtime could not enumerate every active or transitional gate lease."]
+    #[error("discover active gate leases: {0}")]
+    LeaseDiscovery(PlatformError),
     #[doc = "An allowlisted package could not be durably held before metadata validation."]
     #[error("emergency-gate package {package}: {source}")]
     EmergencyGate {

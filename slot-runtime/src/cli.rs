@@ -5,19 +5,19 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 
-use crate::domain::{PackageName, SlotId};
 use crate::layout::RuntimeLayout;
-use crate::protocol::{
-    Command, ErrorCode, ProtocolError, Request, RequestId, Response, UnixClient,
-};
+use crate::protocol::{ErrorCode, ProtocolError, Request, RequestId, Response, UnixClient};
 
+mod command;
 mod direct;
 mod execute;
 mod fallback;
+mod rpc;
 mod timeout;
 
+pub use command::{CliCommand, SeedArgument};
 pub use execute::{execute, execute_request};
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -34,40 +34,6 @@ pub struct Cli {
     /// The one supported control-plane operation.
     #[command(subcommand)]
     pub command: CliCommand,
-}
-
-/// Operations accepted by the Preview control plane.
-#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
-pub enum CliCommand {
-    /// Probe runtime and device capabilities.
-    Probe,
-    /// Enroll the allowlisted package's immutable base.
-    Enroll {
-        /// Android package name.
-        package: String,
-    },
-    /// Read the allowlisted package's current status.
-    Status {
-        /// Android package name.
-        package: String,
-    },
-    /// Switch the allowlisted package to a logical slot.
-    Switch {
-        /// Android package name.
-        package: String,
-        /// Logical slot identifier.
-        slot: String,
-    },
-    /// Reconcile an interrupted durable transaction.
-    Reconcile,
-    /// Return the allowlisted package to its immutable base.
-    Rescue {
-        /// Android package name.
-        package: String,
-        /// Required explicit confirmation of the base-only rescue operation.
-        #[arg(long = "to-base", required = true)]
-        to_base: bool,
-    },
 }
 
 /// Errors returned by request construction, transport, output, or the daemon.
@@ -135,44 +101,15 @@ impl Transport for UnixTransport {
     }
 }
 
-impl CliCommand {
-    /// Converts the parsed command into one strict, allowlisted protocol request.
-    pub fn request(&self) -> Result<Request, CliError> {
-        let request_id = next_request_id()?;
-        let command = match self {
-            Self::Probe => Command::Probe,
-            Self::Enroll { package } => Command::EnrollPackage {
-                package: parse_package(package)?,
-            },
-            Self::Status { package } => Command::StatusPackage {
-                package: parse_package(package)?,
-            },
-            Self::Switch { package, slot } => Command::Switch {
-                package: parse_package(package)?,
-                slot: parse_slot(slot)?,
-            },
-            Self::Reconcile => Command::Reconcile,
-            Self::Rescue { package, to_base } => {
-                if !to_base {
-                    return Err(CliError::InvalidArgument(
-                        "rescue requires --to-base".to_owned(),
-                    ));
-                }
-                Command::RescueToBase {
-                    package: parse_package(package)?,
-                }
-            }
-        };
-        Request::new(request_id, command).map_err(CliError::Protocol)
-    }
-}
-
 /// Connects the fixed transport and executes a parsed command on stdio.
 pub fn run(cli: &Cli) -> Result<(), CliError> {
     let stdout = io::stdout();
     let stderr = io::stderr();
     let mut output = stdout.lock();
     let mut diagnostics = stderr.lock();
+    if matches!(cli.command, CliCommand::Rpc) {
+        return rpc::run(io::stdin().lock(), &mut output, &mut diagnostics);
+    }
     let request = match cli.command.request() {
         Ok(request) => request,
         Err(error) => return fail(error, &mut diagnostics),
@@ -191,7 +128,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
     execute_request(&request, &mut transport, &mut output, &mut diagnostics)
 }
 
-fn next_request_id() -> Result<RequestId, CliError> {
+pub(super) fn next_request_id() -> Result<RequestId, CliError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| CliError::Clock)?
@@ -199,14 +136,6 @@ fn next_request_id() -> Result<RequestId, CliError> {
     let sequence = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
     let raw = format!("slotctl-{}-{timestamp}-{sequence}", std::process::id());
     RequestId::new(&raw).map_err(CliError::Protocol)
-}
-
-fn parse_package(raw: &str) -> Result<PackageName, CliError> {
-    PackageName::parse(raw).map_err(|error| CliError::InvalidArgument(error.to_string()))
-}
-
-fn parse_slot(raw: &str) -> Result<SlotId, CliError> {
-    SlotId::parse(raw).map_err(|error| CliError::InvalidArgument(error.to_string()))
 }
 
 fn fail<E: Write>(error: CliError, diagnostics: &mut E) -> Result<(), CliError> {

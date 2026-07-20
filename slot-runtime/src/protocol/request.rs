@@ -1,19 +1,20 @@
 use serde::{Deserialize, Serialize, Serializer, de::Deserializer};
 
-use super::{ALLOWED_PACKAGE, ProtocolError, SCHEMA_VERSION};
+use super::ProtocolError;
 use crate::domain::{PackageName, SlotId};
-use crate::target::{BASE_SLOT, PREVIEW_SLOT};
+use crate::slot_metadata::{SlotDisplayName, SlotSeedMode};
 
 mod frame;
+mod wire;
 pub use frame::{decode_request, encode_request};
 
-/// Bounded id echoed by every request and response.
+#[doc = "Bounded id echoed by every request and response."]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct RequestId(String);
 
 impl RequestId {
-    /// Creates a request id safe to echo and use in logs.
+    #[doc = "Creates a request id safe to echo and use in logs."]
     pub fn new(value: &str) -> Result<Self, ProtocolError> {
         if (1..=128).contains(&value.len())
             && value
@@ -26,7 +27,7 @@ impl RequestId {
         }
     }
 
-    /// Returns the wire representation.
+    #[doc = "Returns the wire representation."]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -46,38 +47,85 @@ impl From<RequestId> for String {
     }
 }
 
-/// Fixed command set accepted by the Preview runtime.
+#[doc = "Typed command set accepted by the multi-app Preview runtime."]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// Probe runtime/device capabilities without selecting a package.
+    #[doc = "Probe runtime and device capability without selecting a package."]
     Probe,
-    /// Publish the allowlisted package's immutable base enrollment.
+    #[doc = "Inspect one installed package before enrollment."]
+    InspectPackage {
+        #[doc = "Installed Android package selected by `PackageManager`."]
+        package: PackageName,
+    },
+    #[doc = "List all durable managed-app enrollments."]
+    ListManagedApps,
+    #[doc = "Publish one package's immutable base enrollment."]
     EnrollPackage {
-        /// Package to enroll.
+        #[doc = "Installed Android package selected by `PackageManager`."]
         package: PackageName,
     },
-    /// Read the allowlisted package's current status.
+    #[doc = "Read one package's committed view and lifecycle status."]
     StatusPackage {
-        /// Package whose status is requested.
+        #[doc = "Durably enrolled Android package."]
         package: PackageName,
     },
-    /// Switch the allowlisted package to a validated logical slot.
-    Switch {
-        /// Package to switch.
+    #[doc = "Create and activate a runtime-generated non-base slot."]
+    CreateSlot {
+        #[doc = "Durably enrolled Android package."]
         package: PackageName,
-        /// Logical destination slot.
+        #[doc = "Display-only label that never participates in filesystem paths."]
+        display_name: SlotDisplayName,
+        #[doc = "Whether the initial slot tree is blank or copied from Base."]
+        seed_mode: SlotSeedMode,
+    },
+    #[doc = "List Base and all non-deleted package slots."]
+    ListSlots {
+        #[doc = "Durably enrolled Android package."]
+        package: PackageName,
+    },
+    #[doc = "Switch one managed package to a validated slot."]
+    Switch {
+        #[doc = "Durably enrolled Android package."]
+        package: PackageName,
+        #[doc = "Runtime-issued slot identifier, including the reserved Base id."]
         slot: SlotId,
     },
-    /// Reconcile any durable transaction left by an interrupted operation.
+    #[doc = "Change only a slot's display label."]
+    RenameSlot {
+        #[doc = "Durably enrolled Android package."]
+        package: PackageName,
+        #[doc = "Runtime-issued non-base slot identifier."]
+        slot: SlotId,
+        #[doc = "Replacement display-only label."]
+        display_name: SlotDisplayName,
+    },
+    #[doc = "Delete a non-active, non-base slot."]
+    DeleteSlot {
+        #[doc = "Durably enrolled Android package."]
+        package: PackageName,
+        #[doc = "Runtime-issued inactive non-base slot identifier."]
+        slot: SlotId,
+    },
+    #[doc = "Reconcile all durable package streams."]
     Reconcile,
-    /// Return the allowlisted package to its immutable base slot.
+    #[doc = "Reconcile one durable package stream."]
+    ReconcilePackage {
+        #[doc = "Durably enrolled Android package."]
+        package: PackageName,
+    },
+    #[doc = "Retire one package after a verified native-base rescue."]
+    RetirePackage {
+        #[doc = "Durably enrolled Android package to return to unmanaged Base."]
+        package: PackageName,
+    },
+    #[doc = "Return one package to its immutable native Base view."]
     RescueToBase {
-        /// Package to rescue.
+        #[doc = "Known package whose native Base view must be restored."]
         package: PackageName,
     },
 }
 
-/// A validated protocol request.
+#[doc = "A validated protocol request."]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     request_id: RequestId,
@@ -85,7 +133,7 @@ pub struct Request {
 }
 
 impl Request {
-    /// Constructs a schema-current request and applies the package allowlist.
+    #[doc = "Constructs a schema-current request from typed fields."]
     pub fn new(request_id: RequestId, command: Command) -> Result<Self, ProtocolError> {
         let request = Self {
             request_id,
@@ -95,149 +143,42 @@ impl Request {
         Ok(request)
     }
 
-    /// Decodes exactly one bounded JSON-lines request frame.
+    #[doc = "Decodes exactly one bounded JSON-lines request frame."]
     pub fn from_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
         decode_request(frame)
     }
 
-    /// Returns the request id.
+    #[doc = "Returns the request id."]
     pub const fn request_id(&self) -> &RequestId {
         &self.request_id
     }
 
-    /// Returns the fixed command.
+    #[doc = "Returns the typed command."]
     pub const fn command(&self) -> &Command {
         &self.command
     }
 
     fn validate(&self) -> Result<(), ProtocolError> {
         match &self.command {
-            Command::Probe | Command::Reconcile => Ok(()),
-            Command::EnrollPackage { package }
-            | Command::StatusPackage { package }
-            | Command::RescueToBase { package } => validate_package(package),
-            Command::Switch { package, slot } => {
-                validate_package(package)?;
-                validate_slot(slot)
+            Command::RenameSlot { slot, .. } | Command::DeleteSlot { slot, .. }
+                if slot.is_base() =>
+            {
+                Err(ProtocolError::UnexpectedField("base_slot"))
             }
+            _ => Ok(()),
         }
     }
 }
 
 impl Serialize for Request {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let (command, package, slot) = match &self.command {
-            Command::Probe => ("probe", None, None),
-            Command::EnrollPackage { package } => ("enroll_package", Some(package), None),
-            Command::StatusPackage { package } => ("status_package", Some(package), None),
-            Command::Switch { package, slot } => ("switch", Some(package), Some(slot)),
-            Command::Reconcile => ("reconcile", None, None),
-            Command::RescueToBase { package } => ("rescue_to_base", Some(package), None),
-        };
-        WireRequestOut {
-            schema_version: SCHEMA_VERSION,
-            request_id: &self.request_id,
-            command,
-            package,
-            slot,
-        }
-        .serialize(serializer)
+        wire::serialize(&self.request_id, &self.command, serializer)
     }
 }
 
 impl<'de> Deserialize<'de> for Request {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let wire = WireRequest::deserialize(deserializer)?;
-        from_wire(wire).map_err(serde::de::Error::custom)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireRequest {
-    schema_version: u32,
-    request_id: RequestId,
-    command: String,
-    #[serde(default)]
-    package: Option<PackageName>,
-    #[serde(default)]
-    slot: Option<SlotId>,
-}
-
-#[derive(Debug, Serialize)]
-struct WireRequestOut<'a> {
-    schema_version: u32,
-    request_id: &'a RequestId,
-    command: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    package: Option<&'a PackageName>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    slot: Option<&'a SlotId>,
-}
-
-fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
-    if wire.schema_version != SCHEMA_VERSION {
-        return Err(ProtocolError::UnsupportedSchema(wire.schema_version));
-    }
-    let command = match wire.command.as_str() {
-        "probe" => {
-            reject_fields(wire.package.is_some(), wire.slot.is_some())?;
-            Command::Probe
-        }
-        "enroll_package" => Command::EnrollPackage {
-            package: required_package(wire.package, wire.slot.is_some())?,
-        },
-        "status_package" => Command::StatusPackage {
-            package: required_package(wire.package, wire.slot.is_some())?,
-        },
-        "switch" => Command::Switch {
-            package: wire.package.ok_or(ProtocolError::MissingPackage)?,
-            slot: wire.slot.ok_or(ProtocolError::MissingSlot)?,
-        },
-        "reconcile" => {
-            reject_fields(wire.package.is_some(), wire.slot.is_some())?;
-            Command::Reconcile
-        }
-        "rescue_to_base" => Command::RescueToBase {
-            package: required_package(wire.package, wire.slot.is_some())?,
-        },
-        unknown => return Err(ProtocolError::UnknownCommand(unknown.to_owned())),
-    };
-    Request::new(wire.request_id, command)
-}
-
-fn required_package(
-    package: Option<PackageName>,
-    slot_present: bool,
-) -> Result<PackageName, ProtocolError> {
-    if slot_present {
-        return Err(ProtocolError::UnexpectedField("slot"));
-    }
-    package.ok_or(ProtocolError::MissingPackage)
-}
-
-const fn reject_fields(package_present: bool, slot_present: bool) -> Result<(), ProtocolError> {
-    if package_present {
-        return Err(ProtocolError::UnexpectedField("package"));
-    }
-    if slot_present {
-        return Err(ProtocolError::UnexpectedField("slot"));
-    }
-    Ok(())
-}
-
-fn validate_package(package: &PackageName) -> Result<(), ProtocolError> {
-    if package.as_str() == ALLOWED_PACKAGE {
-        Ok(())
-    } else {
-        Err(ProtocolError::PackageNotAllowed(package.to_string()))
-    }
-}
-
-fn validate_slot(slot: &SlotId) -> Result<(), ProtocolError> {
-    if matches!(slot.as_str(), BASE_SLOT | PREVIEW_SLOT) {
-        Ok(())
-    } else {
-        Err(ProtocolError::SlotNotAllowed(slot.to_string()))
+        let wire = wire::WireRequest::deserialize(deserializer)?;
+        wire::from_wire(wire).map_err(serde::de::Error::custom)
     }
 }

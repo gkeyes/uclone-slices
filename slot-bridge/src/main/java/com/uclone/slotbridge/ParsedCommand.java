@@ -2,37 +2,47 @@ package com.uclone.slotbridge;
 
 final class ParsedCommand {
     private final CommandKind kind;
+    private final String packageName;
     private final EnabledState enabledState;
     private final boolean suspended;
 
-    private ParsedCommand(CommandKind kind, EnabledState enabledState, boolean suspended) {
+    private ParsedCommand(
+            CommandKind kind,
+            String packageName,
+            EnabledState enabledState,
+            boolean suspended) {
         this.kind = kind;
+        this.packageName = packageName;
         this.enabledState = enabledState;
         this.suspended = suspended;
     }
 
     static ParsedCommand probeDevice() {
-        return new ParsedCommand(CommandKind.PROBE_DEVICE, null, false);
+        return new ParsedCommand(CommandKind.PROBE_DEVICE, null, null, false);
     }
 
-    static ParsedCommand probePackage() {
-        return new ParsedCommand(CommandKind.PROBE_PACKAGE, null, false);
+    static ParsedCommand probePackage(String packageName) {
+        return new ParsedCommand(CommandKind.PROBE_PACKAGE, packageName, null, false);
     }
 
-    static ParsedCommand probeGate() {
-        return new ParsedCommand(CommandKind.PROBE_GATE, null, false);
+    static ParsedCommand probeGate(String packageName) {
+        return new ParsedCommand(CommandKind.PROBE_GATE, packageName, null, false);
     }
 
-    static ParsedCommand setEnabled(EnabledState state) {
-        return new ParsedCommand(CommandKind.SET_ENABLED, state, false);
+    static ParsedCommand setEnabled(String packageName, EnabledState state) {
+        return new ParsedCommand(CommandKind.SET_ENABLED, packageName, state, false);
     }
 
-    static ParsedCommand setSuspended(boolean value) {
-        return new ParsedCommand(CommandKind.SET_SUSPENDED, null, value);
+    static ParsedCommand setSuspended(String packageName, boolean value) {
+        return new ParsedCommand(CommandKind.SET_SUSPENDED, packageName, null, value);
     }
 
     CommandKind kind() {
         return kind;
+    }
+
+    String packageName() {
+        return packageName;
     }
 
     EnabledState enabledState() {

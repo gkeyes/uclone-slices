@@ -1,13 +1,14 @@
 use crate::catalog::PathSecurityProof;
 use crate::domain::{ManagedPackage, SlotId};
 use crate::lifecycle::LifecycleState;
+use crate::slot_metadata::SlotSeedMode;
 
 use super::{
     BaseAnchor, DataDomain, DomainCopyProof, MaterializationError, SlotMaterializationProof,
 };
 
 pub(super) fn request(package: &ManagedPackage, slot: &SlotId) -> Result<(), MaterializationError> {
-    if slot.as_str() != crate::target::PREVIEW_SLOT {
+    if slot.is_base() {
         return Err(MaterializationError::UnsupportedSlot(slot.clone()));
     }
     if !package.active_slot().is_base()
@@ -53,6 +54,7 @@ pub(super) fn staging(
     package: &ManagedPackage,
     base: &BaseAnchor,
     proof: &SlotMaterializationProof,
+    seed_mode: SlotSeedMode,
 ) -> Result<(), MaterializationError> {
     if !proof.is_complete() || reuses_base_or_pair(package, proof) {
         return Err(MaterializationError::StagingIncomplete);
@@ -64,7 +66,9 @@ pub(super) fn staging(
         if proof.domain(domain).device_id() != base.domain(domain).device_id() {
             return Err(MaterializationError::DeviceMismatch(domain));
         }
-        if proof.domain(domain).content() != base.domain(domain).content() {
+        if seed_mode == SlotSeedMode::CloneBase
+            && proof.domain(domain).content() != base.domain(domain).content()
+        {
             return Err(MaterializationError::ContentMismatch(domain));
         }
         validate_security(base, proof, domain)?;

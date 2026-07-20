@@ -14,6 +14,7 @@ use uclone_slot_runtime::service::{
 };
 
 mod fixtures;
+mod management;
 mod platform;
 
 #[allow(unused_imports)]
@@ -45,6 +46,12 @@ pub(crate) enum FailurePoint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Call {
     Probe,
+    Inspect,
+    ListManaged,
+    ListSlots,
+    CreateSlot,
+    RenameSlot,
+    DeleteSlot,
     State,
     CaptureGate,
     BeginEnrollment,
@@ -156,7 +163,7 @@ impl FakePlatform {
         self.state
             .replace(PackageState::Ready(Box::new(PackageSnapshot::new(
                 active,
-                snapshot.preview().cloned(),
+                snapshot.slots().to_vec(),
                 snapshot.gate(),
             ))));
     }

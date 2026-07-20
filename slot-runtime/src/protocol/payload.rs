@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize, de::Deserializer};
 
-use super::{ALLOWED_PACKAGE, ProtocolError};
-use crate::domain::PackageName;
+use super::ProtocolError;
 
+mod app_types;
 mod outcome;
 mod types;
 
+pub use app_types::{
+    ManagedAppSummary, ManagedAppsReport, PackageInspectionReport, SlotSummary, SlotsReport,
+};
 pub use outcome::ReconcileOutcome;
 pub use types::{Ack, AckOperation, PackageStatus, ProbeReport, ReconcileReport, SwitchResult};
 
@@ -15,6 +18,12 @@ pub use types::{Ack, AckOperation, PackageStatus, ProbeReport, ReconcileReport, 
 pub enum ResponsePayload {
     /// Runtime and device capability report.
     ProbeReport(ProbeReport),
+    /// Installed package compatibility and identity report.
+    PackageInspection(PackageInspectionReport),
+    /// All durable managed package rows.
+    ManagedApps(ManagedAppsReport),
+    /// Base and non-base slot rows for one package.
+    Slots(SlotsReport),
     /// Current package view and lifecycle state.
     PackageStatus(PackageStatus),
     /// Verified result of a slot switch.
@@ -34,6 +43,9 @@ pub enum ResponsePayload {
 )]
 enum WireResponsePayload {
     ProbeReport(ProbeReport),
+    PackageInspection(PackageInspectionReport),
+    ManagedApps(ManagedAppsReport),
+    Slots(SlotsReport),
     PackageStatus(PackageStatus),
     SwitchResult(SwitchResult),
     ReconcileReport(ReconcileReport),
@@ -45,6 +57,9 @@ impl<'de> Deserialize<'de> for ResponsePayload {
         let wire = WireResponsePayload::deserialize(deserializer)?;
         let payload = match wire {
             WireResponsePayload::ProbeReport(value) => Self::ProbeReport(value),
+            WireResponsePayload::PackageInspection(value) => Self::PackageInspection(value),
+            WireResponsePayload::ManagedApps(value) => Self::ManagedApps(value),
+            WireResponsePayload::Slots(value) => Self::Slots(value),
             WireResponsePayload::PackageStatus(value) => Self::PackageStatus(value),
             WireResponsePayload::SwitchResult(value) => Self::SwitchResult(value),
             WireResponsePayload::ReconcileReport(value) => Self::ReconcileReport(value),
@@ -57,21 +72,11 @@ impl<'de> Deserialize<'de> for ResponsePayload {
 
 impl ResponsePayload {
     pub(super) fn validate(&self) -> Result<(), ProtocolError> {
-        let package = match self {
-            Self::ProbeReport(report) => report.package(),
-            Self::PackageStatus(status) => status.package(),
-            Self::SwitchResult(result) => result.package(),
-            Self::ReconcileReport(report) => report.package(),
-            Self::Ack(_) => return Ok(()),
-        };
-        validate_package(package)
-    }
-}
-
-fn validate_package(package: &PackageName) -> Result<(), ProtocolError> {
-    if package.as_str() == ALLOWED_PACKAGE {
-        Ok(())
-    } else {
-        Err(ProtocolError::PackageNotAllowed(package.to_string()))
+        let size = serde_json::to_vec(self)?.len();
+        if size < crate::protocol::MAX_FRAME_SIZE {
+            Ok(())
+        } else {
+            Err(ProtocolError::FrameTooLarge { size })
+        }
     }
 }

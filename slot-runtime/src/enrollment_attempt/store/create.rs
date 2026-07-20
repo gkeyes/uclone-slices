@@ -4,7 +4,6 @@ use std::os::unix::fs::PermissionsExt;
 
 use crate::atomic_file::{ensure_directory, sync_directory};
 use crate::domain::{GateSnapshot, PackageKey, UserId};
-use crate::protocol::ALLOWED_PACKAGE;
 
 use super::super::super::EnrollmentAttemptError;
 use super::super::super::model::{EnrollmentAttempt, EnrollmentAttemptPhase};
@@ -122,8 +121,7 @@ impl EnrollmentAttemptStore {
             let key = crate::domain::PackageName::parse(name).map_err(|_| {
                 EnrollmentAttemptError::Corrupt(format!("unexpected attempt package {name}"))
             })?;
-            if name != ALLOWED_PACKAGE
-                || !entry
+            if !entry
                     .file_type()
                     .map_err(|source| {
                         EnrollmentAttemptError::io("inspect attempt package", &entry.path(), source)

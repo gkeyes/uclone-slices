@@ -22,6 +22,7 @@ fn publishes_preview_only_after_two_domain_verification_and_sync() {
         uclone_slot_runtime::materializer::ArtifactState::ReadyOnly
     );
     assert_eq!(backend.calls.last(), Some(&Call::Publish));
+    assert!(backend.calls.contains(&Call::Capacity));
     assert!(
         backend
             .calls

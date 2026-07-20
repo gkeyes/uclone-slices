@@ -44,14 +44,14 @@ public final class Main {
             case PROBE_DEVICE:
                 return JsonLine.device(bridge.probeDevice());
             case PROBE_PACKAGE:
-                return JsonLine.packageSnapshot(bridge.probePackage());
+                return JsonLine.packageSnapshot(bridge.probePackage(command.packageName()));
             case PROBE_GATE:
-                return JsonLine.gate(bridge.probeGate());
+                return JsonLine.gate(bridge.probeGate(command.packageName()));
             case SET_ENABLED:
-                bridge.setEnabled(command.enabledState());
+                bridge.setEnabled(command.packageName(), command.enabledState());
                 return JsonLine.ack(command.requestId());
             case SET_SUSPENDED:
-                bridge.setSuspended(command.suspended());
+                bridge.setSuspended(command.packageName(), command.suspended());
                 return JsonLine.ack(command.requestId());
             default:
                 return INTERNAL_ERROR;

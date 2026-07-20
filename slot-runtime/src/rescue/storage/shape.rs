@@ -4,6 +4,7 @@ use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as
 use std::path::Path;
 
 use super::{PACKAGES, RESCUE, STEPS, StorePaths};
+use crate::domain::PackageName;
 use crate::rescue::RescueError;
 
 const DIRECTORY_MODE: u32 = 0o700;
@@ -56,21 +57,25 @@ pub(super) fn validate_store(paths: &StorePaths) -> Result<(), RescueError> {
     validate_directory(&paths.root, paths.owner_uid)?;
     exact_directory(&paths.root, PACKAGES, paths.owner_uid)?;
     validate_directory(&paths.packages, paths.owner_uid)?;
-    let package_entries = bounded_entries(&paths.packages, 1)?;
-    if package_entries.is_empty() {
-        return Ok(());
+    let package_entries = bounded_entries(&paths.packages, 64)?;
+    for package in package_entries {
+        let name = package
+            .file_name()
+            .into_string()
+            .map_err(|_| unexpected(&paths.packages))?;
+        PackageName::parse(&name).map_err(|_| unexpected(&paths.packages))?;
+        validate_package(&package.path(), paths.owner_uid)?;
     }
-    let package = package_entries
-        .first()
-        .ok_or(RescueError::BoundExceeded("package artifacts"))?;
-    if package.file_name() != crate::protocol::ALLOWED_PACKAGE {
-        return Err(unexpected(&paths.packages));
-    }
-    validate_directory(&paths.package, paths.owner_uid)?;
-    exact_directory(&paths.package, RESCUE, paths.owner_uid)?;
-    validate_directory(&paths.rescue, paths.owner_uid)?;
-    exact_directory(&paths.rescue, STEPS, paths.owner_uid)?;
-    validate_directory(&paths.steps, paths.owner_uid)
+    Ok(())
+}
+
+fn validate_package(path: &Path, owner_uid: u32) -> Result<(), RescueError> {
+    validate_directory(path, owner_uid)?;
+    exact_directory(path, RESCUE, owner_uid)?;
+    let rescue = path.join(RESCUE);
+    validate_directory(&rescue, owner_uid)?;
+    exact_directory(&rescue, STEPS, owner_uid)?;
+    validate_directory(&rescue.join(STEPS), owner_uid)
 }
 
 pub(super) fn bounded_entries(path: &Path, maximum: usize) -> Result<Vec<DirEntry>, RescueError> {

@@ -117,6 +117,10 @@ impl RuntimeBackend for OrphanGateRuntime {
 }
 
 impl RecoveryBackend for OrphanGateRuntime {
+    fn leased_packages(&mut self) -> Result<Vec<PackageName>, PlatformError> {
+        Ok(Vec::new())
+    }
+
     fn emergency_gate_if_leased(
         &mut self,
         _package: &PackageName,

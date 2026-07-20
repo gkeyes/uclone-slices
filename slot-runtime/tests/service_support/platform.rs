@@ -1,9 +1,11 @@
 use uclone_slot_runtime::domain::{GateSnapshot, ManagedPackage, PackageKey, SlotView};
 use uclone_slot_runtime::reconcile::ReconcileOutcome;
 use uclone_slot_runtime::service::{
-    CapabilitySnapshot, EnrollmentPublicationError, PackageSnapshot, PackageState, RescueExecution,
-    ServiceError, ServicePlatform, SwitchExecution,
+    CapabilitySnapshot, EnrollmentPublicationError, ManagedAppInfo, PackageInspection,
+    PackageSnapshot, PackageState, RescueExecution, ServiceError, ServicePlatform, SlotInfo,
+    SwitchExecution,
 };
+use uclone_slot_runtime::slot_metadata::{SlotDisplayName, SlotSeedMode};
 
 use super::fixtures::{
     assert_key, base_inodes, managed_base, original_gate, preview_view, ready_base,
@@ -11,11 +13,48 @@ use super::fixtures::{
 use super::{Call, FailurePoint, FakePlatform};
 
 impl ServicePlatform for FakePlatform {
-    fn probe(&self, key: &PackageKey) -> Result<CapabilitySnapshot, ServiceError> {
-        assert_key(key);
+    fn probe(&self) -> Result<CapabilitySnapshot, ServiceError> {
         self.record(Call::Probe);
         self.fail(FailurePoint::Probe)?;
         Ok(CapabilitySnapshot::new(true, true, true))
+    }
+
+    fn inspect_package(&self, key: &PackageKey) -> Result<PackageInspection, ServiceError> {
+        self.inspect_fake(key)
+    }
+
+    fn list_managed_apps(&self) -> Result<Vec<ManagedAppInfo>, ServiceError> {
+        self.list_managed_fake()
+    }
+
+    fn list_slots(&self, key: &PackageKey) -> Result<Vec<SlotInfo>, ServiceError> {
+        self.list_slots_fake(key)
+    }
+
+    fn create_slot(
+        &mut self,
+        key: &PackageKey,
+        _: SlotDisplayName,
+        _: SlotSeedMode,
+    ) -> Result<SwitchExecution, ServiceError> {
+        self.create_fake(key)
+    }
+
+    fn rename_slot(
+        &mut self,
+        key: &PackageKey,
+        _: &uclone_slot_runtime::domain::SlotId,
+        _: SlotDisplayName,
+    ) -> Result<(), ServiceError> {
+        self.rename_fake(key)
+    }
+
+    fn delete_slot(
+        &mut self,
+        key: &PackageKey,
+        _: &uclone_slot_runtime::domain::SlotId,
+    ) -> Result<(), ServiceError> {
+        self.delete_fake(key)
     }
 
     fn package_state(&self, key: &PackageKey) -> Result<PackageState, ServiceError> {
@@ -141,7 +180,12 @@ impl ServicePlatform for FakePlatform {
         self.fail(FailurePoint::Contain)
     }
 
-    fn materialize_preview(&mut self, _: &ManagedPackage) -> Result<SlotView, ServiceError> {
+    fn materialize_slot(
+        &mut self,
+        _: &ManagedPackage,
+        _slot: &uclone_slot_runtime::domain::SlotId,
+        _seed_mode: uclone_slot_runtime::slot_metadata::SlotSeedMode,
+    ) -> Result<SlotView, ServiceError> {
         self.record(Call::Materialize);
         self.fail(FailurePoint::Materialize)?;
         let target = preview_view();
@@ -151,7 +195,7 @@ impl ServicePlatform for FakePlatform {
         self.state
             .replace(PackageState::Ready(Box::new(PackageSnapshot::new(
                 snapshot.managed().clone(),
-                Some(target.clone()),
+                vec![target.clone()],
                 snapshot.gate(),
             ))));
         Ok(target)
