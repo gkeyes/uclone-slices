@@ -15,10 +15,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.uclone.slots.preview.SlotsViewModel
 import com.uclone.slots.preview.model.Destination
+import com.uclone.slots.preview.model.InstalledApp
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SlotsManagerApp(viewModel: SlotsViewModel) {
+    var enrollmentCandidate by remember { mutableStateOf<InstalledApp?>(null) }
     val destination = viewModel.destination
     val snackbar = remember { SnackbarHostState() }
     val topLevel = destination in setOf(Destination.Apps, Destination.Tasks, Destination.Settings)
@@ -73,7 +75,7 @@ fun SlotsManagerApp(viewModel: SlotsViewModel) {
                 Destination.AddApp -> AddAppScreen(
                     viewModel.installedApps,
                     viewModel.operation == null,
-                    viewModel::inspectAndEnroll,
+                    { enrollmentCandidate = it },
                 )
                 Destination.Runtime -> RuntimeScreen(viewModel.runtimeHealth, viewModel::refreshRuntime)
                 Destination.Tasks -> TasksScreen(viewModel.taskHistory)
@@ -95,6 +97,35 @@ fun SlotsManagerApp(viewModel: SlotsViewModel) {
         }
     }
     viewModel.operation?.let { OperationDialog(it.title, it.phase, it.resultUnknown) }
+    enrollmentCandidate?.let { app ->
+        EnrollmentWarningDialog(
+            app = app,
+            onDismiss = { enrollmentCandidate = null },
+            onConfirm = {
+                enrollmentCandidate = null
+                viewModel.inspectAndEnroll(app)
+            },
+        )
+    }
+}
+
+@Composable
+private fun EnrollmentWarningDialog(
+    app: InstalledApp,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("管理 ${app.label} 的数据空间？") },
+        text = {
+            Text(
+                "Runtime 会先检查兼容性。首版只隔离 CE/DE 文件数据；Keystore、系统账户、权限、通知和外部存储仍然共享。",
+            )
+        },
+        confirmButton = { Button(onClick = onConfirm) { Text("检查并登记") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable

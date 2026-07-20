@@ -37,8 +37,8 @@ fun DetailScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { AppHeader(packageName, label, status) }
-        if (status?.requiresRecovery == true) {
-            item { RecoveryCard(onReconcile, onRescue) }
+        if (status == null || status.requiresRecovery) {
+            item { RecoveryCard(status == null, onReconcile, onRescue) }
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -157,12 +157,15 @@ private fun SlotCard(
 }
 
 @Composable
-private fun RecoveryCard(onReconcile: () -> Unit, onRescue: () -> Unit) {
+private fun RecoveryCard(runtimeOffline: Boolean, onReconcile: () -> Unit, onRescue: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.padding(18.dp)) {
             Text("App 已保持禁用", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
             Spacer(Modifier.height(6.dp))
-            Text("Runtime 无法证明当前数据视图。重新检查失败时，请安全退回 Base。")
+            Text(
+                if (runtimeOffline) "Runtime 当前不可用。独立 Base 救援仍可执行。"
+                else "Runtime 无法证明当前数据视图。重新检查失败时，请安全退回 Base。",
+            )
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(onClick = onReconcile) { Text("重新检查") }

@@ -1,5 +1,7 @@
 package com.uclone.slots.preview
 
+import android.app.Application
+import android.content.Intent
 import com.uclone.slots.preview.model.RuntimeHealth
 import com.uclone.slots.preview.runtime.RuntimePayload
 import com.uclone.slots.preview.runtime.RuntimeResult
@@ -33,3 +35,12 @@ internal object UiMappings {
 
 internal inline fun <reified T : RuntimePayload> RuntimeResult.payloadAs(): T? =
     (this as? RuntimeResult.Success)?.payload as? T
+
+internal fun launchInstalledApp(application: Application, packageName: String): Boolean {
+    val intent = application.packageManager
+        .getLaunchIntentForPackage(packageName)
+        ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ?: return false
+    application.startActivity(intent)
+    return true
+}

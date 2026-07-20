@@ -1,7 +1,6 @@
 package com.uclone.slots.preview
 
 import android.app.Application
-import android.content.Intent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -57,7 +56,7 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
             is RuntimeResult.Rejected -> UiMappings.healthForError(result.code)
             is RuntimeResult.Unknown -> RuntimeHealth.DaemonOffline
         }
-        if (runtimeHealth == RuntimeHealth.Ready) refreshManagedInternal()
+        if (runtimeHealth == RuntimeHealth.Ready) refreshManagedInternal() else restoreCachedManaged()
     }
 
     fun openDetail(packageName: String) = launchOperation("读取数据空间") {
@@ -159,16 +158,21 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         }
         loadPackage(packageName)
         record("已切换到 ${selectedSlots.firstOrNull { it.id == slotId }?.displayName ?: slotId}")
-        if (launchApp && status.enabled && !status.suspended) launchPackage(packageName)
+        if (launchApp && status.enabled && !status.suspended && !launchInstalledApp(getApplication(), packageName)) {
+            message = "没有找到可启动入口"
+        }
         if (launchApp && (!status.enabled || status.suspended)) {
             message = "槽已切换，但 App 原本不可启动，已保留原状态"
         }
     }
 
-    private suspend fun loadPackage(packageName: String) {
+    private suspend fun loadPackage(packageName: String, recoverUnknown: Boolean = true) {
         val status = runtime.status(packageName).payloadAs<RuntimePayload.Status>()?.value
         val slots = runtime.listSlots(packageName).payloadAs<RuntimePayload.Slots>()?.rows
-        if (status == null || slots == null) return unknown(packageName)
+        if (status == null || slots == null) {
+            if (recoverUnknown) unknown(packageName)
+            return
+        }
         selectedStatus = status
         selectedSlots = slots
         if (status.requiresRecovery) runtimeHealth = RuntimeHealth.RecoveryRequired
@@ -181,8 +185,15 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refreshManagedInternal() {
         val rows = runtime.listManaged().payloadAs<RuntimePayload.ManagedApps>()?.rows ?: return
+        apps.rememberManaged(rows.map { it.packageName })
         managedApps = rows.map {
             ManagedApp(it.packageName, apps.label(it.packageName), it.activeSlot, it.lifecycle)
+        }
+    }
+
+    private fun restoreCachedManaged() {
+        managedApps = apps.cachedManaged().map {
+            ManagedApp(it, apps.label(it), "unknown", "recovery_required")
         }
     }
 
@@ -191,13 +202,6 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
             managedApps.none { it.packageName == app.packageName }
         }
         withContext(Dispatchers.Main) { installedApps = rows }
-    }
-
-    private fun launchPackage(packageName: String) {
-        val intent = getApplication<Application>().packageManager
-            .getLaunchIntentForPackage(packageName)
-            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (intent == null) message = "没有找到可启动入口" else getApplication<Application>().startActivity(intent)
     }
 
     private fun launchOperation(
@@ -229,7 +233,7 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun unknown(packageName: String) {
         operation = operation?.copy(phase = "结果未知，正在重新确认", resultUnknown = true)
         runtime.reconcile(packageName)
-        loadPackage(packageName)
+        loadPackage(packageName, recoverUnknown = false)
         message = "客户端未取得确定结果，已重新读取 Runtime 状态"
     }
 

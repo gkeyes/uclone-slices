@@ -32,8 +32,35 @@ class InstalledAppsRepository(private val context: Context) {
         packageName
     }
 
+    fun rememberManaged(packageNames: Collection<String>) {
+        val safe = packageNames.asSequence().filter(::isSafePackage).take(MAX_MANAGED).toSet()
+        preferences.edit().putStringSet(MANAGED_PACKAGES, safe).apply()
+    }
+
+    fun cachedManaged(): List<String> = preferences
+        .getStringSet(MANAGED_PACKAGES, emptySet())
+        .orEmpty()
+        .asSequence()
+        .filter(::isSafePackage)
+        .take(MAX_MANAGED)
+        .sorted()
+        .toList()
+
     private fun isSystem(info: ApplicationInfo): Boolean {
         val mask = ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
         return info.flags and mask != 0
+    }
+
+    private fun isSafePackage(value: String): Boolean =
+        value.length <= 255 && PACKAGE_PATTERN.matches(value)
+
+    private val preferences
+        get() = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+
+    private companion object {
+        const val PREFERENCES = "managed-app-cache"
+        const val MANAGED_PACKAGES = "packages"
+        const val MAX_MANAGED = 128
+        val PACKAGE_PATTERN = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
     }
 }
