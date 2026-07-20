@@ -2,6 +2,8 @@
 .idea/
 .kotlin/
 build/
+target/
+slot-runtime/target-profiles/
 local.properties
 *.iml
 captures/

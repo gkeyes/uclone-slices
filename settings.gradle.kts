@@ -17,3 +17,5 @@ dependencyResolutionManagement {
 rootProject.name = "UCloneRestore"
 include(":app")
 include(":launcher-module")
+include(":slot-probe")
+include(":slot-preview-controller")

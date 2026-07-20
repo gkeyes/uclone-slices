@@ -1,5 +1,14 @@
 # UClone Restore / 分身登录态恢复器
 
+> **Slices Preview 分支**：本分支在 UClone 旁路开发 user0 内的常驻 CE+DE 数据槽，
+> 不是 `0.3.0` 的稳定版升级，也不会用挂载逻辑替换现有备份/恢复流程。Preview
+> 当前固定 profile 已验证专用测试包 `com.uclone.slotprobe` 和实验目标
+> `com.asksky.fitness`；通用多 App Registry、重启/解锁恢复和生命周期门禁完成前，
+> 仍不得用于重要数据 App。技术边界与已验证证据见
+> [`docs/SLICES_PREVIEW_DEVICE_FEASIBILITY.md`](docs/SLICES_PREVIEW_DEVICE_FEASIBILITY.md)。
+> Preview 尚未开放受管 App 更新事务，设备测试期间必须关闭目标 App 自动更新；
+> 任何版本、签名、UID 或 PackageManager inode 漂移都按失败关闭处理。
+
 UClone Restore 是一个面向 Android Root / HyperOS 多用户环境的本地数据恢复工具。它的核心目标是：在主系统 `user0` 中运行，通过 root 读取或写入分身系统 `user10` 的 App 数据，让同一台设备上的主系统和分身系统可以按需切换、恢复、推送 App 状态。
 
 English documentation: [README.en.md](README.en.md)

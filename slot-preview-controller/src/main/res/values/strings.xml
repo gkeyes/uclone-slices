@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">UClone Slots Preview</string>
+    <string name="target_package">固定目标：%1$s</string>
+    <string name="target_confirmation">仅操作固定目标 %1$s，继续吗？</string>
+    <string name="idle_output">尚未执行命令。</string>
+</resources>

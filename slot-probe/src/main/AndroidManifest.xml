@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <permission
+        android:name="com.uclone.slotprobe.permission.CONTROL"
+        android:protectionLevel="signature" />
+
+    <uses-permission android:name="com.uclone.slotprobe.permission.CONTROL" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@drawable/ic_slot_probe"
+        android:label="UClone Slot Probe"
+        android:supportsRtl="true">
+        <activity
+            android:name=".ManualQaActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name=".SlotProbeProvider"
+            android:authorities="com.uclone.slotprobe"
+            android:exported="true"
+            android:permission="com.uclone.slotprobe.permission.CONTROL"
+            android:readPermission="com.uclone.slotprobe.permission.CONTROL"
+            android:writePermission="com.uclone.slotprobe.permission.CONTROL" />
+        <provider
+            android:name=".RemoteSlotProbeProvider"
+            android:authorities="com.uclone.slotprobe.remote"
+            android:exported="true"
+            android:permission="com.uclone.slotprobe.permission.CONTROL"
+            android:process=":remote"
+            android:readPermission="com.uclone.slotprobe.permission.CONTROL"
+            android:writePermission="com.uclone.slotprobe.permission.CONTROL" />
+
+        <service
+            android:name=".WorkerProbeService"
+            android:exported="false"
+            android:process=":worker" />
+        <service
+            android:name=".ProbeJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:process=":worker" />
+
+        <receiver
+            android:name=".ProbeAlarmReceiver"
+            android:exported="false"
+            android:process=":worker" />
+        <receiver
+            android:name=".DirectBootProbeReceiver"
+            android:directBootAware="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

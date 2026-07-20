@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="probe_not_run">No probe command has run.</string>
+    <string name="probe_running">Running %1$s…</string>
+    <string name="probe_failed">%1$s: %2$s</string>
+</resources>

@@ -1,0 +1,10 @@
+cognitive-complexity-threshold = 25
+type-complexity-threshold = 250
+too-many-arguments-threshold = 6
+too-many-lines-threshold = 100
+msrv = "1.95"
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true

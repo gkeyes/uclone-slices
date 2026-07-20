@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:hasCode="true"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="Slot Bridge"
+        android:supportsRtl="false" />
+</manifest>

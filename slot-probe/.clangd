@@ -1,0 +1,7 @@
+CompileFlags:
+  # Keep editor diagnostics portable; Gradle/ndk-build supplies the real NDK
+  # compiler and sysroot for the authoritative Android build.
+  Compiler: clang++
+  Add:
+    - -std=c++20
+    - --target=aarch64-linux-android29

@@ -1,0 +1,2 @@
+[target.aarch64-linux-android]
+linker = "/usr/local/share/android-commandlinetools/ndk/29.0.14206865/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android29-clang"

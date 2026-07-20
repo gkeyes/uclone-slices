@@ -1,0 +1,5 @@
+package = "com.asksky.fitness"
+user = 0
+base_slot = "base"
+preview_slot = "preview"
+module = "uclone-slices-preview"
