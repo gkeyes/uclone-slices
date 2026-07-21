@@ -1,216 +1,94 @@
-# UClone Restore
+# UClone Slices Preview
 
-Android root tool for moving app data between the Xiaomi/HyperOS main user and clone user.
+UClone Slices Preview is an experimental multi-slot data system for rooted Android devices. One installed APK can keep a native Base slot and additional persistent CE/DE slots. Switching changes the mounted data view instead of repeatedly restoring a full backup.
 
-Current release line: `0.3.0`
+> Status: Preview. The mount path and a Fitness A/B proof of concept have been validated on Android 16, HyperOS 3, and KernelSU. The first generic multi-app runtime and manager APK are implemented, but cross-device, reboot, and full package-lifecycle validation are not complete. Do not use this project with important app data.
 
-- Main app: `0.3.0`
-- Launcher module: `0.3.0`
-
-On Android 15 and newer, background runtime for `dataSync` foreground services is time-limited. Starting with `0.3.0`, explicit user actions coming from the launcher module or launcher shortcuts use the declared `specialUse` foreground-service type, so a cold UClone process is not rejected before its progress notification appears after the `dataSync` budget has been exhausted. Tasks submitted from the visible main app continue to use `dataSync`. Both the main app and launcher module must be upgraded from `0.2.0` for this fix to take effect.
-- Tested target: rooted Xiaomi/HyperOS multi-user environment, usually `user0` + `user10`
-
-## What It Does
-
-UClone Restore is built for one practical workflow: keep two Android users on the same device and move an app's usable state between them.
-
-Supported directions in the current release:
-
-- Pull clone data from `user10` and restore it to main user `user0`.
-- Push main user `user0` data to clone user `user10`.
-- Create active snapshots and restore from the latest available snapshot.
-- Create rollback backups before destructive restore or switch operations.
-- Restore clone rollback data when a clone-side push needs to be undone.
-- Optionally copy runtime permissions and AppOps where Android allows shell-level restoration.
-- Install the same existing APK for the other Android user, optionally followed by permission or data migration.
-
-The app is not a cloud sync tool. It works locally on the rooted device and stores data under `/data/adb/uclone`.
+Chinese: [README.md](README.md)
 
 ## Architecture
 
-Two APKs are published:
-
-- `app-release.apk`: the main UClone Restore app.
-- `launcher-module-release.apk`: an LSPosed module that adds a UClone entry to supported launcher long-press menus.
-
-The module is only an entry point. Real root operations, backup, restore, rollback, task logging, and notifications are handled by the main UClone Restore app.
-
-Recommended module scope:
-
-- Enable the module for `com.miui.home` only.
-- Do not add target apps to the LSPosed scope. Target apps are selected inside the module settings page.
-
-## Requirements
-
-- Android device with root, tested with KernelSU/KernelSU Next style root.
-- Xiaomi/HyperOS clone user available as `user10`.
-- UClone Restore installed in main user `user0`.
-- Main app and launcher module installed from the same fixed-signed release.
-- For launcher module control:
-  - Enable "allow module control" in UClone Restore settings.
-  - Enable the LSPosed module for `com.miui.home`.
-  - Reboot or restart the launcher after module activation.
-
-## User10 Unlock Behavior
-
-CE data under `/data/user/10/<pkg>` is only reliable after the clone user is `RUNNING_UNLOCKED`.
-
-UClone can attempt a silent unlock flow when configured:
-
-1. Start clone user when needed.
-2. Verify the configured PIN/password with `cmd lock_settings verify --old ... --user 10`.
-3. Wait until `am get-started-user-state 10` reports `RUNNING_UNLOCKED`.
-4. Run the requested data operation.
-5. Stop clone user after the task when that setting is enabled.
-
-The credential is encrypted at rest with an Android Keystore AES-GCM key and is sent to the root shell over standard input, not embedded in `su -c` arguments or logs.
-
-If the clone user cannot be unlocked, CE snapshot or restore operations are blocked rather than silently using incomplete data.
-
-## Storage Layout
-
-All paths are on the Android device.
-
-Default root directory:
-
 ```text
-/data/adb/uclone
+UClone Slots Preview APK
+  └── app selection, slot management, health, and recovery UI
+
+KernelSU Runtime
+  ├── ucloned: root transaction and mount service
+  ├── slotctl: constrained management and rescue client
+  └── boot hooks: containment, recovery, and reconciliation
+
+Optional Launcher / LSPosed entry
+  └── shortcut routing only; no root or data operations
 ```
 
-Important subdirectories:
+The KernelSU Runtime is required. LSPosed is optional.
 
-```text
-/data/adb/uclone/snapshots/<pkg>/active
-/data/adb/uclone/snapshots/<pkg>/history/<timestamp>
-/data/adb/uclone/rollback/<pkg>/<timestamp>
-/data/adb/uclone/clone_rollback/<pkg>/latest
-/data/adb/uclone/logs
-/data/adb/uclone/tmp
-```
+## Validated foundation
 
-Snapshots are not stored in `/sdcard/Documents` by default because they contain private app login-state data.
+- A Global Propagated Bind backend synchronized CE/DE, `/data/data`, `/data_mirror`, Zygote, and new app-process views on the target HyperOS device.
+- Base remains the native Android data directory and inode; it is never moved or overwritten.
+- Extra slots live in the matching user0 CE and DE encryption domains.
+- A switch transaction covers the Journal, app execution gate, process quiescence, CE/DE mounts, view verification, Registry commit, and exact gate restoration.
+- Unknown identity, transaction, or view state fails closed: the target app remains disabled and enters `RecoveryRequired`.
+- The Preview does not modify system partitions, use OverlayFS, or add permissive SELinux rules.
 
-## Data Scope
+See [the device feasibility report](docs/SLICES_PREVIEW_DEVICE_FEASIBILITY.md) for the current evidence.
 
-Default included data:
+## Current scope
 
-- CE app data: `/data/user/<user>/<pkg>`
-- DE app data: `/data/user_de/<user>/<pkg>`
-- External app data: `/data/media/<user>/Android/data/<pkg>`
+The first phase supports only:
 
-Optional data:
+- user0;
+- ordinary third-party apps;
+- paired CE + DE switching;
+- one active slot at a time;
+- SELinux Enforcing;
+- devices whose KernelSU mount-master topology passes the runtime probe.
 
-- `/data/media/<user>/Android/media/<pkg>`
-- `/data/media/<user>/Android/obb/<pkg>`
-- Runtime permissions and AppOps
+File slots do not fully isolate Android Keystore, AccountManager, permissions, AppOps, notifications, jobs/alarms, external storage, or server-side device state.
 
-Default exclusions:
+Managed-app updates, clear-data, uninstall/reinstall, and OTA flows require lifecycle guards. Automatic updates should remain disabled for Preview targets until those paths are validated.
 
-- `cache`
-- `code_cache`
+## Repository layout
 
-Always excluded:
+| Path | Purpose |
+| --- | --- |
+| `slot-runtime/` | Rust runtime, transactions, Registry, Journal, and CLI |
+| `slot-manager-app/` | Generic Kotlin + Jetpack Compose manager APK |
+| `slot-bridge/` | PackageManager identity and state bridge |
+| `slot-fsprobe/` | Native filesystem, inode, and mount-view probe |
+| `slot-kernelsu/` | KernelSU runtime module and independent rescue scripts |
+| `slot-probe/` | Dedicated CE/DE and multi-process regression app |
+| `slot-preview-controller/` | Fixed-target diagnostic controller retained for regression |
+| `docs/` | design notes, device evidence, and safety boundaries |
+| `app/`, `launcher-module/` | upstream UClone Restore and optional shortcut baseline |
 
-- `/data/misc/keystore`
+## Build and validation
 
-Apps that depend on Android Keystore-backed secrets may still require a new login even when file data restores correctly.
+This repository combines Android, Rust, C, and KernelSU shell components. Release artifacts must come from one source commit and pass component tests, strict Clippy, Android lint, ELF/signing checks, and KernelSU ZIP content review.
 
-## Main Workflows
-
-### Switch To Clone State
-
-Copies the latest clone-side app state to main user.
-
-High-level flow:
-
-1. Ensure clone user is unlocked when CE data is required.
-2. Capture clone-side data into a temporary operation source.
-3. Back up current main-user app data as a passive rollback.
-4. Restore clone data to main user.
-5. Fix UID/GID ownership and SELinux context.
-6. Record a switch marker so the next action can restore the previous main state.
-
-### Restore Main State
-
-Uses the switch marker rollback to restore the main user's previous state.
-
-### Push Main To Clone
-
-Copies main-user app data into clone user.
-
-High-level flow:
-
-1. Ensure clone user is unlocked when CE data is required.
-2. Back up current clone-user app data as clone rollback.
-3. Restore main-user data into clone user.
-4. Fix UID/GID ownership and SELinux context.
-
-### Manual Backups
-
-Manual active snapshots and passive rollback backups are shown separately in the app's data pages. Passive rollback backups are created automatically before restore/switch/push operations.
-
-## Launcher Module
-
-The launcher module adds a UClone action to supported launcher long-press menus.
-
-Design constraints:
-
-- Hook layer never performs root operations.
-- Hook layer queries `ModuleRelayProvider` for menu state.
-- Click actions use a module-owned foreground-service `PendingIntent` returned by `ModuleRelayProvider`.
-- The `PendingIntent` starts UClone's `ExternalActionService` directly; legacy relay components are not used for new tokens.
-- UClone's external service is protected by the signature permission `com.uclone.restore.permission.CONTROL`.
-
-This keeps Launcher, module, and UClone responsibilities separated.
-
-## Install
-
-Install both APKs from the same release:
+Typical local checks:
 
 ```bash
-adb install -r app-release.apk
-adb install -r launcher-module-release.apk
+cargo test --manifest-path slot-runtime/Cargo.toml
+cargo clippy --manifest-path slot-runtime/Cargo.toml --all-targets --all-features -- -D warnings
+./gradlew :slot-manager-app:testDebugUnitTest :slot-manager-app:lintDebug :slot-manager-app:assembleDebug
 ```
 
-If moving from an old debug-signed build to the fixed-signed release, Android may require a one-time uninstall because debug and release signatures differ.
+The KernelSU ZIP is produced by the fixed-path packaging workflow. The source skeleton itself is not an installable release artifact.
 
-## Build
+## Safety contract
 
-Local debug build:
+The only runnable terminal states are:
 
-```bash
-gradle --no-daemon :app:assembleDebug
+```text
+complete Base
+complete target slot
+disabled app in RecoveryRequired
 ```
 
-Release builds are produced by GitHub Actions on every push to `main`.
+An unknown state must never cause the target app to be enabled or launched automatically. Reboots, real-app enrollment, and module installation require a passing device probe, a verified rescue path, and explicit user authorization.
 
-Release signing uses repository secrets:
+## Repository role
 
-- `RELEASE_KEYSTORE_BASE64`
-- `RELEASE_STORE_PASSWORD`
-- `RELEASE_KEY_ALIAS`
-- `RELEASE_KEY_PASSWORD`
-
-The CI uploads:
-
-- `uclone-restore-release-apk`
-- `uclone-launcher-module-release-apk`
-
-## Safety Notes
-
-- Every core command runs through `su -c`.
-- Root command stdout, stderr, and exit code are logged.
-- Restore operations back up the target user's current data before overwriting it.
-- Delete/reset operations should be treated as destructive.
-- Do not manually delete Android data directories unless you have a verified rollback path.
-
-## Known Limits
-
-- HyperOS and Android multi-user behavior varies by device and ROM.
-- Permission/AppOps restoration is best-effort; some special access states require manual system settings.
-- Android Keystore-backed app secrets cannot be cloned by file copy.
-- The launcher long-press hook currently targets supported MIUI/HyperOS launcher internals and may need adjustment after launcher updates.
-
-## Figma MVP Draft
-
-https://www.figma.com/design/bVBjSk3xsciEOkTSXbHHNV
+This repository develops UClone Slices Preview independently. It is not a stable UClone Restore `0.3.x` upgrade. Once validated, the APK experience may become UClone's “Data Spaces” feature while the root runtime remains a separate KernelSU component.
