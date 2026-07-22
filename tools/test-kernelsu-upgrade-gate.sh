@@ -84,7 +84,7 @@ case "${1:-}" in
     *) exit 2 ;;
 esac
 EOF
-            chmod 0700 "$staging/prepare-upgrade.sh"
+            chmod 0600 "$staging/prepare-upgrade.sh"
             ;;
         no) ;;
         *) fail "unknown proof fixture $proof" ;;
@@ -109,6 +109,7 @@ EOF
         -e "s|^RUNTIME_ROOT=.*|RUNTIME_ROOT=$runtime|" \
         -e "s|^INSTALLED_MODULE=.*|INSTALLED_MODULE=$installed|" \
         -e "s|^TOYBOX_BIN=.*|TOYBOX_BIN=$case_root/toybox|" \
+        -e 's|^SYSTEM_SHELL=.*|SYSTEM_SHELL=/bin/sh|' \
         "$SOURCE" >"$case_root/customize.sh"
     set +e
     MODPATH=$staging /bin/sh -c '

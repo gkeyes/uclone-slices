@@ -3,6 +3,7 @@
 RUNTIME_ROOT=/data/adb/uclone-slices-preview
 INSTALLED_MODULE=/data/adb/modules/uclone-slices-preview
 TOYBOX_BIN=/system/bin/toybox
+SYSTEM_SHELL=/system/bin/sh
 UPGRADE_REFUSAL=
 UPGRADE_APP_COUNT=0
 UPGRADE_PROOF_USED=0
@@ -68,7 +69,7 @@ safe_installed_slotctl() {
 
 safe_upgrade_proof() {
     binary=$MODPATH/prepare-upgrade.sh
-    [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || return 1
+    [ -f "$binary" ] && [ ! -L "$binary" ] || return 1
     owner="$($TOYBOX_BIN stat -c '%u' "$binary" 2>/dev/null)" || return 1
     [ "$owner" = 0 ] || return 1
     mode="$($TOYBOX_BIN stat -c '%a' "$binary" 2>/dev/null)" || return 1
@@ -78,7 +79,7 @@ safe_upgrade_proof() {
 
 read_offline_upgrade_proof() {
     safe_upgrade_proof || return 1
-    proof_count="$($TOYBOX_BIN timeout -s 9 30 "$MODPATH/prepare-upgrade.sh" --verify 2>/dev/null)" || return 1
+    proof_count="$($TOYBOX_BIN timeout -s 9 30 "$SYSTEM_SHELL" "$MODPATH/prepare-upgrade.sh" --verify 2>/dev/null)" || return 1
     case "$proof_count" in *[!0-9]*|'') return 1 ;; esac
     [ "$proof_count" -ge 1 ] && [ "$proof_count" -le 64 ] || return 1
     UPGRADE_APP_COUNT=$proof_count
@@ -167,6 +168,6 @@ do
 done
 
 if [ "$UPGRADE_PROOF_USED" -eq 1 ]; then
-    "$TOYBOX_BIN" timeout -s 9 30 "$MODPATH/prepare-upgrade.sh" --consume >/dev/null 2>&1 || \
+    "$TOYBOX_BIN" timeout -s 9 30 "$SYSTEM_SHELL" "$MODPATH/prepare-upgrade.sh" --consume >/dev/null 2>&1 || \
         abort "UClone Slots could not consume the one-time upgrade proof"
 fi
