@@ -39,6 +39,7 @@ impl<P: ServicePlatform> PreviewService<P> {
     pub(super) fn enroll_command(
         &mut self,
         package: &PackageName,
+        accept_direct_boot_conditional: bool,
     ) -> Result<ResponsePayload, ServiceError> {
         let key = validation::package_key(package);
         match self.platform.package_state(&key)? {
@@ -49,6 +50,18 @@ impl<P: ServicePlatform> PreviewService<P> {
                 return Ok(enroll_ack());
             }
         }
+        let inspection = self.platform.inspect_package(&key)?;
+        match inspection.compatibility().support_level() {
+            crate::domain::PackageSupportLevel::Supported => {}
+            crate::domain::PackageSupportLevel::DirectBootConditional
+                if accept_direct_boot_conditional => {}
+            crate::domain::PackageSupportLevel::DirectBootConditional => {
+                return Err(ServiceError::DirectBootConfirmationRequired);
+            }
+            crate::domain::PackageSupportLevel::Blocked => {
+                return Err(ServiceError::PackageNotAllowed);
+            }
+        }
         let gate = self.platform.begin_enrollment_attempt(&key)?;
         if let Err(cause) = self.platform.hold_gate(&key) {
             return Err(self.abort_unpublished_enrollment(&key, gate, cause));
@@ -56,7 +69,10 @@ impl<P: ServicePlatform> PreviewService<P> {
         if let Err(cause) = self.platform.quiesce(&key) {
             return Err(self.abort_unpublished_enrollment(&key, gate, cause));
         }
-        let managed = match self.platform.enroll_atomically(&key) {
+        let managed = match self
+            .platform
+            .enroll_atomically(&key, accept_direct_boot_conditional)
+        {
             Ok(managed) => managed,
             Err(EnrollmentPublicationError::Unpublished(cause)) => {
                 return Err(self.abort_unpublished_enrollment(&key, gate, cause));

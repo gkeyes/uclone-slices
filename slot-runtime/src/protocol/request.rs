@@ -63,6 +63,8 @@ pub enum Command {
     EnrollPackage {
         #[doc = "Installed Android package selected by `PackageManager`."]
         package: PackageName,
+        #[doc = "Explicit user acceptance for unlocked-only Direct Boot support."]
+        accept_direct_boot_conditional: bool,
     },
     #[doc = "Read one package's committed view and lifecycle status."]
     StatusPackage {

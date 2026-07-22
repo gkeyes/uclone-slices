@@ -78,8 +78,19 @@ pub(super) fn load<Q: PackageProbe>(
     let observation = probe
         .observe_package(key.package_name(), key.user_id())
         .map_err(|_| ServiceError::RecoveryRequired)?;
-    if !observation.compatibility().is_supported() {
+    let support_level = observation.compatibility().support_level();
+    if support_level == crate::domain::PackageSupportLevel::Blocked {
         return Ok(PackageState::Quarantined);
+    }
+    match stores
+        .compatibility_policy
+        .load(key.package_name())
+        .map_err(|_| ServiceError::RecoveryRequired)?
+    {
+        Some(policy) if policy.accepts(observation.identity(), support_level) => {}
+        Some(_) => return Ok(PackageState::Quarantined),
+        None if support_level == crate::domain::PackageSupportLevel::Supported => {}
+        None => return Ok(PackageState::Quarantined),
     }
     match PackageLifecycleGuard::assess(&managed, &observation) {
         GuardDecision::Quarantine => return Ok(PackageState::Quarantined),

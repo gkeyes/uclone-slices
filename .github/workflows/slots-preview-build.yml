@@ -136,7 +136,7 @@ jobs:
           unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" target-profile.sh | \
             grep -F "UCLONE_TARGET_PROFILE='generic'"
           unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" module.prop | \
-            grep -F 'version=0.2.0-preview.2'
+            grep -F 'version=0.2.0-preview.3'
           unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" bin/slotctl | \
             strings | grep -F 'rpc'
           echo "KERNELSU_PACKAGE_ROOT=$PACKAGE_ROOT" >> "$GITHUB_ENV"

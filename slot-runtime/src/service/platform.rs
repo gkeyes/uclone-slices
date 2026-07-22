@@ -89,6 +89,7 @@ pub trait ServicePlatform: core::fmt::Debug {
     fn enroll_atomically(
         &mut self,
         key: &PackageKey,
+        accept_direct_boot_conditional: bool,
     ) -> Result<ManagedPackage, EnrollmentPublicationError>;
 
     /// Proves the native immutable base view before an exact gate restoration.

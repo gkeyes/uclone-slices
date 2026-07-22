@@ -6,7 +6,7 @@ use crate::reconcile::RecoveryBackend;
 use crate::service::{CapabilitySnapshot, EnrollmentPublicationError, PackageState, ServiceError};
 
 use super::composition::ProductionPlatform;
-use super::enrollment::{capture_base, initial_managed, require_key};
+use super::enrollment::{candidate_managed, capture_base, initial_managed, require_key};
 use super::metadata::MetadataSource;
 
 impl<B, M, Q, T> ProductionPlatform<B, M, Q, T>
@@ -95,16 +95,49 @@ where
     pub(super) fn do_enroll(
         &mut self,
         key: &PackageKey,
+        accept_direct_boot_conditional: bool,
     ) -> Result<ManagedPackage, EnrollmentPublicationError> {
-        let package = self
-            .initial_package(key)
-            .map_err(EnrollmentPublicationError::Unpublished)?;
+        let (package, support_level) = {
+            let mut probe = self
+                .probe
+                .try_borrow_mut()
+                .map_err(|_| EnrollmentPublicationError::Unpublished(ServiceError::Busy))?;
+            let package = initial_managed(&mut *probe, key)
+                .map_err(EnrollmentPublicationError::Unpublished)?;
+            let candidate = probe
+                .inspect_package(key.package_name(), key.user_id())
+                .map_err(|_| EnrollmentPublicationError::Unpublished(ServiceError::Internal))?;
+            if candidate.identity() != package.identity()
+                || candidate.package_manager_inodes() != package.base_inodes()
+            {
+                return Err(EnrollmentPublicationError::Unpublished(
+                    ServiceError::RecoveryRequired,
+                ));
+            }
+            (package, candidate.compatibility().support_level())
+        };
+        if support_level == crate::domain::PackageSupportLevel::DirectBootConditional
+            && !accept_direct_boot_conditional
+        {
+            return Err(EnrollmentPublicationError::Unpublished(
+                ServiceError::DirectBootConfirmationRequired,
+            ));
+        }
         let base = capture_base(&mut self.materializer, &package)
             .map_err(EnrollmentPublicationError::Unpublished)?;
         let published: Result<ManagedPackage, ServiceError> = (|| {
             self.stores
                 .enrollment
                 .create(&package)
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            self.stores
+                .compatibility_policy
+                .create(
+                    key.package_name(),
+                    package.identity(),
+                    support_level,
+                    support_level == crate::domain::PackageSupportLevel::DirectBootConditional,
+                )
                 .map_err(|_| ServiceError::RecoveryRequired)?;
             self.stores
                 .catalog
@@ -198,7 +231,7 @@ where
             .probe
             .try_borrow_mut()
             .map_err(|_| ServiceError::Busy)?;
-        initial_managed(&mut *probe, key)
+        candidate_managed(&mut *probe, key)
     }
 
     fn ready_managed(&self, key: &PackageKey) -> Result<ManagedPackage, ServiceError> {

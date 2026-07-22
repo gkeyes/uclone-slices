@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest as _, Sha256};
 
 use crate::catalog::CatalogStore;
+use crate::compatibility_policy::CompatibilityPolicyStore;
 use crate::domain::{PackageKey, PackageName};
 use crate::enrollment::EnrollmentStore;
 use crate::enrollment_attempt::EnrollmentAttemptStore;
@@ -21,6 +22,7 @@ const MAX_ARTIFACT_BYTES: u64 = 1_048_576;
 #[derive(Debug, Clone)]
 pub(super) struct ProductionStores {
     pub(super) enrollment: EnrollmentStore,
+    pub(super) compatibility_policy: CompatibilityPolicyStore,
     pub(super) attempts: EnrollmentAttemptStore,
     pub(super) catalog: CatalogStore,
     pub(super) package_state: PackageStateStore,
@@ -41,6 +43,10 @@ impl ProductionStores {
         Ok(Self {
             enrollment: EnrollmentStore::new(RuntimeLayout::enrollment_root())
                 .map_err(|_| ServiceError::Internal)?,
+            compatibility_policy: CompatibilityPolicyStore::new(
+                RuntimeLayout::compatibility_policy_root(),
+            )
+            .map_err(|_| ServiceError::Internal)?,
             attempts: EnrollmentAttemptStore::fixed().map_err(|_| ServiceError::Internal)?,
             catalog: CatalogStore::new(RuntimeLayout::catalog_root())
                 .map_err(|_| ServiceError::Internal)?,

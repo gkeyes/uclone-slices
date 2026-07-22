@@ -9,6 +9,9 @@ pub enum ServiceError {
     /// A package outside the compiled allowlist reached the service boundary.
     #[error("package is not allowlisted")]
     PackageNotAllowed,
+    /// A Direct Boot package requires explicit unlocked-only Preview acceptance.
+    #[error("Direct Boot conditional support requires explicit confirmation")]
+    DirectBootConfirmationRequired,
     /// No enrollment or fixed slot exists for the command.
     #[error("service state was not found")]
     NotFound,
@@ -50,6 +53,7 @@ impl ServiceError {
         match self {
             Self::InvalidRequest => ErrorCode::InvalidRequest,
             Self::PackageNotAllowed => ErrorCode::PackageNotAllowed,
+            Self::DirectBootConfirmationRequired => ErrorCode::DirectBootConfirmationRequired,
             Self::NotFound => ErrorCode::NotFound,
             Self::Conflict => ErrorCode::Conflict,
             Self::RecoveryRequired => ErrorCode::RecoveryRequired,
@@ -66,6 +70,7 @@ impl ServiceError {
             Self::Quarantined | Self::RecoveryRequired => self,
             Self::InvalidRequest
             | Self::PackageNotAllowed
+            | Self::DirectBootConfirmationRequired
             | Self::NotFound
             | Self::Conflict
             | Self::Busy

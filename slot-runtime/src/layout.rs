@@ -64,6 +64,11 @@ impl RuntimeLayout {
         Self::root().join("enrollment")
     }
 
+    #[doc = "Returns the immutable compatibility acceptance root."]
+    pub fn compatibility_policy_root() -> PathBuf {
+        Self::root().join("compatibility-policy")
+    }
+
     #[doc = "Returns the root-level enrollment attempt/recovery anchor directory."]
     pub fn enrollment_attempt_root() -> PathBuf {
         Self::root().join("enrollment-attempts")

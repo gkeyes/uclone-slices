@@ -5,6 +5,8 @@ use crate::domain::{PackageName, SlotId};
 use crate::protocol::{ProtocolError, SCHEMA_VERSION};
 use crate::slot_metadata::{SlotDisplayName, SlotSeedMode};
 
+mod validation;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct WireRequest {
@@ -19,6 +21,8 @@ pub(super) struct WireRequest {
     display_name: Option<SlotDisplayName>,
     #[serde(default)]
     seed_mode: Option<SlotSeedMode>,
+    #[serde(default)]
+    accept_direct_boot_conditional: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -34,6 +38,8 @@ struct WireRequestOut<'a> {
     display_name: Option<&'a SlotDisplayName>,
     #[serde(skip_serializing_if = "Option::is_none")]
     seed_mode: Option<SlotSeedMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accept_direct_boot_conditional: Option<bool>,
 }
 
 pub(super) fn serialize<S: Serializer>(
@@ -41,7 +47,7 @@ pub(super) fn serialize<S: Serializer>(
     command: &Command,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    let (name, package, slot, display_name, seed_mode) = fields(command);
+    let (name, package, slot, display_name, seed_mode, direct_boot) = fields(command);
     WireRequestOut {
         schema_version: SCHEMA_VERSION,
         request_id,
@@ -50,6 +56,7 @@ pub(super) fn serialize<S: Serializer>(
         slot,
         display_name,
         seed_mode,
+        accept_direct_boot_conditional: direct_boot,
     }
     .serialize(serializer)
 }
@@ -60,15 +67,30 @@ type Fields<'a> = (
     Option<&'a SlotId>,
     Option<&'a SlotDisplayName>,
     Option<SlotSeedMode>,
+    Option<bool>,
 );
 
 const fn fields(command: &Command) -> Fields<'_> {
     match command {
-        Command::Probe => ("probe", None, None, None, None),
-        Command::InspectPackage { package } => ("inspect_package", Some(package), None, None, None),
-        Command::ListManagedApps => ("list_managed_apps", None, None, None, None),
-        Command::EnrollPackage { package } => ("enroll_package", Some(package), None, None, None),
-        Command::StatusPackage { package } => ("status_package", Some(package), None, None, None),
+        Command::Probe => ("probe", None, None, None, None, None),
+        Command::InspectPackage { package } => {
+            ("inspect_package", Some(package), None, None, None, None)
+        }
+        Command::ListManagedApps => ("list_managed_apps", None, None, None, None, None),
+        Command::EnrollPackage {
+            package,
+            accept_direct_boot_conditional,
+        } => (
+            "enroll_package",
+            Some(package),
+            None,
+            None,
+            None,
+            Some(*accept_direct_boot_conditional),
+        ),
+        Command::StatusPackage { package } => {
+            ("status_package", Some(package), None, None, None, None)
+        }
         Command::CreateSlot {
             package,
             display_name,
@@ -79,9 +101,12 @@ const fn fields(command: &Command) -> Fields<'_> {
             None,
             Some(display_name),
             Some(*seed_mode),
+            None,
         ),
-        Command::ListSlots { package } => ("list_slots", Some(package), None, None, None),
-        Command::Switch { package, slot } => ("switch", Some(package), Some(slot), None, None),
+        Command::ListSlots { package } => ("list_slots", Some(package), None, None, None, None),
+        Command::Switch { package, slot } => {
+            ("switch", Some(package), Some(slot), None, None, None)
+        }
         Command::RenameSlot {
             package,
             slot,
@@ -92,16 +117,21 @@ const fn fields(command: &Command) -> Fields<'_> {
             Some(slot),
             Some(display_name),
             None,
+            None,
         ),
         Command::DeleteSlot { package, slot } => {
-            ("delete_slot", Some(package), Some(slot), None, None)
+            ("delete_slot", Some(package), Some(slot), None, None, None)
         }
-        Command::Reconcile => ("reconcile", None, None, None, None),
+        Command::Reconcile => ("reconcile", None, None, None, None, None),
         Command::ReconcilePackage { package } => {
-            ("reconcile_package", Some(package), None, None, None)
+            ("reconcile_package", Some(package), None, None, None, None)
         }
-        Command::RetirePackage { package } => ("retire_package", Some(package), None, None, None),
-        Command::RescueToBase { package } => ("rescue_to_base", Some(package), None, None, None),
+        Command::RetirePackage { package } => {
+            ("retire_package", Some(package), None, None, None, None)
+        }
+        Command::RescueToBase { package } => {
+            ("rescue_to_base", Some(package), None, None, None, None)
+        }
     }
 }
 
@@ -110,15 +140,27 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
         return Err(ProtocolError::UnsupportedSchema(wire.schema_version));
     }
     let command = match wire.command.as_str() {
-        "probe" => no_fields(&wire, Command::Probe)?,
-        "inspect_package" => package_only(&wire, |package| Command::InspectPackage { package })?,
-        "list_managed_apps" => no_fields(&wire, Command::ListManagedApps)?,
-        "enroll_package" => package_only(&wire, |package| Command::EnrollPackage { package })?,
-        "status_package" => package_only(&wire, |package| Command::StatusPackage { package })?,
+        "probe" => validation::no_fields(&wire, Command::Probe)?,
+        "inspect_package" => {
+            validation::package_only(&wire, |package| Command::InspectPackage { package })?
+        }
+        "list_managed_apps" => validation::no_fields(&wire, Command::ListManagedApps)?,
+        "enroll_package" => {
+            validation::enroll_fields(&wire)?;
+            Command::EnrollPackage {
+                package: validation::required_package(&wire)?,
+                accept_direct_boot_conditional: wire
+                    .accept_direct_boot_conditional
+                    .unwrap_or(false),
+            }
+        }
+        "status_package" => {
+            validation::package_only(&wire, |package| Command::StatusPackage { package })?
+        }
         "create_slot" => {
-            reject(&wire, true, false, true, true)?;
+            validation::reject(&wire, true, false, true, true, false)?;
             Command::CreateSlot {
-                package: required_package(&wire)?,
+                package: validation::required_package(&wire)?,
                 display_name: wire
                     .display_name
                     .clone()
@@ -128,12 +170,14 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
                     .ok_or(ProtocolError::UnexpectedField("seed_mode"))?,
             }
         }
-        "list_slots" => package_only(&wire, |package| Command::ListSlots { package })?,
-        "switch" => package_slot(&wire, |package, slot| Command::Switch { package, slot })?,
+        "list_slots" => validation::package_only(&wire, |package| Command::ListSlots { package })?,
+        "switch" => {
+            validation::package_slot(&wire, |package, slot| Command::Switch { package, slot })?
+        }
         "rename_slot" => {
-            reject(&wire, true, true, true, false)?;
+            validation::reject(&wire, true, true, true, false, false)?;
             Command::RenameSlot {
-                package: required_package(&wire)?,
+                package: validation::required_package(&wire)?,
                 slot: wire.slot.clone().ok_or(ProtocolError::MissingSlot)?,
                 display_name: wire
                     .display_name
@@ -142,69 +186,19 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
             }
         }
         "delete_slot" => {
-            package_slot(&wire, |package, slot| Command::DeleteSlot { package, slot })?
+            validation::package_slot(&wire, |package, slot| Command::DeleteSlot { package, slot })?
         }
-        "reconcile" => no_fields(&wire, Command::Reconcile)?,
+        "reconcile" => validation::no_fields(&wire, Command::Reconcile)?,
         "reconcile_package" => {
-            package_only(&wire, |package| Command::ReconcilePackage { package })?
+            validation::package_only(&wire, |package| Command::ReconcilePackage { package })?
         }
-        "retire_package" => package_only(&wire, |package| Command::RetirePackage { package })?,
-        "rescue_to_base" => package_only(&wire, |package| Command::RescueToBase { package })?,
+        "retire_package" => {
+            validation::package_only(&wire, |package| Command::RetirePackage { package })?
+        }
+        "rescue_to_base" => {
+            validation::package_only(&wire, |package| Command::RescueToBase { package })?
+        }
         unknown => return Err(ProtocolError::UnknownCommand(unknown.to_owned())),
     };
     Request::new(wire.request_id, command)
-}
-
-fn no_fields(wire: &WireRequest, command: Command) -> Result<Command, ProtocolError> {
-    reject(wire, false, false, false, false)?;
-    Ok(command)
-}
-
-fn package_only(
-    wire: &WireRequest,
-    constructor: fn(PackageName) -> Command,
-) -> Result<Command, ProtocolError> {
-    reject(wire, true, false, false, false)?;
-    Ok(constructor(required_package(wire)?))
-}
-
-fn package_slot(
-    wire: &WireRequest,
-    constructor: fn(PackageName, SlotId) -> Command,
-) -> Result<Command, ProtocolError> {
-    reject(wire, true, true, false, false)?;
-    Ok(constructor(
-        required_package(wire)?,
-        wire.slot.clone().ok_or(ProtocolError::MissingSlot)?,
-    ))
-}
-
-fn required_package(wire: &WireRequest) -> Result<PackageName, ProtocolError> {
-    wire.package.clone().ok_or(ProtocolError::MissingPackage)
-}
-
-#[allow(
-    clippy::fn_params_excessive_bools,
-    reason = "four wire fields are validated independently against a fixed command schema"
-)]
-const fn reject(
-    wire: &WireRequest,
-    package: bool,
-    slot: bool,
-    display_name: bool,
-    seed_mode: bool,
-) -> Result<(), ProtocolError> {
-    if wire.package.is_some() != package {
-        return Err(ProtocolError::UnexpectedField("package"));
-    }
-    if wire.slot.is_some() != slot {
-        return Err(ProtocolError::UnexpectedField("slot"));
-    }
-    if wire.display_name.is_some() != display_name {
-        return Err(ProtocolError::UnexpectedField("display_name"));
-    }
-    if wire.seed_mode.is_some() != seed_mode {
-        return Err(ProtocolError::UnexpectedField("seed_mode"));
-    }
-    Ok(())
 }

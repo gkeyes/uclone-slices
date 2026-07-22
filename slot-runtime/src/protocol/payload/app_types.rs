@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{DataInodes, PackageName, SlotId};
+use crate::domain::{DataInodes, PackageName, PackageSupportLevel, SlotId};
 use crate::lifecycle::LifecycleState;
 use crate::service::{ManagedAppInfo, PackageInspection, SlotInfo};
 use crate::slot_metadata::{SlotDisplayName, SlotRecordState, SlotSeedMode};
@@ -20,6 +20,8 @@ pub struct PackageInspectionReport {
     code_path: String,
     base_inodes: DataInodes,
     compatible: bool,
+    support_level: PackageSupportLevel,
+    constraints: Vec<String>,
     system_app: bool,
     shared_uid: bool,
     direct_boot_aware: bool,
@@ -36,6 +38,8 @@ impl From<PackageInspection> for PackageInspectionReport {
             code_path: value.identity().code_path().to_owned(),
             base_inodes: value.base_inodes(),
             compatible: value.compatible(),
+            support_level: value.support_level(),
+            constraints: constraints(value.support_level()),
             system_app: compatibility.system_app(),
             shared_uid: compatibility.shared_uid(),
             direct_boot_aware: compatibility.direct_boot_aware(),
@@ -51,6 +55,21 @@ impl PackageInspectionReport {
     #[doc = "Returns whether the first Preview contract is satisfied."]
     pub const fn compatible(&self) -> bool {
         self.compatible
+    }
+    #[doc = "Returns ordinary, conditional Direct Boot, or blocked support."]
+    pub const fn support_level(&self) -> PackageSupportLevel {
+        self.support_level
+    }
+}
+
+fn constraints(level: PackageSupportLevel) -> Vec<String> {
+    match level {
+        PackageSupportLevel::Supported => Vec::new(),
+        PackageSupportLevel::DirectBootConditional => vec![
+            "user_unlocked".to_owned(),
+            "reboot_recovery_unverified".to_owned(),
+        ],
+        PackageSupportLevel::Blocked => vec!["package_not_allowed".to_owned()],
     }
 }
 

@@ -27,18 +27,28 @@ data class SlotSpace(
 data class PackageInspection(
     val packageName: String,
     val compatible: Boolean,
+    val supportLevel: String,
+    val constraints: Set<String>,
     val systemApp: Boolean,
     val sharedUid: Boolean,
     val directBootAware: Boolean,
 ) {
+    val requiresDirectBootConfirmation: Boolean
+        get() = supportLevel == "direct_boot_conditional"
+    val blocked: Boolean get() = supportLevel == "blocked"
+
     fun blockerText(): String = when {
         systemApp -> "系统应用暂不支持"
         sharedUid -> "共享 UID 应用暂不支持"
-        directBootAware -> "包含 Direct Boot 组件，首版暂不支持"
-        !compatible -> "该应用未通过 Runtime 兼容性检查"
+        blocked -> "该应用未通过 Runtime 安全检查"
         else -> ""
     }
 }
+
+data class EnrollmentReview(
+    val app: InstalledApp,
+    val inspection: PackageInspection,
+)
 
 data class PackageRuntimeStatus(
     val packageName: String,

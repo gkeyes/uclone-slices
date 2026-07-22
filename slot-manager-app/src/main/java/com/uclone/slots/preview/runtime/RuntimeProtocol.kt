@@ -16,6 +16,9 @@ object RuntimeProtocol {
         request.slotId?.let { json.put("slot", it) }
         request.displayName?.let { json.put("display_name", it) }
         request.seedMode?.let { json.put("seed_mode", it) }
+        request.acceptDirectBootConditional?.let {
+            json.put("accept_direct_boot_conditional", it)
+        }
         return json.toString() + "\n"
     }
 
@@ -74,6 +77,10 @@ object RuntimeProtocol {
     private fun parseInspection(data: JSONObject) = PackageInspection(
         data.getString("package"),
         data.getBoolean("compatible"),
+        data.getString("support_level"),
+        data.getJSONArray("constraints").let { array ->
+            buildSet { repeat(array.length()) { add(array.getString(it)) } }
+        },
         data.getBoolean("system_app"),
         data.getBoolean("shared_uid"),
         data.getBoolean("direct_boot_aware"),

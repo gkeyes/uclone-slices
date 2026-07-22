@@ -27,6 +27,7 @@ internal object UiMappings {
         "busy" -> "另一项数据空间操作正在进行"
         "conflict" -> "当前状态与该操作冲突，请先刷新状态"
         "package_not_allowed" -> "该应用不在 Preview 支持范围"
+        "direct_boot_confirmation_required" -> "请确认 Direct Boot 条件支持提示后再登记"
         "not_found" -> "目标尚未登记或空间不存在"
         "user_locked" -> "请先解锁主用户"
         else -> "Runtime 拒绝操作：$code"

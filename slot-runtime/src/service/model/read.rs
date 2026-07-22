@@ -1,4 +1,6 @@
-use crate::domain::{AppIdentity, DataInodes, PackageCompatibility, PackageName, SlotId};
+use crate::domain::{
+    AppIdentity, DataInodes, PackageCompatibility, PackageName, PackageSupportLevel, SlotId,
+};
 use crate::lifecycle::LifecycleState;
 use crate::slot_metadata::{SlotDisplayName, SlotRecordState, SlotSeedMode};
 
@@ -42,6 +44,10 @@ impl PackageInspection {
     #[doc = "Returns whether the first Preview contract is satisfied."]
     pub const fn compatible(&self) -> bool {
         self.compatibility.is_supported()
+    }
+    #[doc = "Returns the bounded compatibility support class."]
+    pub const fn support_level(&self) -> PackageSupportLevel {
+        self.compatibility.support_level()
     }
     #[doc = "Returns the package compatibility flags sampled by `PackageManager`."]
     pub const fn compatibility(&self) -> PackageCompatibility {

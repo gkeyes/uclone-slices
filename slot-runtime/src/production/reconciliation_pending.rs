@@ -42,7 +42,7 @@ where
                 .probe
                 .try_borrow_mut()
                 .map_err(|_| ServiceError::Busy)?;
-            super::enrollment::initial_managed(&mut *probe, key)
+            super::enrollment::candidate_managed(&mut *probe, key)
         };
         let Ok(package) = package else {
             return Ok(self.pristine_failure(key, ReconcileReason::PackageStateDrift));
@@ -79,7 +79,7 @@ where
                 .probe
                 .try_borrow_mut()
                 .map_err(|_| ServiceError::Busy)?;
-            super::enrollment::initial_managed(&mut *probe, key)
+            super::enrollment::candidate_managed(&mut *probe, key)
         };
         let Ok(package) = package else {
             return Ok(self.pristine_failure(key, ReconcileReason::PackageStateDrift));

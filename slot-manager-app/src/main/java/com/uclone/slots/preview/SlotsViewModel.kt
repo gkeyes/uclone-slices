@@ -35,6 +35,8 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var taskHistory by mutableStateOf<List<String>>(emptyList())
         private set
+    var enrollmentReview by mutableStateOf<EnrollmentReview?>(null)
+        private set
 
     init {
         refreshRuntime()
@@ -64,19 +66,34 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         loadPackage(packageName)
     }
 
-    fun inspectAndEnroll(app: InstalledApp) = launchOperation("登记 ${app.label}") {
+    fun inspectForEnrollment(app: InstalledApp) = launchOperation("检查 ${app.label}") {
         val inspection = runtime.inspect(app.packageName).payloadAs<RuntimePayload.Inspection>()
             ?: return@launchOperation reject("兼容性检查失败")
-        if (!inspection.value.compatible) return@launchOperation reject(
+        if (inspection.value.blocked) return@launchOperation reject(
             inspection.value.blockerText(),
         )
-        when (val result = runtime.enroll(app.packageName)) {
-            is RuntimeResult.Success -> {
-                record("已登记 ${app.label}")
-                refreshManagedInternal()
-                openDetailInternal(app.packageName)
+        enrollmentReview = EnrollmentReview(app, inspection.value)
+    }
+
+    fun dismissEnrollmentReview() {
+        enrollmentReview = null
+    }
+
+    fun confirmEnrollment() {
+        val review = enrollmentReview ?: return
+        enrollmentReview = null
+        launchOperation("登记 ${review.app.label}") {
+            when (val result = runtime.enroll(
+                review.app.packageName,
+                review.inspection.requiresDirectBootConfirmation,
+            )) {
+                is RuntimeResult.Success -> {
+                    record("已登记 ${review.app.label}")
+                    refreshManagedInternal()
+                    openDetailInternal(review.app.packageName)
+                }
+                else -> handleFailure(result, review.app.packageName)
             }
-            else -> handleFailure(result, app.packageName)
         }
     }
 

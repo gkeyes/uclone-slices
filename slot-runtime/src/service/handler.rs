@@ -6,7 +6,7 @@ use crate::slot_metadata::{SlotDisplayName, SlotSeedMode};
 use super::{PreviewService, ServiceError, ServicePlatform};
 
 enum Mutation<'a> {
-    Enroll(&'a PackageName),
+    Enroll(&'a PackageName, bool),
     Create(&'a PackageName, &'a SlotDisplayName, SlotSeedMode),
     Switch(&'a PackageName, &'a SlotId),
     Rename(&'a PackageName, &'a SlotId, &'a SlotDisplayName),
@@ -24,7 +24,10 @@ impl<P: ServicePlatform> RequestHandler for PreviewService<P> {
             Command::InspectPackage { package } => self.inspect_command(package),
             Command::ListManagedApps => self.managed_apps_command(),
             Command::StatusPackage { package } => self.status_command(package),
-            Command::EnrollPackage { package } => self.mutate(&Mutation::Enroll(package)),
+            Command::EnrollPackage {
+                package,
+                accept_direct_boot_conditional,
+            } => self.mutate(&Mutation::Enroll(package, *accept_direct_boot_conditional)),
             Command::CreateSlot {
                 package,
                 display_name,
@@ -61,7 +64,7 @@ impl<P: ServicePlatform> PreviewService<P> {
         let guard = self.mutations.clone();
         let _permit = guard.try_acquire().map_err(|_| ServiceError::Busy)?;
         match operation {
-            Mutation::Enroll(package) => self.enroll_command(package),
+            Mutation::Enroll(package, accept) => self.enroll_command(package, *accept),
             Mutation::Create(package, display_name, seed_mode) => {
                 self.create_slot_command(package, display_name, *seed_mode)
             }

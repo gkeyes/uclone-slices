@@ -14,6 +14,7 @@ mod io;
 mod namespace;
 mod parse;
 mod probe;
+mod probe_mapping;
 mod procfs;
 
 pub use command::SystemCommandRunner;

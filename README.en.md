@@ -45,6 +45,8 @@ The first phase supports only:
 - SELinux Enforcing;
 - devices whose KernelSU mount-master topology passes the runtime probe.
 
+Ordinary third-party apps remain supported by default. A third-party app that declares Direct Boot is now classified as conditionally supported after user0 unlock instead of being rejected outright. The manager shows a dedicated warning and requires explicit acceptance; the runtime binds that acceptance to the package UID, signature, and support class. This does not claim pre-unlock or active-slot reboot support. System and shared-UID apps remain blocked. See [Direct Boot conditional support](docs/DIRECT_BOOT_CONDITIONAL_SUPPORT.md).
+
 File slots do not fully isolate Android Keystore, AccountManager, permissions, AppOps, notifications, jobs/alarms, external storage, or server-side device state.
 
 Managed-app updates, clear-data, uninstall/reinstall, and OTA flows require lifecycle guards. Automatic updates should remain disabled for Preview targets until those paths are validated.
@@ -73,6 +75,12 @@ Typical local checks:
 cargo test --manifest-path slot-runtime/Cargo.toml
 cargo clippy --manifest-path slot-runtime/Cargo.toml --all-targets --all-features -- -D warnings
 ./gradlew :slot-manager-app:testDebugUnitTest :slot-manager-app:lintDebug :slot-manager-app:assembleDebug
+```
+
+The CLI requires explicit consent when enrolling a Direct Boot package:
+
+```bash
+slotctl enroll com.example.app --accept-direct-boot-conditional
 ```
 
 The KernelSU ZIP is produced by the fixed-path packaging workflow. The source skeleton itself is not an installable release artifact.

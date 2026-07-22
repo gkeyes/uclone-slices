@@ -24,7 +24,7 @@ impl FakePlatform {
             key.package_name().clone(),
             package.identity().clone(),
             package.base_inodes(),
-            uclone_slot_runtime::domain::PackageCompatibility::compatible(),
+            self.inspection_compatibility,
         ))
     }
 

@@ -1,5 +1,8 @@
 use crate::android::PackageProbe;
-use crate::domain::{ManagedPackage, PackageKey, SlotId, SlotView};
+use crate::domain::{
+    ManagedPackage, PackageCandidate, PackageCompatibility, PackageKey, PackageSupportLevel,
+    SlotId, SlotView,
+};
 use crate::lifecycle::LifecycleState;
 use crate::materializer::{BaseAnchor, MaterializationBackend};
 use crate::service::ServiceError;
@@ -8,18 +11,32 @@ pub(super) fn initial_managed<Q: PackageProbe>(
     probe: &mut Q,
     key: &PackageKey,
 ) -> Result<ManagedPackage, ServiceError> {
-    let (package, compatibility) = inspect_candidate(probe, key)?;
-    if compatibility.is_supported() {
-        Ok(package)
-    } else {
-        Err(ServiceError::PackageNotAllowed)
-    }
+    let package = candidate_managed(probe, key)?;
+    verify_candidate(probe, key, &package)?;
+    Ok(package)
 }
 
 pub(super) fn inspect_candidate<Q: PackageProbe>(
     probe: &mut Q,
     key: &PackageKey,
-) -> Result<(ManagedPackage, crate::domain::PackageCompatibility), ServiceError> {
+) -> Result<(ManagedPackage, PackageCompatibility), ServiceError> {
+    let candidate = read_candidate(probe, key)?;
+    let compatibility = candidate.compatibility();
+    Ok((managed_from_candidate(key, &candidate)?, compatibility))
+}
+
+pub(super) fn candidate_managed<Q: PackageProbe>(
+    probe: &mut Q,
+    key: &PackageKey,
+) -> Result<ManagedPackage, ServiceError> {
+    let candidate = read_candidate(probe, key)?;
+    managed_from_candidate(key, &candidate)
+}
+
+fn read_candidate<Q: PackageProbe>(
+    probe: &mut Q,
+    key: &PackageKey,
+) -> Result<PackageCandidate, ServiceError> {
     require_key(key)?;
     if !probe
         .user0_unlocked()
@@ -27,6 +44,38 @@ pub(super) fn inspect_candidate<Q: PackageProbe>(
     {
         return Err(ServiceError::UserLocked);
     }
+    let candidate = probe
+        .inspect_package(key.package_name(), key.user_id())
+        .map_err(|_| ServiceError::Internal)?;
+    if candidate.pending_install() {
+        return Err(ServiceError::RecoveryRequired);
+    }
+    if candidate.compatibility().support_level() == PackageSupportLevel::Blocked {
+        return Err(ServiceError::PackageNotAllowed);
+    }
+    Ok(candidate)
+}
+
+fn managed_from_candidate(
+    key: &PackageKey,
+    candidate: &PackageCandidate,
+) -> Result<ManagedPackage, ServiceError> {
+    let base = candidate.package_manager_inodes();
+    ManagedPackage::new(
+        key.clone(),
+        candidate.identity().clone(),
+        base,
+        SlotView::new(SlotId::base(), base),
+        LifecycleState::Normal,
+    )
+    .map_err(|_| ServiceError::RecoveryRequired)
+}
+
+fn verify_candidate<Q: PackageProbe>(
+    probe: &mut Q,
+    key: &PackageKey,
+    package: &ManagedPackage,
+) -> Result<(), ServiceError> {
     let namespace = probe
         .mount_namespace_proof()
         .map_err(|_| ServiceError::UnsupportedDevice)?;
@@ -35,9 +84,11 @@ pub(super) fn inspect_candidate<Q: PackageProbe>(
     }
     let observation = probe
         .observe_package(key.package_name(), key.user_id())
-        .map_err(|_| ServiceError::Internal)?;
-    let base = observation.package_manager_inodes();
-    if observation.pending_install()
+        .map_err(|_| ServiceError::RecoveryRequired)?;
+    let base = package.base_inodes();
+    if observation.identity() != package.identity()
+        || observation.package_manager_inodes() != base
+        || observation.pending_install()
         || observation.canonical_inodes() != base
         || observation.active_process_inodes() != base
     {
@@ -55,15 +106,7 @@ pub(super) fn inspect_candidate<Q: PackageProbe>(
     {
         return Err(ServiceError::RecoveryRequired);
     }
-    let package = ManagedPackage::new(
-        key.clone(),
-        observation.identity().clone(),
-        base,
-        SlotView::new(SlotId::base(), base),
-        LifecycleState::Normal,
-    )
-    .map_err(|_| ServiceError::RecoveryRequired)?;
-    Ok((package, observation.compatibility()))
+    Ok(())
 }
 
 pub(super) fn capture_base<M: MaterializationBackend>(

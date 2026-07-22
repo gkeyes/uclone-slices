@@ -38,4 +38,5 @@ data class RuntimeRequest(
     val slotId: String? = null,
     val displayName: String? = null,
     val seedMode: String? = null,
+    val acceptDirectBootConditional: Boolean? = null,
 )

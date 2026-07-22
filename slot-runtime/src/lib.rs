@@ -11,6 +11,8 @@ pub mod bridge;
 pub mod catalog;
 #[doc = "Restricted command-line client for the Preview control plane."]
 pub mod cli;
+#[doc = "Hash-protected package compatibility acceptance records."]
+pub mod compatibility_policy;
 #[doc = "Host-testable Unix socket server for the root runtime."]
 pub mod daemon;
 #[doc = "Validated package, slot, inode, and transaction boundary values."]

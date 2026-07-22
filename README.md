@@ -45,6 +45,8 @@ KernelSU Runtime 是 Slots 的必要组件；LSPosed 不是必要组件。
 - SELinux Enforcing；
 - KernelSU mount-master 能力通过探针验证的设备。
 
+普通第三方 App默认可登记。声明 Direct Boot 的第三方 App不再被一刀切拒绝，但只提供“解锁后条件支持”：管理 APK会显示专门警告并要求明确确认，Runtime 将确认结果与 UID、签名和支持等级一起持久化；设备重启期间仍保持失败关闭，不能据此宣称已支持锁屏前运行。系统 App和 Shared UID App继续拒绝。详见 [Direct Boot 条件支持](docs/DIRECT_BOOT_CONDITIONAL_SUPPORT.md)。
+
 以下状态不会随文件数据槽完整隔离：
 
 - Android Keystore；
@@ -79,6 +81,12 @@ KernelSU Runtime 是 Slots 的必要组件；LSPosed 不是必要组件。
 cargo test --manifest-path slot-runtime/Cargo.toml
 cargo clippy --manifest-path slot-runtime/Cargo.toml --all-targets --all-features -- -D warnings
 ./gradlew :slot-manager-app:testDebugUnitTest :slot-manager-app:lintDebug :slot-manager-app:assembleDebug
+```
+
+CLI 登记 Direct Boot App 时必须显式确认：
+
+```bash
+slotctl enroll com.example.app --accept-direct-boot-conditional
 ```
 
 KernelSU ZIP 由固定路径打包脚本生成；源码目录中的模块骨架不能直接视为可安装发布包。

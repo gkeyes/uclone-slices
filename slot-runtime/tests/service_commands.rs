@@ -69,6 +69,45 @@ fn general_management_commands_return_typed_payloads() {
 }
 
 #[test]
+fn direct_boot_enrollment_requires_explicit_confirmation() {
+    let platform = FakePlatform::default().with_inspection_compatibility(
+        uclone_slot_runtime::domain::PackageCompatibility::new(false, false, true),
+    );
+    let mut service = PreviewService::new(platform);
+
+    let rejected = service.handle(&request(Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: false,
+    }));
+    assert_eq!(
+        rejected.error_code(),
+        Some(uclone_slot_runtime::protocol::ErrorCode::DirectBootConfirmationRequired),
+    );
+    assert_eq!(service.platform().calls(), vec![Call::State, Call::Inspect]);
+
+    service.platform().clear_calls();
+    let accepted = service.handle(&request(Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: true,
+    }));
+    assert_eq!(accepted.status(), ResponseStatus::Ok);
+    assert_eq!(
+        service.platform().calls(),
+        vec![
+            Call::State,
+            Call::Inspect,
+            Call::BeginEnrollment,
+            Call::HoldGate,
+            Call::Quiesce,
+            Call::Enroll(true),
+            Call::ProveBase,
+            Call::RestoreGate,
+            Call::RetireGate,
+        ],
+    );
+}
+
+#[test]
 fn reconcile_all_retries_instead_of_acknowledging_a_locked_user() {
     let platform = FakePlatform::with_state(ready_base())
         .with_reconcile_outcome(uclone_slot_runtime::reconcile::ReconcileOutcome::Locked);
@@ -110,7 +149,10 @@ fn all_commands_return_typed_payloads_when_platform_proofs_succeed() {
     ));
 
     // When / Then: enroll
-    let response = service.handle(&request(Command::EnrollPackage { package: allowed() }));
+    let response = service.handle(&request(Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: false,
+    }));
     assert!(matches!(
         response.payload(),
         Some(ResponsePayload::Ack(ack)) if ack.operation() == AckOperation::EnrollPackage
@@ -120,10 +162,11 @@ fn all_commands_return_typed_payloads_when_platform_proofs_succeed() {
         vec![
             Call::Probe,
             Call::State,
+            Call::Inspect,
             Call::BeginEnrollment,
             Call::HoldGate,
             Call::Quiesce,
-            Call::Enroll,
+            Call::Enroll(false),
             Call::ProveBase,
             Call::RestoreGate,
             Call::RetireGate,
@@ -232,7 +275,10 @@ fn repeated_mutations_are_idempotent_when_target_is_already_durable() {
     let mut service = PreviewService::new(FakePlatform::with_state(ready_base()));
 
     // When / Then: enrollment is already complete
-    let response = service.handle(&request(Command::EnrollPackage { package: allowed() }));
+    let response = service.handle(&request(Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: false,
+    }));
     assert_eq!(response.status(), ResponseStatus::Ok);
     assert_eq!(service.platform().calls(), vec![Call::State]);
 

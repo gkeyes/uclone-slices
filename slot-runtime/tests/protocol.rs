@@ -4,7 +4,7 @@
     reason = "validated protocol fixtures fail the invoking test immediately"
 )]
 
-use uclone_slot_runtime::domain::{PackageName, SlotId};
+use uclone_slot_runtime::domain::{PackageName, PackageSupportLevel, SlotId};
 use uclone_slot_runtime::lifecycle::LifecycleState;
 use uclone_slot_runtime::protocol::{
     ALLOWED_PACKAGE, Ack, AckOperation, Command, ErrorCode, MAX_FRAME_SIZE, PackageStatus,
@@ -36,7 +36,10 @@ fn all_fixed_commands_round_trip_as_strict_json_lines() {
         Command::Probe,
         Command::InspectPackage { package: allowed() },
         Command::ListManagedApps,
-        Command::EnrollPackage { package: allowed() },
+        Command::EnrollPackage {
+            package: allowed(),
+            accept_direct_boot_conditional: false,
+        },
         Command::StatusPackage { package: allowed() },
         Command::CreateSlot {
             package: allowed(),
@@ -69,6 +72,44 @@ fn all_fixed_commands_round_trip_as_strict_json_lines() {
         assert_eq!(frame.last(), Some(&b'\n'));
         assert_eq!(decode_request(&frame).unwrap(), request);
     }
+}
+
+#[test]
+fn direct_boot_enrollment_confirmation_is_explicit_and_round_trips() {
+    let command = Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: true,
+    };
+    let request = Request::new(id("direct-boot-consent"), command.clone()).unwrap();
+
+    let frame = encode_request(&request).unwrap();
+
+    assert!(
+        std::str::from_utf8(&frame)
+            .unwrap()
+            .contains(r#""accept_direct_boot_conditional":true"#,)
+    );
+    assert_eq!(decode_request(&frame).unwrap().command(), &command);
+    assert_eq!(
+        PackageSupportLevel::DirectBootConditional.as_str(),
+        "direct_boot_conditional",
+    );
+}
+
+#[test]
+fn legacy_enrollment_request_defaults_direct_boot_confirmation_to_false() {
+    let frame = br#"{"schema_version":1,"request_id":"legacy-enroll","command":"enroll_package","package":"com.asksky.fitness"}
+"#;
+
+    let decoded = decode_request(frame).unwrap();
+
+    assert!(matches!(
+        decoded.command(),
+        Command::EnrollPackage {
+            accept_direct_boot_conditional: false,
+            ..
+        }
+    ));
 }
 
 #[test]

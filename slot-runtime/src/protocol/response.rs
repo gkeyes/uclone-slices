@@ -23,6 +23,8 @@ pub enum ErrorCode {
     UnsupportedSchema,
     /// The package is outside the initial allowlist.
     PackageNotAllowed,
+    /// Direct Boot conditional support was not explicitly acknowledged.
+    DirectBootConfirmationRequired,
     /// The package or slot is not enrolled/present.
     NotFound,
     /// The requested operation conflicts with durable state.

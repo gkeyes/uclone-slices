@@ -129,6 +129,10 @@ fn proved_base_reconciliation_recovers_a_transient_boot_failure_state() {
 fn stores(root: &std::path::Path) -> ProductionStores {
     ProductionStores {
         enrollment: EnrollmentStore::new(root.join("enrollment")).unwrap(),
+        compatibility_policy: crate::compatibility_policy::CompatibilityPolicyStore::new(
+            root.join("compatibility-policy"),
+        )
+        .unwrap(),
         attempts: EnrollmentAttemptStore::new(root.join("enrollment-attempts")).unwrap(),
         catalog: CatalogStore::new(root.join("catalog")).unwrap(),
         package_state: PackageStateStore::new(root.join("package-state")).unwrap(),

@@ -151,6 +151,7 @@ fn injected_transport_prints_one_json_response_and_reports_daemon_error() {
 fn injected_transport_preserves_the_request_and_success_output() {
     let command = CliCommand::Enroll {
         package: SAMPLE_PACKAGE.to_owned(),
+        accept_direct_boot_conditional: false,
     };
     let request = command.request().unwrap();
     let mut transport = FakeTransport::response(success_response(&request));

@@ -51,6 +51,10 @@ mod tests {
         fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let stores = ProductionStores {
             enrollment: EnrollmentStore::new(root.path().join("enrollment")).unwrap(),
+            compatibility_policy: crate::compatibility_policy::CompatibilityPolicyStore::new(
+                root.path().join("compatibility-policy"),
+            )
+            .unwrap(),
             attempts: EnrollmentAttemptStore::new(root.path().join("enrollment-attempts")).unwrap(),
             catalog: crate::catalog::CatalogStore::new(root.path().join("catalog")).unwrap(),
             package_state: PackageStateStore::new(root.path().join("package-state")).unwrap(),

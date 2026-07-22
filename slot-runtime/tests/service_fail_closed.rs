@@ -55,7 +55,10 @@ fn unpublished_enrollment_failure_exact_aborts_and_preserves_cause() {
     let mut service = PreviewService::new(platform);
 
     // When
-    let response = service.handle(&request(Command::EnrollPackage { package: allowed() }));
+    let response = service.handle(&request(Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: false,
+    }));
 
     // Then
     assert_eq!(response.error_code(), Some(ErrorCode::Internal));
@@ -71,7 +74,10 @@ fn ambiguous_enrollment_publication_retains_recovery_anchor() {
     let mut service = PreviewService::new(platform);
 
     // When
-    let response = service.handle(&request(Command::EnrollPackage { package: allowed() }));
+    let response = service.handle(&request(Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: false,
+    }));
 
     // Then
     assert_eq!(response.error_code(), Some(ErrorCode::RecoveryRequired));
@@ -87,7 +93,10 @@ fn enrollment_lease_retirement_failure_recontains_before_recovery() {
     let mut service = PreviewService::new(platform);
 
     // When
-    let response = service.handle(&request(Command::EnrollPackage { package: allowed() }));
+    let response = service.handle(&request(Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: false,
+    }));
 
     // Then
     assert_eq!(response.error_code(), Some(ErrorCode::RecoveryRequired));
@@ -98,7 +107,7 @@ fn enrollment_lease_retirement_failure_recontains_before_recovery() {
             Call::BeginEnrollment,
             Call::HoldGate,
             Call::Quiesce,
-            Call::Enroll,
+            Call::Enroll(false),
             Call::ProveBase,
             Call::RestoreGate,
             Call::RetireGate,

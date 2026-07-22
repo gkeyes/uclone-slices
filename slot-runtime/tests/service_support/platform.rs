@@ -107,9 +107,10 @@ impl ServicePlatform for FakePlatform {
     fn enroll_atomically(
         &mut self,
         key: &PackageKey,
+        accept_direct_boot_conditional: bool,
     ) -> Result<ManagedPackage, EnrollmentPublicationError> {
         assert_key(key);
-        self.record(Call::Enroll);
+        self.record(Call::Enroll(accept_direct_boot_conditional));
         self.fail(FailurePoint::Enroll)
             .map_err(EnrollmentPublicationError::Unpublished)?;
         if self.fail(FailurePoint::EnrollAmbiguous).is_err() {
@@ -169,6 +170,7 @@ impl ServicePlatform for FakePlatform {
             ServiceError::Quarantined => PackageState::Quarantined,
             ServiceError::InvalidRequest
             | ServiceError::PackageNotAllowed
+            | ServiceError::DirectBootConfirmationRequired
             | ServiceError::NotFound
             | ServiceError::Conflict
             | ServiceError::RecoveryRequired

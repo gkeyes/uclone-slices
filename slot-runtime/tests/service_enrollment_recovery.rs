@@ -15,13 +15,22 @@ fn prepublication_gate_failures_exact_restore_and_retire_attempt_anchor() {
         let mut service = PreviewService::new(platform);
 
         // When
-        let response = service.handle(&request(Command::EnrollPackage { package: allowed() }));
+        let response = service.handle(&request(Command::EnrollPackage {
+            package: allowed(),
+            accept_direct_boot_conditional: false,
+        }));
 
         // Then
         assert_eq!(response.error_code(), Some(ErrorCode::Internal));
         assert!(service.platform().calls().contains(&Call::AbortEnrollment));
         assert!(!service.platform().enrollment_anchor());
-        assert!(!service.platform().calls().contains(&Call::Enroll));
+        assert!(
+            !service
+                .platform()
+                .calls()
+                .iter()
+                .any(|call| matches!(call, Call::Enroll(_)))
+        );
     }
 }
 
@@ -34,7 +43,10 @@ fn failed_prepublication_cleanup_leaves_discoverable_recovery_anchor() {
     let mut service = PreviewService::new(platform);
 
     // When
-    let response = service.handle(&request(Command::EnrollPackage { package: allowed() }));
+    let response = service.handle(&request(Command::EnrollPackage {
+        package: allowed(),
+        accept_direct_boot_conditional: false,
+    }));
 
     // Then
     assert_eq!(response.error_code(), Some(ErrorCode::RecoveryRequired));

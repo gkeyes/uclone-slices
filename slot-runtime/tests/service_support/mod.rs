@@ -7,7 +7,9 @@
 
 use std::cell::RefCell;
 
-use uclone_slot_runtime::domain::{ManagedPackage, PackageKey, SlotId, SlotView};
+use uclone_slot_runtime::domain::{
+    ManagedPackage, PackageCompatibility, PackageKey, SlotId, SlotView,
+};
 use uclone_slot_runtime::reconcile::ReconcileOutcome;
 use uclone_slot_runtime::service::{
     PackageSnapshot, PackageState, RescueExecution, ServiceError, SwitchExecution,
@@ -29,7 +31,7 @@ pub(crate) enum FailurePoint {
     AbortEnrollment,
     HoldGate,
     Quiesce,
-    Enroll,
+    Enroll(bool),
     EnrollAmbiguous,
     ProveBase,
     RestoreGate,
@@ -80,6 +82,7 @@ pub(crate) struct FakePlatform {
     switch_execution: Option<SwitchExecution>,
     rescue_execution: Option<RescueExecution>,
     reconcile_outcome: ReconcileOutcome,
+    inspection_compatibility: PackageCompatibility,
 }
 
 impl Default for FakePlatform {
@@ -92,6 +95,7 @@ impl Default for FakePlatform {
             switch_execution: None,
             rescue_execution: None,
             reconcile_outcome: ReconcileOutcome::RestoredBase,
+            inspection_compatibility: PackageCompatibility::compatible(),
         }
     }
 }
@@ -121,6 +125,14 @@ impl FakePlatform {
 
     pub(crate) fn with_reconcile_outcome(mut self, outcome: ReconcileOutcome) -> Self {
         self.reconcile_outcome = outcome;
+        self
+    }
+
+    pub(crate) const fn with_inspection_compatibility(
+        mut self,
+        compatibility: PackageCompatibility,
+    ) -> Self {
+        self.inspection_compatibility = compatibility;
         self
     }
 

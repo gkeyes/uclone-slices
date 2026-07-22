@@ -56,6 +56,7 @@ where
     fn enroll_atomically(
         &mut self,
         _key: &PackageKey,
+        _accept_direct_boot_conditional: bool,
     ) -> Result<ManagedPackage, EnrollmentPublicationError> {
         Err(EnrollmentPublicationError::PublicationAmbiguous)
     }

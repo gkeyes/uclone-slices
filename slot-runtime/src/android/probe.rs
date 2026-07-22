@@ -1,4 +1,6 @@
-use crate::domain::{DataInodes, GateSnapshot, PackageName, PackageObservation, SlotId, UserId};
+use crate::domain::{
+    DataInodes, GateSnapshot, PackageCandidate, PackageName, PackageObservation, SlotId, UserId,
+};
 
 #[doc = "Number of mountinfo entries targeting the canonical CE and DE paths."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +139,21 @@ impl ProbeError {
 pub trait PackageProbe: core::fmt::Debug {
     #[doc = "Compares the daemon mount namespace with the validated PID 1 namespace."]
     fn mount_namespace_proof(&mut self) -> Result<MountNamespaceProof, ProbeError>;
+
+    #[doc = "Reads PackageManager identity and compatibility without entering App namespaces."]
+    fn inspect_package(
+        &mut self,
+        package: &PackageName,
+        user_id: UserId,
+    ) -> Result<PackageCandidate, ProbeError> {
+        let observed = self.observe_package(package, user_id)?;
+        Ok(PackageCandidate::new(
+            observed.identity().clone(),
+            observed.package_manager_inodes(),
+            observed.pending_install(),
+            observed.compatibility(),
+        ))
+    }
 
     #[doc = "Samples identity, `PackageManager` inodes, canonical inodes, and process inodes."]
     fn observe_package(

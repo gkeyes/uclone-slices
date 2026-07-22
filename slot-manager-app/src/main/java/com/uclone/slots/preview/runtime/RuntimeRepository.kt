@@ -5,8 +5,14 @@ class RuntimeRepository(private val client: RootRpcClient = RootRpcClient()) {
     suspend fun inspect(packageName: String) =
         call("inspect_package", packageName, timeout = READ_TIMEOUT)
     suspend fun listManaged() = call("list_managed_apps", timeout = READ_TIMEOUT)
-    suspend fun enroll(packageName: String) =
-        call("enroll_package", packageName, timeout = MUTATION_TIMEOUT)
+    suspend fun enroll(packageName: String, acceptDirectBootConditional: Boolean) = client.call(
+        RuntimeRequest(
+            command = "enroll_package",
+            packageName = packageName,
+            acceptDirectBootConditional = acceptDirectBootConditional,
+        ),
+        MUTATION_TIMEOUT,
+    )
     suspend fun status(packageName: String) =
         call("status_package", packageName, timeout = READ_TIMEOUT)
     suspend fun listSlots(packageName: String) =

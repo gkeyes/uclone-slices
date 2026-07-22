@@ -15,7 +15,7 @@ val hasReleaseSigning = listOf(
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
 val previewVersionCode = providers.gradleProperty("previewVersionCode").orElse("1")
-val previewVersionName = providers.gradleProperty("previewVersionName").orElse("0.2.0-preview.1")
+val previewVersionName = providers.gradleProperty("previewVersionName").orElse("0.2.0-preview.3")
 
 android {
     namespace = "com.uclone.slots.preview"

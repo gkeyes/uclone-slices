@@ -1,5 +1,29 @@
 use super::AppIdentity;
 use crate::domain::DataInodes;
+use serde::{Deserialize, Serialize};
+
+#[doc = "Bounded support class for one installed package."]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageSupportLevel {
+    #[doc = "Ordinary user-zero App supported by the Preview contract."]
+    Supported,
+    #[doc = "Direct Boot App supported only after unlock and explicit confirmation."]
+    DirectBootConditional,
+    #[doc = "System or shared-UID package that cannot be managed safely."]
+    Blocked,
+}
+
+impl PackageSupportLevel {
+    #[doc = "Returns the stable protocol spelling."]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::DirectBootConditional => "direct_boot_conditional",
+            Self::Blocked => "blocked",
+        }
+    }
+}
 
 #[doc = "Installed-package properties that bound the first multi-App Preview."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,7 +50,18 @@ impl PackageCompatibility {
 
     #[doc = "Returns whether the package satisfies the first Preview contract."]
     pub const fn is_supported(self) -> bool {
-        !self.system_app && !self.shared_uid && !self.direct_boot_aware
+        matches!(self.support_level(), PackageSupportLevel::Supported)
+    }
+
+    #[doc = "Classifies ordinary, conditional Direct Boot, and blocked packages."]
+    pub const fn support_level(self) -> PackageSupportLevel {
+        if self.system_app || self.shared_uid {
+            PackageSupportLevel::Blocked
+        } else if self.direct_boot_aware {
+            PackageSupportLevel::DirectBootConditional
+        } else {
+            PackageSupportLevel::Supported
+        }
     }
 
     #[doc = "Returns whether `PackageManager` marks this as a system App."]
@@ -42,6 +77,49 @@ impl PackageCompatibility {
     #[doc = "Returns whether a declared component is Direct Boot aware."]
     pub const fn direct_boot_aware(self) -> bool {
         self.direct_boot_aware
+    }
+}
+
+#[doc = "Lightweight PackageManager candidate independent of running-process namespaces."]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageCandidate {
+    identity: AppIdentity,
+    package_manager_inodes: DataInodes,
+    pending_install: bool,
+    compatibility: PackageCompatibility,
+}
+
+impl PackageCandidate {
+    #[doc = "Creates one package candidate from typed PackageManager facts."]
+    pub const fn new(
+        identity: AppIdentity,
+        package_manager_inodes: DataInodes,
+        pending_install: bool,
+        compatibility: PackageCompatibility,
+    ) -> Self {
+        Self {
+            identity,
+            package_manager_inodes,
+            pending_install,
+            compatibility,
+        }
+    }
+
+    #[doc = "Returns the installed package identity."]
+    pub const fn identity(&self) -> &AppIdentity {
+        &self.identity
+    }
+    #[doc = "Returns PackageManager's CE/DE inode anchors."]
+    pub const fn package_manager_inodes(&self) -> DataInodes {
+        self.package_manager_inodes
+    }
+    #[doc = "Returns whether an installer session is still pending."]
+    pub const fn pending_install(&self) -> bool {
+        self.pending_install
+    }
+    #[doc = "Returns the sampled compatibility flags."]
+    pub const fn compatibility(&self) -> PackageCompatibility {
+        self.compatibility
     }
 }
 

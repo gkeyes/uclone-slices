@@ -147,8 +147,9 @@ where
     fn enroll_atomically(
         &mut self,
         key: &PackageKey,
+        accept_direct_boot_conditional: bool,
     ) -> Result<ManagedPackage, EnrollmentPublicationError> {
-        self.do_enroll(key)
+        self.do_enroll(key, accept_direct_boot_conditional)
     }
 
     fn prove_base(&mut self, package: &ManagedPackage) -> Result<(), ServiceError> {

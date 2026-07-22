@@ -14,7 +14,10 @@ fn every_mutating_command_returns_busy_before_platform_access() {
     let held_guard = guard.clone();
     let permit = held_guard.try_acquire().unwrap();
     let commands = [
-        Command::EnrollPackage { package: allowed() },
+        Command::EnrollPackage {
+            package: allowed(),
+            accept_direct_boot_conditional: false,
+        },
         Command::Switch {
             package: allowed(),
             slot: preview_view().slot_id().clone(),

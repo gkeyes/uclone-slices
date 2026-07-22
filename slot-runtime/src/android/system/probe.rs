@@ -4,18 +4,18 @@ use std::path::Path;
 
 use crate::android::{CanonicalView, MountNamespaceProof, PackageProbe, ProbeError, ViewProof};
 use crate::bridge::{
-    ALLOWED_USER_ID, AppProcessRunner, BridgeClient, BridgeCommandRunner, BridgeErrorCode,
-    PackageSnapshot,
+    ALLOWED_USER_ID, AppProcessRunner, BridgeClient, BridgeCommandRunner, PackageSnapshot,
 };
 use crate::domain::{
-    AppIdentity, DataInodes, GateSnapshot, PackageCompatibility, PackageName, PackageObservation,
-    SlotId, UserId,
+    AppIdentity, DataInodes, GateSnapshot, PackageCandidate, PackageCompatibility, PackageName,
+    PackageObservation, SlotId, UserId,
 };
 use crate::layout::RuntimeLayout;
 
 use super::executor::{ProcessExecutor, StdProcessExecutor};
 use super::facts::{FactError, StdSystemFacts, SystemFacts};
 use super::namespace::namespace_consensus;
+use super::probe_mapping::{candidate_from_snapshot, map_bridge_error, map_fact_error};
 
 /// Production read-only package probe backed by the typed bridge and fixed OS facts.
 #[derive(Debug)]
@@ -76,6 +76,15 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor, F: SystemFacts> PackageProbe
     fn mount_namespace_proof(&mut self) -> Result<MountNamespaceProof, ProbeError> {
         let (daemon, init) = self.facts.mount_namespace_ids().map_err(map_fact_error)?;
         Ok(MountNamespaceProof::new(daemon, init))
+    }
+
+    fn inspect_package(
+        &mut self,
+        package: &PackageName,
+        user_id: UserId,
+    ) -> Result<PackageCandidate, ProbeError> {
+        let snapshot = self.refresh_package_snapshot(package, user_id)?;
+        candidate_from_snapshot(&snapshot)
     }
 
     fn observe_package(
@@ -228,19 +237,5 @@ const fn require_target(_package: &PackageName, user_id: UserId) -> Result<(), P
         Ok(())
     } else {
         Err(ProbeError::InvalidResponse)
-    }
-}
-
-const fn map_fact_error(error: FactError) -> ProbeError {
-    match error {
-        FactError::Unavailable => ProbeError::Unavailable,
-        FactError::Invalid => ProbeError::InvalidResponse,
-    }
-}
-
-const fn map_bridge_error(error: &crate::bridge::BridgeError) -> ProbeError {
-    match error.code() {
-        BridgeErrorCode::RunnerUnavailable | BridgeErrorCode::TimedOut => ProbeError::Unavailable,
-        _ => ProbeError::InvalidResponse,
     }
 }

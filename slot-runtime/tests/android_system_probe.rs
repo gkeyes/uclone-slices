@@ -214,6 +214,35 @@ fn package_manager_compatibility_flags_reach_the_runtime_guard() {
 }
 
 #[test]
+fn lightweight_inspection_does_not_enter_a_running_app_namespace() {
+    let base = DataInodes::new(101, 202).unwrap();
+    let mut facts = fake_facts(base, vec![81]);
+    facts.package_processes = Err(FactError::Invalid);
+    let mut response: serde_json::Value = serde_json::from_slice(&package_response(base)).unwrap();
+    response["payload"]["directBootAware"] = serde_json::json!(true);
+    let mut probe = SystemPackageProbe::with_dependencies(
+        FakeBridge {
+            package: serde_json::to_vec(&response).unwrap(),
+            calls: 0,
+        },
+        FakeExecutor {
+            outputs: VecDeque::new(),
+            seen: Vec::new(),
+        },
+        facts,
+    );
+
+    let inspected = probe.inspect_package(&package(), UserId::PRIMARY).unwrap();
+
+    assert_eq!(inspected.package_manager_inodes(), base);
+    assert_eq!(
+        inspected.compatibility().support_level(),
+        domain::PackageSupportLevel::DirectBootConditional,
+    );
+    assert!(probe.executor().seen.is_empty());
+}
+
+#[test]
 fn zygote_namespace_disagreement_fails_closed() {
     let base = DataInodes::new(101, 202).unwrap();
     let bridge = FakeBridge {

@@ -42,6 +42,9 @@ pub enum CliCommand {
     Enroll {
         /// Installed package name selected by the APK.
         package: String,
+        /// Accept unlocked-only handling for a Direct Boot aware package.
+        #[arg(long)]
+        accept_direct_boot_conditional: bool,
     },
     /// Read one managed package's current status.
     Status {
@@ -122,8 +125,12 @@ impl CliCommand {
                 package: parse_package(package)?,
             },
             Self::Apps => Command::ListManagedApps,
-            Self::Enroll { package } => Command::EnrollPackage {
+            Self::Enroll {
+                package,
+                accept_direct_boot_conditional,
+            } => Command::EnrollPackage {
                 package: parse_package(package)?,
+                accept_direct_boot_conditional: *accept_direct_boot_conditional,
             },
             Self::Status { package } => Command::StatusPackage {
                 package: parse_package(package)?,
