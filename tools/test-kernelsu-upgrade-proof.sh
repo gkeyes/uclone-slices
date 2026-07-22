@@ -29,7 +29,7 @@ case "$command" in
         [ "${1:-}" = "-c" ] || exit 2
         format=$2
         path=$3
-        mode=$(/usr/bin/stat -f '%Lp' "$path" 2>/dev/null || /usr/bin/stat -c '%a' "$path") || exit 2
+        mode=$(/usr/bin/stat -c '%a' "$path" 2>/dev/null || /usr/bin/stat -f '%Lp' "$path") || exit 2
         case "$format" in
             %u) printf '%s\n' 0 ;;
             %u:%g:%a) printf '0:0:%s\n' "$mode" ;;
