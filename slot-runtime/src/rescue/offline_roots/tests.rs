@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, reason = "isolated temporary startup fixtures")]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 
 use tempfile::TempDir;
 
@@ -15,6 +16,7 @@ use crate::protocol::ALLOWED_PACKAGE;
 
 fn fixture() -> (TempDir, RescueRoots, PackageKey) {
     let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let roots = RescueRoots::with_roots(
         root.path().join("enrollment"),
         root.path().join("catalog"),
