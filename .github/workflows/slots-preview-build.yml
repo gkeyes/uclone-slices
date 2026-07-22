@@ -90,6 +90,7 @@ jobs:
           tools/test-generic-rescue.sh
           tools/test-kernelsu-boot-flow.sh --profile generic
           tools/test-kernelsu-upgrade-gate.sh
+          tools/test-kernelsu-upgrade-proof.sh
 
       - name: Build paired generic Runtime
         env:
@@ -151,6 +152,7 @@ jobs:
           install -d unsigned-dist
           install -m 0644 "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" unsigned-dist/uclone-slices-preview-kernelsu.zip
           install -m 0644 "$PACKAGE_ROOT/manifest.txt" unsigned-dist/KERNELSU-MANIFEST.txt
+          install -m 0644 slot-kernelsu/prepare-upgrade.sh unsigned-dist/uclone-prepare-upgrade.sh
 
       - name: Assemble unsigned paired APK
         run: >-
@@ -267,7 +269,8 @@ jobs:
           install -m 0644 unsigned-dist/uclone-slices-preview-kernelsu.zip signed-dist/uclone-slices-preview-kernelsu.zip
           install -m 0644 unsigned-dist/KERNELSU-MANIFEST.txt signed-dist/KERNELSU-MANIFEST.txt
           install -m 0644 unsigned-dist/PAIRING-MANIFEST.json signed-dist/PAIRING-MANIFEST.json
-          (cd signed-dist && sha256sum uclone-slots-preview.apk uclone-slices-preview-kernelsu.zip PAIRING-MANIFEST.json > SHA256SUMS)
+          install -m 0644 unsigned-dist/uclone-prepare-upgrade.sh signed-dist/uclone-prepare-upgrade.sh
+          (cd signed-dist && sha256sum uclone-slots-preview.apk uclone-slices-preview-kernelsu.zip uclone-prepare-upgrade.sh PAIRING-MANIFEST.json > SHA256SUMS)
 
       - name: Destroy isolated release key
         if: always()
@@ -307,6 +310,7 @@ jobs:
             "$TAG" \
             dist/uclone-slots-preview.apk \
             dist/uclone-slices-preview-kernelsu.zip \
+            dist/uclone-prepare-upgrade.sh \
             dist/SHA256SUMS \
             dist/APK-SIGNATURE.txt \
             dist/APK-BADGING.txt \
@@ -325,6 +329,7 @@ jobs:
             KERNELSU-MANIFEST.txt \
             PAIRING-MANIFEST.json \
             SHA256SUMS \
+            uclone-prepare-upgrade.sh \
             uclone-slices-preview-kernelsu.zip \
             uclone-slots-preview.apk | sort > "$RUNNER_TEMP/assets.expected"
           diff -u "$RUNNER_TEMP/assets.expected" "$RUNNER_TEMP/assets.actual"
@@ -337,6 +342,7 @@ jobs:
             KERNELSU-MANIFEST.txt \
             PAIRING-MANIFEST.json \
             SHA256SUMS \
+            uclone-prepare-upgrade.sh \
             uclone-slices-preview-kernelsu.zip \
             uclone-slots-preview.apk
           do

@@ -66,6 +66,7 @@ run_case() {
     reconcile_status=$5
     apps_status=$6
     apps_frame=$7
+    proof=${8:-no}
     case_root=$SCRATCH/$name
     runtime=$case_root/runtime
     installed=$case_root/installed
@@ -73,6 +74,21 @@ run_case() {
     mkdir -p "$runtime" "$installed/bin" "$staging/bin"
     make_toybox "$case_root/toybox"
     make_slotctl "$installed/bin/slotctl" "$reconcile_status" "$apps_status" "$apps_frame"
+    case "$proof" in
+        valid)
+            cat >"$staging/prepare-upgrade.sh" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    --verify) printf '%s\n' 1 ;;
+    --consume) : ;;
+    *) exit 2 ;;
+esac
+EOF
+            chmod 0700 "$staging/prepare-upgrade.sh"
+            ;;
+        no) ;;
+        *) fail "unknown proof fixture $proof" ;;
+    esac
     if [ "$artifact" = yes ]; then
         mkdir -p "$runtime/enrollment/packages/com.asksky.fitness"
         : >"$runtime/enrollment/packages/com.asksky.fitness/enrollment.json"
@@ -123,6 +139,7 @@ run_case retired_gate_evidence pass yes retired 0 0 "$base"
 run_case active_preview reject yes no 0 0 "$preview"
 run_case recovery_required reject yes no 0 0 "$recovery"
 run_case daemon_offline reject yes no 1 1 "$empty"
+run_case installer_rpc_unavailable_with_valid_proof pass yes no 1 1 "$empty" valid
 run_case orphan_metadata reject yes no 0 0 "$empty"
 run_case active_gate reject yes active 0 0 "$base"
 

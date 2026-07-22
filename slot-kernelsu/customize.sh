@@ -5,6 +5,7 @@ INSTALLED_MODULE=/data/adb/modules/uclone-slices-preview
 TOYBOX_BIN=/system/bin/toybox
 UPGRADE_REFUSAL=
 UPGRADE_APP_COUNT=0
+UPGRADE_PROOF_USED=0
 
 root_has_artifact() {
     root="$1"
@@ -65,6 +66,25 @@ safe_installed_slotctl() {
     [ $(((mode / 10) % 10 & 2)) -eq 0 ] && [ $((mode % 10 & 2)) -eq 0 ]
 }
 
+safe_upgrade_proof() {
+    binary=$MODPATH/prepare-upgrade.sh
+    [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || return 1
+    owner="$($TOYBOX_BIN stat -c '%u' "$binary" 2>/dev/null)" || return 1
+    [ "$owner" = 0 ] || return 1
+    mode="$($TOYBOX_BIN stat -c '%a' "$binary" 2>/dev/null)" || return 1
+    case "$mode" in *[!0-7]*|'') return 1 ;; esac
+    [ $(((mode / 10) % 10 & 2)) -eq 0 ] && [ $((mode % 10 & 2)) -eq 0 ]
+}
+
+read_offline_upgrade_proof() {
+    safe_upgrade_proof || return 1
+    proof_count="$($TOYBOX_BIN timeout -s 9 30 "$MODPATH/prepare-upgrade.sh" --verify 2>/dev/null)" || return 1
+    case "$proof_count" in *[!0-9]*|'') return 1 ;; esac
+    [ "$proof_count" -ge 1 ] && [ "$proof_count" -le 64 ] || return 1
+    UPGRADE_APP_COUNT=$proof_count
+    UPGRADE_PROOF_USED=1
+}
+
 paired_upgrade_ready() {
     if active_gate_present; then
         UPGRADE_REFUSAL='an active App Gate lease still exists'
@@ -76,7 +96,10 @@ paired_upgrade_ready() {
     fi
     old_slotctl=$INSTALLED_MODULE/bin/slotctl
     apps_frame="$($TOYBOX_BIN timeout -s 9 30 "$old_slotctl" apps 2>/dev/null)" || {
-        UPGRADE_REFUSAL='the installed Runtime could not report managed Apps'
+        if read_offline_upgrade_proof; then
+            return 0
+        fi
+        UPGRADE_REFUSAL='the installed Runtime is unavailable and no valid Base upgrade proof exists'
         return 1
     }
     case "$apps_frame" in
@@ -114,10 +137,15 @@ if management_metadata_present; then
     ui_print "UClone Slots: existing managed Apps detected; read-only Base verification before paired upgrade."
     if ! paired_upgrade_ready; then
         ui_print "UClone Slots: $UPGRADE_REFUSAL."
-        ui_print "Switch every managed App to Base in the Slots APK, wait for completion, then retry. Existing slots are preserved."
+        ui_print "Switch every managed App to Base, run uclone-prepare-upgrade.sh as root, then retry. Existing slots are preserved."
         abort "UClone Slots paired upgrade refused"
     fi
-    ui_print "UClone Slots: verified $UPGRADE_APP_COUNT managed App(s) on native Base; preserving registrations and slots."
+    if [ "$UPGRADE_PROOF_USED" -eq 1 ]; then
+        ui_print "UClone Slots: verified $UPGRADE_APP_COUNT managed App(s) from an unchanged one-time Base proof."
+    else
+        ui_print "UClone Slots: verified $UPGRADE_APP_COUNT managed App(s) on native Base."
+    fi
+    ui_print "UClone Slots: preserving registrations and slots."
 fi
 set_perm_recursive "$MODPATH" 0 0 0700 0600
 set_perm "$MODPATH/module.prop" 0 0 0644
@@ -132,7 +160,13 @@ for executable in \
     "$MODPATH/post-fs-setup.sh" "$MODPATH/emergency-containment.sh" \
     "$MODPATH/journal-packages.sh" "$MODPATH/startup-gate.sh" \
     "$MODPATH/service.sh" "$MODPATH/boot-completed.sh" \
-    "$MODPATH/boot-state.sh" "$MODPATH/profile-loader.sh" "$MODPATH/rescue.sh"
+    "$MODPATH/boot-state.sh" "$MODPATH/profile-loader.sh" "$MODPATH/rescue.sh" \
+    "$MODPATH/prepare-upgrade.sh"
 do
     set_perm "$executable" 0 0 0700
 done
+
+if [ "$UPGRADE_PROOF_USED" -eq 1 ]; then
+    "$TOYBOX_BIN" timeout -s 9 30 "$MODPATH/prepare-upgrade.sh" --consume >/dev/null 2>&1 || \
+        abort "UClone Slots could not consume the one-time upgrade proof"
+fi

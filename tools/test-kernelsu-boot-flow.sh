@@ -26,7 +26,7 @@ fail() {
     exit 1
 }
 
-for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh; do
+for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh prepare-upgrade.sh; do
     [ -f "$KERNELSU_ROOT/$script" ] || fail "missing $script"
     /bin/sh -n "$KERNELSU_ROOT/$script"
 done
@@ -98,7 +98,7 @@ grep -F 'emergency-containment.sh' "$STARTUP" >/dev/null || fail 'startup worker
 grep -F 'BOOT_RECONCILER' "$SERVICE" >/dev/null || fail 'service lacks redundant delayed-unlock worker'
 grep -F 'case "$marker_action:$classification" in' "$BOOT" >/dev/null || fail 'reconcile worker does not apply marker policy'
 grep -F 'retain:locked)' "$BOOT" >/dev/null || fail 'reconcile worker lacks locked retry branch'
-grep -F 'for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh' "$PACKAGER" >/dev/null || fail 'package script list is incomplete'
+grep -F 'for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh prepare-upgrade.sh' "$PACKAGER" >/dev/null || fail 'package script list is incomplete'
 grep -F 'cp "$KERNELSU_ROOT/$script" "$STAGING/$script"' "$PACKAGER" >/dev/null || fail 'package omits fixed script copy'
 grep -F 'cp "$GENERATED_PROFILE/target-profile.sh"' "$PACKAGER" >/dev/null || fail 'package omits generated target profile'
 grep -F 'crate::target::BRIDGE_CLASSPATH' "$BRIDGE_SOURCE" >/dev/null || fail 'bridge path is not profile-generated'

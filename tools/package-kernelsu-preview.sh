@@ -76,7 +76,7 @@ do
         exit 1
     }
 done
-for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh; do
+for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh prepare-upgrade.sh; do
     require_regular_file "$KERNELSU_ROOT/$script"
     /bin/sh -n "$KERNELSU_ROOT/$script"
     cp "$KERNELSU_ROOT/$script" "$STAGING/$script"
@@ -108,14 +108,15 @@ chmod 0700 "$STAGING/post-fs-data.sh" "$STAGING/startup-gate.sh" \
     "$STAGING/emergency-containment.sh" "$STAGING/service.sh" \
     "$STAGING/boot-completed.sh" "$STAGING/customize.sh" \
     "$STAGING/boot-state.sh" "$STAGING/profile-loader.sh" \
-    "$STAGING/post-fs-setup.sh" "$STAGING/journal-packages.sh" "$STAGING/rescue.sh"
+    "$STAGING/post-fs-setup.sh" "$STAGING/journal-packages.sh" "$STAGING/rescue.sh" \
+    "$STAGING/prepare-upgrade.sh"
 chmod 0644 "$STAGING/disable" "$STAGING/module.prop" "$STAGING/skip_mount"
 chmod 0444 "$STAGING/target-profile.sh"
 chmod 0600 "$STAGING/runtime/slot-bridge.apk"
 for executable in \
     bin/ucloned bin/slotctl runtime/slot-fsprobe \
     post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh \
-    boot-completed.sh boot-state.sh profile-loader.sh customize.sh rescue.sh
+    boot-completed.sh boot-state.sh profile-loader.sh customize.sh rescue.sh prepare-upgrade.sh
 do
     [ "$(file_mode "$STAGING/$executable")" = 700 ] || {
         printf 'unexpected executable mode: %s\n' "$executable" >&2
@@ -172,7 +173,7 @@ mkdir -p "$VERIFY_ROOT"
 for executable in \
     bin/ucloned bin/slotctl runtime/slot-fsprobe \
     post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh \
-    boot-completed.sh boot-state.sh profile-loader.sh rescue.sh
+    boot-completed.sh boot-state.sh profile-loader.sh rescue.sh prepare-upgrade.sh
 do
     [ "$(file_mode "$VERIFY_ROOT/$executable")" = 700 ] || {
         printf 'ZIP executable mode drift: %s\n' "$executable" >&2
@@ -206,6 +207,7 @@ journal-packages.sh
 module.prop
 post-fs-data.sh
 post-fs-setup.sh
+prepare-upgrade.sh
 profile-loader.sh
 rescue.sh
 runtime/slot-bridge.apk
@@ -241,11 +243,8 @@ actual_zip_digest=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')
     /usr/bin/shasum -a 256 -c "$SHA256_PATH"
 )
 {
-    printf 'zip_sha256=%s\n' "$zip_digest"
-    printf '%s\n' '--- manifest ---'
+    printf 'zip_sha256=%s\n--- manifest ---\n' "$zip_digest"
     cat "$MANIFEST_PATH"
 } >"$SUMMARY_PATH"
 printf '%s\n' "KernelSU Preview package: $ZIP_PATH"
-printf '%s\n' "Manifest: $MANIFEST_PATH"
 printf '%s\n' "SHA256: $SHA256_PATH"
-printf '%s\n' "Summary: $SUMMARY_PATH"
