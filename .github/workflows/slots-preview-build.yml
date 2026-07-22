@@ -1,4 +1,4 @@
-name: Build Slots Preview APK
+name: Build Slots Preview Bundle
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 55
 
     steps:
       - name: Checkout
@@ -31,12 +31,25 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android platform
-        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+        run: |
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;29.0.14206865"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
 
       - name: Set up Gradle 8.13
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.13"
+
+      - name: Set up Rust 1.95
+        run: >-
+          rustup toolchain install 1.95.0
+          --profile minimal
+          --component rustfmt
+          --component clippy
+          --target aarch64-linux-android
 
       - name: Require fixed release signing
         env:
@@ -71,6 +84,61 @@ jobs:
           :slot-manager-app:testDebugUnitTest
           :slot-manager-app:lintRelease
 
+      - name: Test generic Runtime safety core
+        run: |
+          cargo +1.95.0 fmt --manifest-path slot-runtime/Cargo.toml --all -- --check
+          cargo +1.95.0 test --manifest-path slot-runtime/Cargo.toml --locked --all-targets --all-features -- --skip fake_ce_de_switch_stress_keeps_one_mount_pair_and_valid_chain
+          cargo +1.95.0 clippy --manifest-path slot-runtime/Cargo.toml --locked --all-targets --all-features -- -D warnings
+          cargo +1.95.0 doc --manifest-path slot-runtime/Cargo.toml --locked --no-deps --all-features
+          tools/test-target-profiles.sh
+          tools/test-generic-emergency-once.sh
+          tools/test-generic-rescue.sh
+
+      - name: Build generic Android Runtime
+        env:
+          UCLONE_TARGET_PROFILE: generic
+        run: |
+          PROFILE_ROOT="$GITHUB_WORKSPACE/slot-runtime/target-profiles/generic"
+          mkdir -p "$PROFILE_ROOT/profile"
+          tools/render-target-profile.sh generic "$PROFILE_ROOT/profile"
+          export CARGO_TARGET_DIR="$PROFILE_ROOT"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang"
+          cargo +1.95.0 build \
+            --manifest-path slot-runtime/Cargo.toml \
+            --locked \
+            --release \
+            --target aarch64-linux-android \
+            --bins
+
+      - name: Build generic PackageManager Bridge
+        run: >-
+          gradle --no-daemon -p slot-bridge
+          testReleaseUnitTest
+          lintRelease
+          appProcessArtifact
+          -PtargetProfile=generic
+
+      - name: Build generic filesystem probe
+        run: >-
+          make -C slot-fsprobe
+          TARGET_PROFILE=generic
+          ANDROID_NDK_HOME="$ANDROID_NDK_HOME"
+          test android-check
+
+      - name: Package and test generic KernelSU Runtime
+        run: |
+          PACKAGE_ROOT="$RUNNER_TEMP/kernelsu-package"
+          tools/package-kernelsu-preview.sh --profile generic --output "$PACKAGE_ROOT"
+          tools/test-kernelsu-boot-flow.sh --profile generic
+          test -f "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip"
+          unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" target-profile.sh | \
+            grep -F "UCLONE_TARGET_PROFILE='generic'"
+          unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" module.prop | \
+            grep -F 'version=0.2.0-preview.2'
+          unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" bin/slotctl | \
+            strings | grep -F 'rpc'
+          echo "KERNELSU_PACKAGE_ROOT=$PACKAGE_ROOT" >> "$GITHUB_ENV"
+
       - name: Assemble fixed-signed release APK
         env:
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
@@ -101,9 +169,17 @@ jobs:
           install -m 0644 \
             slot-manager-app/build/outputs/apk/release/slot-manager-app-release.apk \
             dist/uclone-slots-preview.apk
+          install -m 0644 \
+            "$KERNELSU_PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" \
+            dist/uclone-slices-preview-kernelsu.zip
+          install -m 0644 \
+            "$KERNELSU_PACKAGE_ROOT/manifest.txt" \
+            dist/KERNELSU-MANIFEST.txt
           (
             cd dist
-            sha256sum uclone-slots-preview.apk > SHA256SUMS
+            sha256sum \
+              uclone-slots-preview.apk \
+              uclone-slices-preview-kernelsu.zip > SHA256SUMS
           )
           cp "$RUNNER_TEMP/apksigner.txt" dist/APK-SIGNATURE.txt
           cp "$RUNNER_TEMP/badging.txt" dist/APK-BADGING.txt
@@ -111,7 +187,7 @@ jobs:
       - name: Upload Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: uclone-slots-preview-${{ github.run_number }}
+          name: uclone-slots-preview-bundle-${{ github.run_number }}
           path: dist/
           if-no-files-found: error
           retention-days: 30
@@ -124,10 +200,12 @@ jobs:
           gh release create \
             "preview-build-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" \
             dist/uclone-slots-preview.apk \
+            dist/uclone-slices-preview-kernelsu.zip \
             dist/SHA256SUMS \
             dist/APK-SIGNATURE.txt \
+            dist/KERNELSU-MANIFEST.txt \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --prerelease \
             --title "UClone Slices Preview build ${GITHUB_RUN_NUMBER}" \
-            --notes "Fixed-signed Preview APK from commit ${GITHUB_SHA}. This is an experimental build for rooted Android devices."
+            --notes "Paired fixed-signed APK and generic KernelSU Runtime from commit ${GITHUB_SHA}. Install the ZIP through KernelSU; the packaged disable marker keeps a fresh module disabled until explicitly enabled."

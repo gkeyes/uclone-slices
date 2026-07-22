@@ -83,7 +83,7 @@ cargo clippy --manifest-path slot-runtime/Cargo.toml --all-targets --all-feature
 
 KernelSU ZIP 由固定路径打包脚本生成；源码目录中的模块骨架不能直接视为可安装发布包。
 
-`main` 分支的 GitHub Action 会使用固定的 Preview 签名构建 `uclone-slots-preview.apk`，并将 APK、SHA-256 与签名报告上传到 Actions 产物和 GitHub Preview Release。首次从 debug 签名迁移需要卸载旧 APK；之后使用同一固定签名的构建可以覆盖更新。私钥只保存在 GitHub Actions Secrets 和受保护的本机备份中，仓库仅保存公钥证书与指纹。
+`main` 分支的 GitHub Action 会成对构建 `uclone-slots-preview.apk` 和通用 `uclone-slices-preview-kernelsu.zip`，并将 APK、模块、SHA-256、签名报告与模块清单上传到 Actions 产物和 GitHub Preview Release。首次从 debug 签名迁移需要卸载旧 APK；之后使用同一固定签名的构建可以覆盖更新。私钥只保存在 GitHub Actions Secrets 和受保护的本机备份中，仓库仅保存公钥证书与指纹。
 
 ## 安全原则
 

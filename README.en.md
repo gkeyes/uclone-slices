@@ -77,7 +77,7 @@ cargo clippy --manifest-path slot-runtime/Cargo.toml --all-targets --all-feature
 
 The KernelSU ZIP is produced by the fixed-path packaging workflow. The source skeleton itself is not an installable release artifact.
 
-The GitHub Action on `main` builds a fixed-signed `uclone-slots-preview.apk` and uploads the APK, SHA-256 checksum, and signing report to both Actions artifacts and a GitHub Preview Release. Moving from a debug-signed APK requires one uninstall; later builds signed by this fixed identity can update in place. The private key exists only in GitHub Actions Secrets and a protected local backup. The repository stores only the public certificate and fingerprint.
+The GitHub Action on `main` builds a paired fixed-signed `uclone-slots-preview.apk` and generic `uclone-slices-preview-kernelsu.zip`. It uploads the APK, Runtime ZIP, SHA-256 checksums, signing report, and module manifest to both Actions artifacts and a GitHub Preview Release. Moving from a debug-signed APK requires one uninstall; later builds signed by this fixed identity can update in place. The private key exists only in GitHub Actions Secrets and a protected local backup. The repository stores only the public certificate and fingerprint.
 
 ## Safety contract
 

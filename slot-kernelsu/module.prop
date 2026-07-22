@@ -1,6 +1,6 @@
 id=uclone-slices-preview
 name=UClone Slots Preview Runtime
-version=0.1.0-preview.1
-versionCode=101
+version=0.2.0-preview.2
+versionCode=202
 author=UClone Preview
-description=Fail-closed KernelSU runtime for UClone Slots Preview; no overlay or system partition changes
+description=Generic fail-closed KernelSU runtime for UClone Slots Preview; RPC v1; no overlay or system partition changes
