@@ -89,6 +89,7 @@ jobs:
           tools/test-generic-emergency-once.sh
           tools/test-generic-rescue.sh
           tools/test-kernelsu-boot-flow.sh --profile generic
+          tools/test-kernelsu-upgrade-gate.sh
 
       - name: Build paired generic Runtime
         env:

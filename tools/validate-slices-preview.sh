@@ -16,6 +16,7 @@ FSPROBE_ROOT="$REPO_ROOT/slot-fsprobe"
 PROBE_ROOT="$REPO_ROOT/slot-probe"
 ANDROID_RUST_BUILD="$SCRIPT_DIR/build-slot-runtime-android.sh"
 KERNELSU_BOOT_TEST="$SCRIPT_DIR/test-kernelsu-boot-flow.sh"
+KERNELSU_UPGRADE_TEST="$SCRIPT_DIR/test-kernelsu-upgrade-gate.sh"
 EVIDENCE_DIR="$REPO_ROOT/.omo/evidence/slices-preview-validation"
 RUN_LOG="$EVIDENCE_DIR/run.log"
 
@@ -54,6 +55,7 @@ require_host_tool make "$MAKE"
 require_host_tool java "$JAVA_HOME/bin/java"
 require_host_tool rust_android_build "$ANDROID_RUST_BUILD"
 require_host_tool kernelsu_boot_test "$KERNELSU_BOOT_TEST"
+require_host_tool kernelsu_upgrade_test "$KERNELSU_UPGRADE_TEST"
 export PATH="$RUST_TOOLCHAIN_BIN:/usr/bin:/bin:/usr/sbin:/sbin"
 export JAVA_HOME ANDROID_HOME ANDROID_NDK_HOME
 export CARGO_BUILD_JOBS=1
@@ -191,6 +193,7 @@ log "repository=$REPO_ROOT"
 log "evidence=$EVIDENCE_DIR"
 run_step source_line_limit check_source_lines
 run_step kernelsu_boot_flow "$KERNELSU_BOOT_TEST"
+run_step kernelsu_upgrade_gate "$KERNELSU_UPGRADE_TEST"
 run_step rust_fmt run_rust_fmt
 run_step rust_check run_rust_check
 run_step rust_test run_rust_test

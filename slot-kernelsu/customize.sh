@@ -1,10 +1,17 @@
 #!/system/bin/sh
 
 RUNTIME_ROOT=/data/adb/uclone-slices-preview
+INSTALLED_MODULE=/data/adb/modules/uclone-slices-preview
+TOYBOX_BIN=/system/bin/toybox
+UPGRADE_REFUSAL=
+UPGRADE_APP_COUNT=0
 
 root_has_artifact() {
     root="$1"
-    [ -d "$root" ] && [ ! -L "$root" ] || return 1
+    if [ -L "$root" ] || { [ -e "$root" ] && [ ! -d "$root" ]; }; then
+        return 0
+    fi
+    [ -d "$root" ] || return 1
     for entry in "$root"/*; do
         [ -e "$entry" ] || [ -L "$entry" ] || continue
         return 0
@@ -12,27 +19,110 @@ root_has_artifact() {
     return 1
 }
 
-for root in \
-    "$RUNTIME_ROOT/enrollment/packages" \
-    "$RUNTIME_ROOT/compatibility-policy/packages" \
-    "$RUNTIME_ROOT/catalog/packages" \
-    "$RUNTIME_ROOT/registry/packages" \
-    "$RUNTIME_ROOT/package-state/packages" \
-    "$RUNTIME_ROOT/slot-metadata/packages" \
-    "$RUNTIME_ROOT/enrollment-attempts/attempts" \
-    "$RUNTIME_ROOT/rescue-journal/packages" \
-    "$RUNTIME_ROOT/journal/transactions"
-do
-    if root_has_artifact "$root"; then
-        ui_print "UClone Slots: active Preview metadata exists. Rescue every App to Base before this paired upgrade."
+management_metadata_present() {
+    for root in \
+        "$RUNTIME_ROOT/enrollment/packages" \
+        "$RUNTIME_ROOT/compatibility-policy/packages" \
+        "$RUNTIME_ROOT/catalog/packages" \
+        "$RUNTIME_ROOT/registry/packages" \
+        "$RUNTIME_ROOT/package-state/packages" \
+        "$RUNTIME_ROOT/slot-metadata/packages" \
+        "$RUNTIME_ROOT/enrollment-attempts/attempts" \
+        "$RUNTIME_ROOT/rescue-journal/packages" \
+        "$RUNTIME_ROOT/journal/transactions"
+    do
+        root_has_artifact "$root" && return 0
+    done
+    return 1
+}
+
+active_gate_present() {
+    state_root=$RUNTIME_ROOT/state
+    if [ -L "$state_root" ] || { [ -e "$state_root" ] && [ ! -d "$state_root" ]; }; then
+        return 0
+    fi
+    [ -d "$state_root" ] || return 1
+    for path in "$state_root"/* "$state_root"/.[!.]* "$state_root"/..?*; do
+        [ -e "$path" ] || [ -L "$path" ] || continue
+        [ -f "$path" ] && [ ! -L "$path" ] || return 0
+        name=${path##*/}
+        case "$name" in
+            .*.gate.retired) ;;
+            *) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+safe_installed_slotctl() {
+    binary=$INSTALLED_MODULE/bin/slotctl
+    [ -f "$binary" ] && [ ! -L "$binary" ] && [ -x "$binary" ] || return 1
+    [ -f "$TOYBOX_BIN" ] && [ ! -L "$TOYBOX_BIN" ] && [ -x "$TOYBOX_BIN" ] || return 1
+    owner="$($TOYBOX_BIN stat -c '%u' "$binary" 2>/dev/null)" || return 1
+    [ "$owner" = 0 ] || return 1
+    mode="$($TOYBOX_BIN stat -c '%a' "$binary" 2>/dev/null)" || return 1
+    case "$mode" in *[!0-7]*|'') return 1 ;; esac
+    [ $(((mode / 10) % 10 & 2)) -eq 0 ] && [ $((mode % 10 & 2)) -eq 0 ]
+}
+
+paired_upgrade_ready() {
+    if active_gate_present; then
+        UPGRADE_REFUSAL='an active App Gate lease still exists'
+        return 1
+    fi
+    if ! safe_installed_slotctl; then
+        UPGRADE_REFUSAL='the installed Runtime client is unavailable or unsafe'
+        return 1
+    fi
+    old_slotctl=$INSTALLED_MODULE/bin/slotctl
+    if ! "$TOYBOX_BIN" timeout -s 9 120 "$old_slotctl" reconcile >/dev/null 2>&1; then
+        UPGRADE_REFUSAL='the installed Runtime could not reconcile every managed App'
+        return 1
+    fi
+    apps_frame="$($TOYBOX_BIN timeout -s 9 30 "$old_slotctl" apps 2>/dev/null)" || {
+        UPGRADE_REFUSAL='the installed Runtime could not report managed Apps'
+        return 1
+    }
+    case "$apps_frame" in
+        *'"status":"ok"'*'"kind":"managed_apps"'*'"apps":['*) ;;
+        *)
+            UPGRADE_REFUSAL='the installed Runtime returned an invalid managed-App report'
+            return 1
+            ;;
+    esac
+    active_slots="$(printf '%s\n' "$apps_frame" | "$TOYBOX_BIN" grep -o '"active_slot":"[^"]*"' 2>/dev/null)"
+    if [ -z "$active_slots" ]; then
+        UPGRADE_REFUSAL='management metadata exists without a reportable managed App'
+        return 1
+    fi
+    non_base="$(printf '%s\n' "$active_slots" | "$TOYBOX_BIN" grep -F -v '"active_slot":"base"' 2>/dev/null)"
+    if [ -n "$non_base" ]; then
+        UPGRADE_REFUSAL='at least one managed App is still using a Preview slot'
+        return 1
+    fi
+    lifecycles="$(printf '%s\n' "$apps_frame" | "$TOYBOX_BIN" grep -o '"lifecycle":"[^"]*"' 2>/dev/null)"
+    if [ -z "$lifecycles" ]; then
+        UPGRADE_REFUSAL='the managed-App lifecycle report is incomplete'
+        return 1
+    fi
+    non_normal="$(printf '%s\n' "$lifecycles" | "$TOYBOX_BIN" grep -F -v '"lifecycle":"normal"' 2>/dev/null)"
+    if [ -n "$non_normal" ]; then
+        UPGRADE_REFUSAL='at least one managed App is not in the normal lifecycle state'
+        return 1
+    fi
+    UPGRADE_APP_COUNT="$(printf '%s\n' "$active_slots" | "$TOYBOX_BIN" wc -l | "$TOYBOX_BIN" tr -d '[:space:]')"
+    return 0
+}
+
+if management_metadata_present; then
+    ui_print "UClone Slots: existing managed Apps detected; proving Base state before paired upgrade."
+    if ! paired_upgrade_ready; then
+        ui_print "UClone Slots: $UPGRADE_REFUSAL."
+        ui_print "Switch every managed App to Base in the Slots APK, wait for completion, then retry. Existing slots are preserved."
         abort "UClone Slots paired upgrade refused"
     fi
-done
-for path in "$RUNTIME_ROOT"/state/*.gate "$RUNTIME_ROOT"/state/.*.gate*; do
-    [ -e "$path" ] || [ -L "$path" ] || continue
-    ui_print "UClone Slots: an active Gate lease exists. Complete Base rescue before upgrade."
-    abort "UClone Slots paired upgrade refused"
-done
+    ui_print "UClone Slots: verified $UPGRADE_APP_COUNT managed App(s) on native Base; preserving registrations and slots."
+fi
 set_perm_recursive "$MODPATH" 0 0 0700 0600
 set_perm "$MODPATH/module.prop" 0 0 0644
 set_perm "$MODPATH/disable" 0 0 0644
