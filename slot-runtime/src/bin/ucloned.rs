@@ -64,7 +64,7 @@ fn main() -> ExitCode {
 
 fn run(startup_gate: bool) -> Result<(), UclonedError> {
     let lock = RuntimeLock::acquire(RuntimeLayout::lock(), "ucloned")?;
-    let (keys, corrupt_discovery) = startup_keys()?;
+    let (keys, corrupt_discovery) = startup_keys();
     let runtime_probe = SystemPackageProbe::new();
     let runtime = AndroidBackend::new(SystemCommandRunner::new(), runtime_probe);
     let metadata = SystemMetadataSource::new();
@@ -134,7 +134,7 @@ fn run_ordinary(
     serve_with_lock(production, lock)
 }
 
-fn startup_keys() -> Result<(Vec<PackageKey>, bool), UclonedError> {
+fn startup_keys() -> (Vec<PackageKey>, bool) {
     let mut packages = BTreeMap::<String, PackageName>::new();
     let mut corrupt_discovery = false;
     for root in management_package_roots() {
@@ -167,22 +167,22 @@ fn startup_keys() -> Result<(Vec<PackageKey>, bool), UclonedError> {
         }
         Err(_) => corrupt_discovery = true,
     }
-    let mut leases = FileGateLeaseStore;
-    match leases.package_names() {
-        Ok(leased) => {
-            for package in leased {
+    let mut lease_store = FileGateLeaseStore;
+    match lease_store.package_names() {
+        Ok(lease_packages) => {
+            for package in lease_packages {
                 insert_package(&mut packages, package);
             }
         }
         Err(_) => corrupt_discovery = true,
     }
-    Ok((
+    (
         packages
             .into_values()
             .map(|package| PackageKey::new(package, UserId::PRIMARY))
             .collect(),
         corrupt_discovery,
-    ))
+    )
 }
 
 fn management_package_roots() -> Vec<std::path::PathBuf> {
