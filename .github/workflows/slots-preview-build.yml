@@ -89,7 +89,7 @@ jobs:
           install -d -m 0700 "$RUNNER_TEMP/uclone-rust-tests"
           export TMPDIR="$RUNNER_TEMP/uclone-rust-tests"
           cargo +1.95.0 fmt --manifest-path slot-runtime/Cargo.toml --all -- --check
-          cargo +1.95.0 test --manifest-path slot-runtime/Cargo.toml --locked --all-targets --all-features -- --skip fake_ce_de_switch_stress_keeps_one_mount_pair_and_valid_chain
+          cargo +1.95.0 test --manifest-path slot-runtime/Cargo.toml --locked --all-targets --all-features -- --skip fake_ce_de_switch_stress_keeps_one_mount_pair_and_valid_chain --test-threads=1
           cargo +1.95.0 clippy --manifest-path slot-runtime/Cargo.toml --locked --all-targets --all-features -- -D warnings
           cargo +1.95.0 doc --manifest-path slot-runtime/Cargo.toml --locked --no-deps --all-features
           tools/test-target-profiles.sh
