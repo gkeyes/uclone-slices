@@ -25,8 +25,22 @@ pub(super) fn read_frame(stream: &mut UnixStream) -> Result<Option<Vec<u8>>, Dae
             .copied()
             .ok_or_else(|| io::Error::other("UnixStream returned an empty byte read"))?;
         frame.push(value);
-        if frame.len() > MAX_FRAME_SIZE || value == b'\n' {
+        if value == b'\n' {
             return Ok(Some(frame));
+        }
+        if frame.len() > MAX_FRAME_SIZE {
+            drain_oversized_frame(stream)?;
+            return Ok(Some(frame));
+        }
+    }
+}
+
+fn drain_oversized_frame(stream: &mut UnixStream) -> Result<(), DaemonError> {
+    loop {
+        let mut byte = [0_u8; 1];
+        let count = stream.read(&mut byte)?;
+        if count == 0 || byte.first().copied() == Some(b'\n') {
+            return Ok(());
         }
     }
 }
