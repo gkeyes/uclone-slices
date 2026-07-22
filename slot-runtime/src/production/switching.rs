@@ -4,7 +4,7 @@ use crate::materializer::{MaterializationBackend, MaterializationCoordinator, No
 use crate::reconcile::RecoveryBackend;
 use crate::runtime::{RuntimeError, SwitchCoordinator, SwitchRequest};
 use crate::service::{ServiceError, SwitchExecution};
-use crate::slot_metadata::{SlotRecordState, SlotSeedMode};
+use crate::slot_metadata::{SlotDisplayName, SlotMetadata, SlotRecordState, SlotSeedMode};
 
 use super::composition::ProductionPlatform;
 use super::metadata::MetadataSource;
@@ -22,6 +22,7 @@ where
         slot: &SlotId,
         seed_mode: SlotSeedMode,
     ) -> Result<SlotView, ServiceError> {
+        let record = self.materialization_record(package, slot, seed_mode)?;
         let mut faults = NoFault;
         let Ok(result) = MaterializationCoordinator::new(&mut self.materializer, &mut faults)
             .materialize_with_seed(package, slot, seed_mode)
@@ -38,12 +39,63 @@ where
             result.security_profile().clone(),
         );
         if let Ok(entry) = entry {
+            if self
+                .stores
+                .slot_metadata
+                .update(
+                    package.package_name(),
+                    slot,
+                    record.display_name().clone(),
+                    SlotRecordState::Ready,
+                    package.identity().version_code(),
+                )
+                .is_err()
+            {
+                self.mark_package_recovery(package)?;
+                return Err(ServiceError::RecoveryRequired);
+            }
             Ok(SlotView::new(entry.slot_id().clone(), entry.inodes()))
         } else {
             let _ = MaterializationCoordinator::new(&mut self.materializer, &mut faults)
                 .cleanup_interrupted(package, slot);
             self.mark_package_recovery(package)?;
             Err(ServiceError::RecoveryRequired)
+        }
+    }
+
+    fn materialization_record(
+        &self,
+        package: &ManagedPackage,
+        slot: &SlotId,
+        seed_mode: SlotSeedMode,
+    ) -> Result<SlotMetadata, ServiceError> {
+        match self
+            .stores
+            .slot_metadata
+            .latest(package.package_name(), slot)
+            .map_err(|_| ServiceError::RecoveryRequired)?
+        {
+            Some(record)
+                if record.state() == SlotRecordState::Creating
+                    && record.seed_mode() == seed_mode =>
+            {
+                Ok(record)
+            }
+            Some(_) => Err(ServiceError::Conflict),
+            None => {
+                let display_name = SlotDisplayName::parse(slot.as_str())
+                    .map_err(|_| ServiceError::RecoveryRequired)?;
+                self.stores
+                    .slot_metadata
+                    .create(
+                        package.package_name(),
+                        slot.clone(),
+                        display_name,
+                        seed_mode,
+                        package.identity().version_code(),
+                    )
+                    .map_err(|_| ServiceError::RecoveryRequired)
+            }
         }
     }
 

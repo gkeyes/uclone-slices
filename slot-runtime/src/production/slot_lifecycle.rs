@@ -3,7 +3,7 @@ use crate::domain::{PackageKey, SlotId};
 use crate::materializer::{MaterializationBackend, MaterializationCoordinator, NoFault};
 use crate::reconcile::RecoveryBackend;
 use crate::service::{ServiceError, SwitchExecution};
-use crate::slot_metadata::{SlotDisplayName, SlotRecordState, SlotSeedMode};
+use crate::slot_metadata::{SlotDisplayName, SlotMetadata, SlotRecordState, SlotSeedMode};
 
 use super::composition::ProductionPlatform;
 use super::metadata::MetadataSource;
@@ -32,7 +32,7 @@ where
             .create(
                 key.package_name(),
                 slot.clone(),
-                display_name.clone(),
+                display_name,
                 seed_mode,
                 managed.identity().version_code(),
             )
@@ -43,16 +43,6 @@ where
         self.do_quiesce(key)
             .map_err(|_| ServiceError::RecoveryRequired)?;
         let target = self.do_materialize(&managed, &slot, seed_mode)?;
-        self.stores
-            .slot_metadata
-            .update(
-                key.package_name(),
-                &slot,
-                display_name,
-                SlotRecordState::Ready,
-                managed.identity().version_code(),
-            )
-            .map_err(|_| ServiceError::RecoveryRequired)?;
         self.do_switch(&managed, &target, Some(gate))
     }
 
@@ -63,16 +53,11 @@ where
         display_name: SlotDisplayName,
     ) -> Result<(), ServiceError> {
         let snapshot = self.ready_snapshot(key)?;
-        let record = self
-            .stores
-            .slot_metadata
-            .latest(key.package_name(), slot)
-            .map_err(|_| ServiceError::RecoveryRequired)?
-            .ok_or(ServiceError::NotFound)?;
-        if slot.is_base()
-            || record.state() != SlotRecordState::Ready
-            || snapshot.slot(slot).is_none()
-        {
+        if slot.is_base() || snapshot.slot(slot).is_none() {
+            return Err(ServiceError::Conflict);
+        }
+        let record = self.ready_record_or_adopt_legacy(key, slot)?;
+        if record.state() != SlotRecordState::Ready {
             return Err(ServiceError::Conflict);
         }
         self.stores
@@ -98,12 +83,7 @@ where
         if slot.is_base() || !managed.active_slot().is_base() || snapshot.slot(slot).is_none() {
             return Err(ServiceError::Conflict);
         }
-        let record = self
-            .stores
-            .slot_metadata
-            .latest(key.package_name(), slot)
-            .map_err(|_| ServiceError::RecoveryRequired)?
-            .ok_or(ServiceError::NotFound)?;
+        let record = self.ready_record_or_adopt_legacy(key, slot)?;
         if record.state() != SlotRecordState::Ready {
             return Err(ServiceError::Conflict);
         }
@@ -134,6 +114,49 @@ where
             .map_err(|_| ServiceError::RecoveryRequired)?;
         self.runtime
             .retire_gate_lease(&managed)
+            .map_err(|_| ServiceError::RecoveryRequired)
+    }
+
+    fn ready_record_or_adopt_legacy(
+        &self,
+        key: &PackageKey,
+        slot: &SlotId,
+    ) -> Result<SlotMetadata, ServiceError> {
+        if let Some(record) = self
+            .stores
+            .slot_metadata
+            .latest(key.package_name(), slot)
+            .map_err(|_| ServiceError::RecoveryRequired)?
+        {
+            return Ok(record);
+        }
+        let catalog = self
+            .stores
+            .catalog
+            .lookup(key, slot)
+            .map_err(|_| ServiceError::RecoveryRequired)?
+            .ok_or(ServiceError::RecoveryRequired)?;
+        let display_name =
+            SlotDisplayName::parse(slot.as_str()).map_err(|_| ServiceError::RecoveryRequired)?;
+        self.stores
+            .slot_metadata
+            .create(
+                key.package_name(),
+                slot.clone(),
+                display_name.clone(),
+                SlotSeedMode::CloneBase,
+                catalog.created_version_code(),
+            )
+            .map_err(|_| ServiceError::RecoveryRequired)?;
+        self.stores
+            .slot_metadata
+            .update(
+                key.package_name(),
+                slot,
+                display_name,
+                SlotRecordState::Ready,
+                catalog.enrolled_identity().version_code(),
+            )
             .map_err(|_| ServiceError::RecoveryRequired)
     }
 }

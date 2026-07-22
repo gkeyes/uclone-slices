@@ -16,6 +16,7 @@ use crate::materializer::{
     DomainCopyProof, MaterializationBackend, MaterializationPaths, SlotMaterializationProof,
 };
 use crate::protocol::ALLOWED_PACKAGE;
+use crate::slot_metadata::SlotRecordState;
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -84,6 +85,16 @@ fn catalog_only_legacy_slot_can_be_deleted_after_returning_to_base() {
 
     assert!(result.is_ok(), "legacy preview deletion failed: {result:?}");
     assert!(!platform.materializer().ready);
+    assert_eq!(
+        platform
+            .stores
+            .slot_metadata
+            .latest(key.package_name(), &preview)
+            .unwrap()
+            .unwrap()
+            .state(),
+        SlotRecordState::Deleted,
+    );
 }
 
 #[derive(Debug)]
