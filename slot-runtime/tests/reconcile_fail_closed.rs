@@ -63,14 +63,15 @@ fn package_scoped_reconcile_never_gates_an_unrelated_enrollment() {
         backend,
         stores.enrollment.clone(),
         stores.journal.clone(),
-        stores.registry.clone(),
+        stores.registry,
         selected.package_name().clone(),
     );
 
     let report = reconciler.early_boot().unwrap();
 
     assert_eq!(report.results().len(), 1);
-    assert_eq!(report.results()[0].package_name(), selected.package_name());
+    let result = report.results().first().unwrap();
+    assert_eq!(result.package_name(), selected.package_name());
     assert_eq!(reconciler.backend().emergency_gate_calls, 1);
 }
 
