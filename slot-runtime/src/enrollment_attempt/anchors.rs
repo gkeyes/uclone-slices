@@ -26,7 +26,7 @@ pub(super) struct PublishedAnchorDigests {
 }
 
 impl PublishedAnchorDigests {
-    pub(super) const fn new(
+    pub(super) fn new(
         enrollment: String,
         compatibility_policy: String,
         base_catalog: String,
@@ -77,7 +77,7 @@ impl CommittedAnchors {
         &self.package_state_sha256
     }
 
-    pub(super) const fn new(
+    pub(super) fn new(
         managed_sha256: String,
         identity: AppIdentity,
         base_inodes: DataInodes,
