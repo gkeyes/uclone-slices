@@ -64,5 +64,15 @@ for transaction in "$TRANSACTIONS"/* "$TRANSACTIONS"/.*; do
         's/.*"package_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         "$first")" || exit 1
     valid_package "$package" || exit 1
+    last=
+    for step in "$steps"/*.json; do
+        [ -e "$step" ] || continue
+        safe_root_file "$step" || exit 1
+        last=$step
+    done
+    [ -n "$last" ] || exit 1
+    completed="$("$TOYBOX_BIN" grep -o '"event":{"type":"completed"}' "$last" 2>/dev/null |
+        "$TOYBOX_BIN" wc -l | "$TOYBOX_BIN" tr -d '[:space:]')" || exit 1
+    case "$completed" in 0) ;; 1) continue ;; *) exit 1 ;; esac
     printf '%s\n' "$package"
 done

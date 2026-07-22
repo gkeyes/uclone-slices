@@ -9,7 +9,8 @@ BIN="$FIXTURE/bin"
 STATE="$FIXTURE/state"
 RUNTIME="$FIXTURE/runtime"
 mkdir -p "$BIN" "$STATE" "$RUNTIME/enrollment/packages" \
-    "$RUNTIME/journal/transactions/journal-only/steps" "$FIXTURE/profile"
+    "$RUNTIME/journal/transactions/journal-only/steps" \
+    "$RUNTIME/journal/transactions/completed/steps" "$RUNTIME/state" "$FIXTURE/profile"
 "$ROOT/tools/render-target-profile.sh" generic "$FIXTURE/profile" >/dev/null
 sed "s|^readonly UCLONE_RUNTIME_ROOT=.*$|readonly UCLONE_RUNTIME_ROOT='$RUNTIME'|" \
     "$FIXTURE/profile/target-profile-generic/target-profile.sh" \
@@ -19,11 +20,22 @@ for package in com.asksky.fitness com.uclone.slotprobe; do
     : >"$STATE/process-$package"
 done
 JOURNAL_PACKAGE=com.example.journal
+COMPLETED_PACKAGE=com.example.completed
+RETIRED_PACKAGE=com.example.retired
 : >"$STATE/process-$JOURNAL_PACKAGE"
+: >"$STATE/process-$COMPLETED_PACKAGE"
+: >"$STATE/process-$RETIRED_PACKAGE"
+: >"$RUNTIME/state/.$RETIRED_PACKAGE.gate.retired"
 cat >"$RUNTIME/journal/transactions/journal-only/steps/0000000000000001.json" <<EOF
 {"event":{"prepared":{"spec":{"managed_package":{"package_name":"$JOURNAL_PACKAGE"}}}}}
 EOF
 chmod 600 "$RUNTIME/journal/transactions/journal-only/steps/0000000000000001.json"
+cat >"$RUNTIME/journal/transactions/completed/steps/0000000000000001.json" <<EOF
+{"event":{"prepared":{"spec":{"managed_package":{"package_name":"$COMPLETED_PACKAGE"}}}}}
+EOF
+printf '%s\n' '{"event":{"type":"completed"}}' \
+    >"$RUNTIME/journal/transactions/completed/steps/0000000000000002.json"
+chmod 600 "$RUNTIME/journal/transactions/completed/steps/"*.json
 
 cat >"$BIN/toybox" <<EOF
 #!/bin/sh
@@ -89,4 +101,8 @@ chmod 755 "$FIXTURE/emergency.sh"
 sort -u "$STATE/disable.log" >"$STATE/actual"
 printf '%s\n' com.asksky.fitness com.uclone.slotprobe "$JOURNAL_PACKAGE" | sort >"$STATE/expected"
 cmp "$STATE/expected" "$STATE/actual"
+[ ! -e "$STATE/disabled-$COMPLETED_PACKAGE" ]
+[ ! -e "$STATE/disabled-$RETIRED_PACKAGE" ]
+[ -e "$STATE/process-$COMPLETED_PACKAGE" ]
+[ -e "$STATE/process-$RETIRED_PACKAGE" ]
 printf '%s\n' 'Generic emergency fallback contained every discovered managed package.'

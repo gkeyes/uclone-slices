@@ -74,6 +74,8 @@ management_artifact_present() {
         done
         for path in "$RUNTIME_ROOT"/state/*.gate "$RUNTIME_ROOT"/state/.*.gate*; do
             [ -e "$path" ] || [ -L "$path" ] || continue
+            name=${path##*/}
+            case "$name" in .*.gate.retired) continue ;; esac
             return 0
         done
         return 1
@@ -89,7 +91,6 @@ management_artifact_present() {
         "$RUNTIME_ROOT/rescue-journal/packages/$PACKAGE" \
         "$RUNTIME_ROOT/state/$PACKAGE.gate" \
         "$RUNTIME_ROOT/state/.$PACKAGE.gate.retiring" \
-        "$RUNTIME_ROOT/state/.$PACKAGE.gate.retired" \
         "/data/misc_ce/$USER_ID/$UCLONE_MODULE/slots/$PACKAGE" \
         "/data/misc_de/$USER_ID/$UCLONE_MODULE/slots/$PACKAGE"
     do
@@ -128,6 +129,8 @@ discover_packages() {
     done
     for entry in "$RUNTIME_ROOT"/state/*.gate "$RUNTIME_ROOT"/state/.*.gate*; do
         [ -e "$entry" ] || [ -L "$entry" ] || continue
+        name=${entry##*/}
+        case "$name" in .*.gate.retired) continue ;; esac
         candidate=${entry##*/}
         candidate=${candidate#.}
         candidate=${candidate%%.gate*}
