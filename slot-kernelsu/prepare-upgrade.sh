@@ -59,19 +59,28 @@ active_gate_present() {
     return 1
 }
 
+safe_control_metadata() {
+    control_metadata="$($TOYBOX_BIN stat -c '%u:%g:%a' "$1" 2>/dev/null)" || return 1
+    case "$control_metadata" in
+        0:0:*) control_mode=${control_metadata##*:} ;;
+        *) return 1 ;;
+    esac
+    case "$control_mode" in *[!0-7]*|'') return 1 ;; esac
+    [ $(((control_mode / 10) % 10 & 2)) -eq 0 ] &&
+        [ $((control_mode % 10 & 2)) -eq 0 ]
+}
+
 record_control_path() {
     path=$1
     relative=${path#"$RUNTIME_ROOT"/}
     case "$relative" in *'|'*|'') return 1 ;; esac
     [ ! -L "$path" ] || return 1
+    safe_control_metadata "$path" || return 1
     if [ -d "$path" ]; then
-        [ "$($TOYBOX_BIN stat -c '%u:%g:%a' "$path" 2>/dev/null)" = 0:0:700 ] || return 1
         printf 'D|%s\n' "$relative" >>"$DIGEST_MANIFEST"
         return
     fi
     [ -f "$path" ] || return 1
-    metadata="$($TOYBOX_BIN stat -c '%u:%g:%a' "$path" 2>/dev/null)" || return 1
-    case "$metadata" in 0:0:600|0:0:400) ;; *) return 1 ;; esac
     line="$($TOYBOX_BIN sha256sum "$path" 2>/dev/null)" || return 1
     digest=${line%% *}
     [ "${#digest}" -eq 64 ] || return 1

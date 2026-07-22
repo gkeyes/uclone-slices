@@ -29,7 +29,7 @@ case "$command" in
         [ "${1:-}" = "-c" ] || exit 2
         format=$2
         path=$3
-        if [ -d "$path" ]; then mode=700; elif [ -x "$path" ]; then mode=700; else mode=600; fi
+        mode=$(/usr/bin/stat -f '%Lp' "$path" 2>/dev/null || /usr/bin/stat -c '%a' "$path") || exit 2
         case "$format" in
             %u) printf '%s\n' 0 ;;
             %u:%g:%a) printf '0:0:%s\n' "$mode" ;;
@@ -90,8 +90,17 @@ sed \
     "$SOURCE" >"$SCRIPT"
 chmod 0700 "$SCRIPT"
 
+mkdir -p "$RUNTIME/catalog/packages/com.asksky.fitness"
+chmod 0755 "$RUNTIME/catalog/packages/com.asksky.fitness"
+printf '%s\n' legacy >"$RUNTIME/catalog/packages/com.asksky.fitness/catalog.json"
+chmod 0644 "$RUNTIME/catalog/packages/com.asksky.fitness/catalog.json"
 "$SCRIPT" --prepare | grep -F 'upgrade-proof-ready apps=1' >/dev/null
 [ "$("$SCRIPT" --verify)" = 1 ] || fail 'fresh proof did not verify'
+
+chmod 0775 "$RUNTIME/catalog/packages/com.asksky.fitness"
+expect_failure "$SCRIPT" --verify
+chmod 0755 "$RUNTIME/catalog/packages/com.asksky.fitness"
+[ "$("$SCRIPT" --verify)" = 1 ] || fail 'root-owned legacy metadata did not recover after unsafe mode reset'
 
 printf '%s\n' drift >"$RUNTIME/registry/drift.json"
 chmod 0600 "$RUNTIME/registry/drift.json"
