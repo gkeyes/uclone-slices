@@ -23,7 +23,7 @@ use crate::package_state::{PackageStateReason, PackageStateStore};
 use crate::protocol::ALLOWED_PACKAGE;
 use crate::reconcile::ReconcileOutcome;
 use crate::registry::RegistryStore;
-use crate::service::PackageState;
+use crate::service::{PackageState, ServiceError};
 
 use self::probe::NativeBaseProbe;
 use self::runtime::OrphanGateRuntime;
