@@ -104,6 +104,7 @@ fn enrollment_lease_retirement_failure_recontains_before_recovery() {
         service.platform().calls(),
         vec![
             Call::State,
+            Call::Inspect,
             Call::BeginEnrollment,
             Call::HoldGate,
             Call::Quiesce,
