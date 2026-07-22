@@ -58,6 +58,7 @@ fi
 [ "$(reconcile_marker_action terminal)" = retire ] || fail 'terminal outcome would not retire the marker'
 
 POST_FS="$KERNELSU_ROOT/post-fs-data.sh"
+POST_FS_SETUP="$KERNELSU_ROOT/post-fs-setup.sh"
 SERVICE="$KERNELSU_ROOT/service.sh"
 BOOT="$KERNELSU_ROOT/boot-completed.sh"
 STARTUP="$KERNELSU_ROOT/startup-gate.sh"
@@ -66,6 +67,17 @@ PACKAGER="$REPO_ROOT/tools/package-kernelsu-preview.sh"
 BRIDGE_SOURCE="$REPO_ROOT/slot-runtime/src/bridge/mod.rs"
 MATERIALIZER_COMMAND="$REPO_ROOT/slot-runtime/src/android/materializer/command.rs"
 PACKAGE_ZIP="${UCLONE_KERNELSU_PACKAGE:-}"
+
+version_functions="$SCRATCH/runtime-version-functions.sh"
+sed -n '/^version_transition_allowed()/,/^}/p' "$POST_FS_SETUP" >"$version_functions"
+[ -s "$version_functions" ] || fail 'runtime version transition policy is missing'
+. "$version_functions"
+version_transition_allowed 1 2 || fail 'paired Runtime v1 to v2 migration is rejected'
+version_transition_allowed 2 2 || fail 'current Runtime v2 is rejected'
+if version_transition_allowed 0 2 || version_transition_allowed 2 1 ||
+    version_transition_allowed 3 2 || version_transition_allowed invalid 2; then
+    fail 'unsupported Runtime version transition was accepted'
+fi
 
 if [ -n "$PACKAGE_ZIP" ]; then
     [ -f "$PACKAGE_ZIP" ] || fail "KernelSU package is missing: $PACKAGE_ZIP"
@@ -85,6 +97,7 @@ if [ -n "$PACKAGE_ZIP" ]; then
 fi
 
 grep -F 'startup-gate.sh' "$POST_FS" >/dev/null || fail 'post-fs does not launch the early gate worker'
+grep -F 'write_runtime_version "$version_file"' "$POST_FS_SETUP" >/dev/null || fail 'post-fs setup lacks atomic Runtime version publication'
 grep -F '"$EMERGENCY_CONTAINMENT" --once' "$POST_FS" >/dev/null || fail 'post-fs does not synchronously prove emergency containment'
 grep -F '("$STARTUP_GATE" >/dev/null 2>&1) &' "$POST_FS" >/dev/null || fail 'post-fs does not launch startup reconciliation without blocking boot'
 grep -F 'emergency-containment.sh' "$POST_FS" >/dev/null || fail 'post-fs lacks the emergency containment fallback'

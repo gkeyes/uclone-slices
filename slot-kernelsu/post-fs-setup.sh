@@ -34,23 +34,40 @@ ensure_dir() {
     "$TOYBOX_BIN" chmod 700 "$path" 2>/dev/null || return 1
 }
 
+version_transition_allowed() {
+    current="$1"
+    target="$2"
+    case "$current:$target" in
+        1:2|2:2) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+write_runtime_version() {
+    version_file="$1"
+    temporary=$RUNTIME_ROOT/.version.new
+    [ ! -e "$temporary" ] && [ ! -L "$temporary" ] || return 1
+    printf '%s\n' "$RUNTIME_VERSION" >"$temporary" 2>/dev/null || return 1
+    "$TOYBOX_BIN" chmod 600 "$temporary" 2>/dev/null || return 1
+    "$TOYBOX_BIN" chown 0:0 "$temporary" 2>/dev/null || return 1
+    "$TOYBOX_BIN" mv "$temporary" "$version_file" 2>/dev/null || return 1
+    [ "$("$TOYBOX_BIN" stat -c '%u:%g:%a' "$version_file" 2>/dev/null)" = "0:0:600" ] &&
+        [ "$("$TOYBOX_BIN" cat "$version_file" 2>/dev/null)" = "$RUNTIME_VERSION" ]
+}
+
 ensure_version() {
     version_file=$RUNTIME_ROOT/version
     if [ -L "$version_file" ] || { [ -e "$version_file" ] && [ ! -f "$version_file" ]; }; then
         return 1
     fi
     if [ -f "$version_file" ]; then
-        [ "$("$TOYBOX_BIN" cat "$version_file" 2>/dev/null)" = "$RUNTIME_VERSION" ] || return 1
-        [ "$("$TOYBOX_BIN" stat -c '%u:%g:%a' "$version_file" 2>/dev/null)" = "0:0:600" ]
-        return
+        [ "$("$TOYBOX_BIN" stat -c '%u:%g:%a' "$version_file" 2>/dev/null)" = "0:0:600" ] ||
+            return 1
+        current_version="$("$TOYBOX_BIN" cat "$version_file" 2>/dev/null)" || return 1
+        version_transition_allowed "$current_version" "$RUNTIME_VERSION" || return 1
+        [ "$current_version" = "$RUNTIME_VERSION" ] && return 0
     fi
-    temporary=$RUNTIME_ROOT/.version.new
-    [ ! -e "$temporary" ] || return 1
-    printf '%s\n' "$RUNTIME_VERSION" >"$temporary" 2>/dev/null || return 1
-    "$TOYBOX_BIN" chmod 600 "$temporary" 2>/dev/null || return 1
-    "$TOYBOX_BIN" chown 0:0 "$temporary" 2>/dev/null || return 1
-    "$TOYBOX_BIN" mv "$temporary" "$version_file" 2>/dev/null || return 1
-    [ "$("$TOYBOX_BIN" stat -c '%u:%g:%a' "$version_file" 2>/dev/null)" = "0:0:600" ]
+    write_runtime_version "$version_file"
 }
 
 prepare_boot_gate() {
