@@ -100,7 +100,10 @@ impl PackageProbe for NativeBaseProbe {
         _package: &PackageName,
         _user_id: UserId,
     ) -> Result<GateSnapshot, ProbeError> {
-        Err(ProbeError::Unavailable)
+        Ok(GateSnapshot::new(
+            crate::domain::PackageEnabledState::Default,
+            false,
+        ))
     }
 
     fn running_process_count(

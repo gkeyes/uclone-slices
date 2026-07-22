@@ -28,6 +28,7 @@ pub use metadata::{MetadataSource, SystemMetadataSource};
 mod tests {
     mod direct_boot_reconcile;
     mod enrollment_recheck;
+    mod legacy_slot_lifecycle;
     mod orphan_gate;
     mod publication_digest;
 
