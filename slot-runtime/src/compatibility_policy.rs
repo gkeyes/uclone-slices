@@ -89,6 +89,11 @@ impl CompatibilityPolicy {
             && self.support_level == level
             && (level != PackageSupportLevel::DirectBootConditional || self.direct_boot_accepted)
     }
+
+    #[doc = "Returns the immutable support class accepted during enrollment."]
+    pub const fn support_level(&self) -> PackageSupportLevel {
+        self.support_level
+    }
 }
 
 #[derive(Serialize)]
@@ -125,6 +130,11 @@ impl CompatibilityPolicyStore {
         })
     }
 
+    #[doc = "Returns the policy root used to derive immutable artifact paths."]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     #[doc = "Publishes the immutable enrollment-time support decision."]
     pub fn create(
         &self,
@@ -149,7 +159,7 @@ impl CompatibilityPolicyStore {
         .map_err(map_security)
     }
 
-    #[doc = "Loads and verifies a policy, returning none for a legacy enrollment."]
+    #[doc = "Loads and verifies a policy, returning none only when no policy is published."]
     pub fn load(&self, package: &PackageName) -> Result<Option<CompatibilityPolicy>, PolicyError> {
         self.validate_roots()?;
         let directory = self.packages.join(package.as_str());

@@ -1,6 +1,7 @@
 package com.uclone.slots.preview.runtime
 
 import com.uclone.slots.preview.model.PackageInspection
+import com.uclone.slots.preview.model.PackageLifecycle
 import com.uclone.slots.preview.model.PackageRuntimeStatus
 import com.uclone.slots.preview.model.SlotSpace
 
@@ -9,6 +10,8 @@ sealed interface RuntimePayload {
         val ready: Boolean,
         val userUnlocked: Boolean,
         val ceDeSupported: Boolean,
+        val runtimeVersion: String,
+        val buildId: String,
     ) : RuntimePayload
 
     data class Inspection(val value: PackageInspection) : RuntimePayload
@@ -23,7 +26,7 @@ sealed interface RuntimePayload {
 data class ManagedRow(
     val packageName: String,
     val activeSlot: String,
-    val lifecycle: String,
+    val lifecycle: PackageLifecycle,
 )
 
 sealed interface RuntimeResult {
@@ -31,6 +34,9 @@ sealed interface RuntimeResult {
     data class Rejected(val code: String) : RuntimeResult
     data class Unknown(val reason: String) : RuntimeResult
 }
+
+internal fun RuntimeResult.Success.isAck(operation: String): Boolean =
+    (payload as? RuntimePayload.Ack)?.operation == operation
 
 data class RuntimeRequest(
     val command: String,

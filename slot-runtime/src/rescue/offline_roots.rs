@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::{fs, io};
 
 use crate::domain::{PackageKey, UserId};
+use crate::journal::JournalStore;
 use crate::layout::RuntimeLayout;
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,9 @@ pub(super) fn management_artifacts_present(
     roots: &RescueRoots,
     key: &PackageKey,
 ) -> Result<bool, crate::rescue::RescueError> {
+    if ordinary_journal_mentions_package(roots, key) {
+        return Ok(true);
+    }
     let package = key.package_name().as_str();
     let candidates = [
         roots.enrollment.join("packages").join(package),
@@ -62,6 +66,16 @@ pub(super) fn management_artifacts_present(
         roots
             .management
             .join("registry")
+            .join("packages")
+            .join(package),
+        roots
+            .management
+            .join("compatibility-policy")
+            .join("packages")
+            .join(package),
+        roots
+            .management
+            .join("slot-metadata")
             .join("packages")
             .join(package),
         roots
@@ -103,117 +117,31 @@ pub(super) fn management_artifacts_present(
     Ok(false)
 }
 
+fn ordinary_journal_mentions_package(roots: &RescueRoots, key: &PackageKey) -> bool {
+    let journal_root = roots.management.join("journal");
+    let transactions = journal_root.join("transactions");
+    match fs::symlink_metadata(&transactions) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => return true,
+        Ok(_) => {}
+    }
+    let Ok(store) = JournalStore::new(&journal_root) else {
+        return true;
+    };
+    let Ok(transactions) = store.list() else {
+        return true;
+    };
+    transactions.iter().any(|transaction| {
+        transaction.spec().package_name() == key.package_name()
+            && transaction.spec().user_id() == key.user_id()
+    })
+}
+
 pub(super) fn supported(key: &PackageKey) -> bool {
     key.user_id() == UserId::PRIMARY
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "isolated temporary startup fixtures")]
-mod tests {
-    use std::fs;
-
-    use tempfile::TempDir;
-
-    use super::*;
-    use crate::domain::PackageName;
-    use crate::protocol::ALLOWED_PACKAGE;
-
-    fn fixture() -> (TempDir, RescueRoots, PackageKey) {
-        let root = TempDir::new().unwrap();
-        let roots = RescueRoots::with_roots(
-            root.path().join("enrollment"),
-            root.path().join("catalog"),
-            root.path().join("rescue-journal"),
-        );
-        let key = PackageKey::new(
-            PackageName::parse(ALLOWED_PACKAGE).unwrap(),
-            UserId::PRIMARY,
-        );
-        (root, roots, key)
-    }
-
-    #[test]
-    fn empty_control_plane_is_not_managed() {
-        let (_root, roots, key) = fixture();
-
-        assert!(!management_artifacts_present(&roots, &key).unwrap());
-    }
-
-    #[test]
-    fn enrollment_attempt_uses_the_real_attempts_directory() {
-        let (root, roots, key) = fixture();
-        fs::create_dir_all(
-            root.path()
-                .join("enrollment-attempts/attempts")
-                .join(ALLOWED_PACKAGE),
-        )
-        .unwrap();
-
-        assert!(management_artifacts_present(&roots, &key).unwrap());
-    }
-
-    #[test]
-    fn malformed_enrollment_package_directory_is_still_managed() {
-        let (root, roots, key) = fixture();
-        fs::create_dir_all(
-            root.path()
-                .join("enrollment/packages")
-                .join(ALLOWED_PACKAGE),
-        )
-        .unwrap();
-
-        assert!(management_artifacts_present(&roots, &key).unwrap());
-    }
-
-    #[test]
-    fn rescue_journal_epoch_is_a_management_artifact() {
-        let (root, roots, key) = fixture();
-        fs::create_dir_all(
-            root.path()
-                .join("rescue-journal/packages")
-                .join(ALLOWED_PACKAGE)
-                .join("rescue/steps"),
-        )
-        .unwrap();
-
-        assert!(management_artifacts_present(&roots, &key).unwrap());
-    }
-
-    #[test]
-    fn preliminary_gate_lease_is_a_management_artifact() {
-        let (root, roots, key) = fixture();
-        let state = root.path().join("state");
-        fs::create_dir(&state).unwrap();
-        fs::write(state.join(format!("{ALLOWED_PACKAGE}.gate")), b"prepared").unwrap();
-
-        assert!(management_artifacts_present(&roots, &key).unwrap());
-    }
-
-    #[test]
-    fn retiring_gate_lease_is_a_management_artifact() {
-        let (root, roots, key) = fixture();
-        let state = root.path().join("state");
-        fs::create_dir(&state).unwrap();
-        fs::write(
-            state.join(format!(".{ALLOWED_PACKAGE}.gate.retiring")),
-            b"retiring",
-        )
-        .unwrap();
-
-        assert!(management_artifacts_present(&roots, &key).unwrap());
-    }
-
-    #[test]
-    fn retired_gate_evidence_is_a_management_artifact() {
-        let (root, roots, key) = fixture();
-        let state = root.path().join("state");
-        fs::create_dir(&state).unwrap();
-        fs::write(
-            state.join(format!(".{ALLOWED_PACKAGE}.gate.retired")),
-            b"retired",
-        )
-        .unwrap();
-
-        assert!(management_artifacts_present(&roots, &key).unwrap());
-    }
-}
+#[path = "offline_roots/tests.rs"]
+mod tests;

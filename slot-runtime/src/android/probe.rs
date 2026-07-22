@@ -140,19 +140,13 @@ pub trait PackageProbe: core::fmt::Debug {
     #[doc = "Compares the daemon mount namespace with the validated PID 1 namespace."]
     fn mount_namespace_proof(&mut self) -> Result<MountNamespaceProof, ProbeError>;
 
-    #[doc = "Reads PackageManager identity and compatibility without entering App namespaces."]
+    #[doc = "Reads `PackageManager` identity and compatibility without entering App namespaces."]
     fn inspect_package(
         &mut self,
-        package: &PackageName,
-        user_id: UserId,
+        _package: &PackageName,
+        _user_id: UserId,
     ) -> Result<PackageCandidate, ProbeError> {
-        let observed = self.observe_package(package, user_id)?;
-        Ok(PackageCandidate::new(
-            observed.identity().clone(),
-            observed.package_manager_inodes(),
-            observed.pending_install(),
-            observed.compatibility(),
-        ))
+        Err(ProbeError::Unavailable)
     }
 
     #[doc = "Samples identity, `PackageManager` inodes, canonical inodes, and process inodes."]

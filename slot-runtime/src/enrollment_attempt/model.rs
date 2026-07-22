@@ -12,4 +12,4 @@ pub use phase::EnrollmentAttemptPhase;
 pub use proof::{CommitProof, RetirementProof};
 pub use record::EnrollmentAttempt;
 
-pub(super) const SCHEMA_VERSION: u32 = 1;
+pub(super) const SCHEMA_VERSION: u32 = 2;

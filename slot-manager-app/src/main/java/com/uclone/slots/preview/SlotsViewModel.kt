@@ -11,11 +11,16 @@ import com.uclone.slots.preview.model.*
 import com.uclone.slots.preview.runtime.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class SlotsViewModel(application: Application) : AndroidViewModel(application) {
-    private val runtime = RuntimeRepository()
+    internal val runtime: RuntimeGateway = RuntimeRepository()
     private val apps = InstalledAppsRepository(application)
+    private val operationMutex = Mutex()
+    private var queuedOperations = 0
+    internal var managerVisible = false
 
     var destination by mutableStateOf<Destination>(Destination.Apps)
         private set
@@ -31,12 +36,16 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var operation by mutableStateOf<OperationState?>(null)
         private set
+    var runtimeBusy by mutableStateOf(false)
+        private set
     var message by mutableStateOf<String?>(null)
-        private set
+        internal set
     var taskHistory by mutableStateOf<List<String>>(emptyList())
-        private set
+        internal set
     var enrollmentReview by mutableStateOf<EnrollmentReview?>(null)
-        private set
+        internal set
+    var pendingLaunchPackage by mutableStateOf<String?>(null)
+        internal set
 
     init {
         refreshRuntime()
@@ -45,10 +54,6 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
     fun navigate(target: Destination) {
         destination = target
         if (target == Destination.AddApp) loadInstalledApps()
-    }
-
-    fun clearMessage() {
-        message = null
     }
 
     fun refreshRuntime() = launchOperation(null) {
@@ -67,16 +72,19 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun inspectForEnrollment(app: InstalledApp) = launchOperation("检查 ${app.label}") {
-        val inspection = runtime.inspect(app.packageName).payloadAs<RuntimePayload.Inspection>()
-            ?: return@launchOperation reject("兼容性检查失败")
-        if (inspection.value.blocked) return@launchOperation reject(
-            inspection.value.blockerText(),
+        val result = runtime.inspect(app.packageName)
+        if (result !is RuntimeResult.Success) {
+            return@launchOperation handleInspectionFailure(result)
+        }
+        val inspection = (result.payload as? RuntimePayload.Inspection)?.value
+            ?: return@launchOperation reject("Runtime 返回了无法识别的检查结果")
+        if (inspection.packageName != app.packageName) {
+            return@launchOperation reject("Runtime 返回了其他 App 的检查结果，已停止登记")
+        }
+        if (inspection.blocked) return@launchOperation reject(
+            inspection.blockerText(),
         )
-        enrollmentReview = EnrollmentReview(app, inspection.value)
-    }
-
-    fun dismissEnrollmentReview() {
-        enrollmentReview = null
+        enrollmentReview = EnrollmentReview(app, inspection)
     }
 
     fun confirmEnrollment() {
@@ -87,112 +95,74 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
                 review.app.packageName,
                 review.inspection.requiresDirectBootConfirmation,
             )) {
-                is RuntimeResult.Success -> {
+                is RuntimeResult.Success -> if (result.isAck("enroll_package")) {
                     record("已登记 ${review.app.label}")
                     refreshManagedInternal()
                     openDetailInternal(review.app.packageName)
+                } else {
+                    handleFailure(
+                        RuntimeResult.Unknown("invalid enrollment result"),
+                        review.app.packageName,
+                    )
                 }
                 else -> handleFailure(result, review.app.packageName)
             }
         }
     }
 
-    fun createSlot(packageName: String, name: String, blank: Boolean) =
-        launchOperation("创建数据空间", "正在准备 CE + DE 数据") {
-            val trimmed = name.trim()
-            if (trimmed.isEmpty() || trimmed.length > 48) {
-                return@launchOperation reject("名称需要 1–48 个字符")
-            }
-            when (val result = runtime.createSlot(packageName, trimmed, blank)) {
-                is RuntimeResult.Success -> {
-                    val switched = result.payload as? RuntimePayload.Switch
-                    if (switched?.packageName != packageName) {
-                        return@launchOperation unknown(packageName)
-                    }
-                    confirmAndRefresh(packageName, switched.slotId, launchApp = false)
-                    record("已创建空间：$trimmed")
-                }
-                else -> handleFailure(result, packageName)
-            }
-        }
-
-    fun switchAndOpen(packageName: String, slotId: String) =
-        launchOperation("切换数据空间", "暂停 App 并切换 CE + DE") {
-            when (val result = runtime.switch(packageName, slotId)) {
-                is RuntimeResult.Success -> {
-                    val switched = result.payload as? RuntimePayload.Switch
-                    if (switched?.packageName != packageName || switched.slotId != slotId) {
-                        return@launchOperation unknown(packageName)
-                    }
-                    confirmAndRefresh(packageName, slotId, launchApp = true)
-                }
-                else -> handleFailure(result, packageName)
-            }
-        }
-
-    fun renameSlot(packageName: String, slotId: String, name: String) =
-        launchOperation("重命名空间") {
-            when (val result = runtime.rename(packageName, slotId, name.trim())) {
-                is RuntimeResult.Success -> loadPackage(packageName)
-                else -> handleFailure(result, packageName)
-            }
-        }
-
-    fun deleteSlot(packageName: String, slotId: String) =
-        launchOperation("删除数据空间") {
-            when (val result = runtime.delete(packageName, slotId)) {
-                is RuntimeResult.Success -> {
-                    record("已删除非活动空间")
-                    loadPackage(packageName)
-                }
-                else -> handleFailure(result, packageName)
-            }
-        }
-
-    fun reconcile(packageName: String) = launchOperation("重新确认安全状态") {
-        when (val result = runtime.reconcile(packageName)) {
-            is RuntimeResult.Success -> loadPackage(packageName)
-            else -> handleFailure(result, packageName)
-        }
-    }
-
-    fun rescue(packageName: String) = launchOperation("安全退回 Base") {
-        when (val result = runtime.rescue(packageName)) {
-            is RuntimeResult.Success -> {
-                record("已安全退回 Base")
-                refreshManagedInternal()
-                destination = Destination.Apps
-            }
-            else -> handleFailure(result, packageName)
-        }
-    }
-
-    private suspend fun confirmAndRefresh(packageName: String, slotId: String, launchApp: Boolean) {
+    internal suspend fun confirmAndRefresh(
+        packageName: String,
+        slotId: String,
+        launchApp: Boolean,
+    ): Boolean {
         operation = operation?.copy(phase = "验证 Runtime 提交结果")
         val status = runtime.status(packageName).payloadAs<RuntimePayload.Status>()?.value
-        if (status == null || status.activeSlot != slotId || status.requiresRecovery) {
-            return unknown(packageName)
+        if (
+            status == null || status.packageName != packageName ||
+            status.activeSlot != slotId || status.requiresRecovery
+        ) {
+            unknown(packageName)
+            return false
         }
-        loadPackage(packageName)
+        if (!loadPackage(packageName)) return false
+        val confirmed = selectedStatus
+        if (
+            confirmed == null || confirmed.packageName != packageName ||
+            confirmed.activeSlot != slotId || confirmed.requiresRecovery
+        ) {
+            unknown(packageName)
+            return false
+        }
         record("已切换到 ${selectedSlots.firstOrNull { it.id == slotId }?.displayName ?: slotId}")
-        if (launchApp && status.enabled && !status.suspended && !launchInstalledApp(getApplication(), packageName)) {
-            message = "没有找到可启动入口"
+        if (launchApp && confirmed.enabled && !confirmed.suspended) {
+            if (managerVisible) {
+                pendingLaunchPackage = packageName
+            } else {
+                message = "空间已切换；管理界面不在前台，请手动打开目标 App"
+            }
         }
-        if (launchApp && (!status.enabled || status.suspended)) {
+        if (launchApp && (!confirmed.enabled || confirmed.suspended)) {
             message = "槽已切换，但 App 原本不可启动，已保留原状态"
         }
+        return true
     }
 
-    private suspend fun loadPackage(packageName: String, recoverUnknown: Boolean = true) {
-        val status = runtime.status(packageName).payloadAs<RuntimePayload.Status>()?.value
-        val slots = runtime.listSlots(packageName).payloadAs<RuntimePayload.Slots>()?.rows
-        if (status == null || slots == null) {
+    private suspend fun loadPackage(packageName: String, recoverUnknown: Boolean = true): Boolean {
+        selectedStatus = null
+        selectedSlots = emptyList()
+        val snapshot = runtime.readPackageSnapshot(packageName)
+        if (snapshot == null) {
             if (recoverUnknown) unknown(packageName)
-            return
+            return false
         }
-        selectedStatus = status
-        selectedSlots = slots
-        if (status.requiresRecovery) runtimeHealth = RuntimeHealth.RecoveryRequired
+        selectedStatus = snapshot.status
+        selectedSlots = snapshot.slots
+        runtimeHealth = if (snapshot.status.requiresRecovery) {
+            RuntimeHealth.RecoveryRequired
+        } else {
+            RuntimeHealth.Ready
+        }
+        return true
     }
 
     private suspend fun openDetailInternal(packageName: String) {
@@ -210,7 +180,7 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun restoreCachedManaged() {
         managedApps = apps.cachedManaged().map {
-            ManagedApp(it, apps.label(it), "unknown", "recovery_required")
+            ManagedApp(it, apps.label(it), "unknown", PackageLifecycle.RecoveryRequired)
         }
     }
 
@@ -221,26 +191,42 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         withContext(Dispatchers.Main) { installedApps = rows }
     }
 
-    private fun launchOperation(
+    internal fun launchOperation(
         title: String?,
         phase: String = "正在与 Runtime 通信",
         block: suspend () -> Unit,
-    ) = viewModelScope.launch {
-        if (title != null) operation = OperationState(title, phase)
-        try {
-            block()
-        } finally {
-            operation = null
+    ) = run {
+        queuedOperations += 1
+        runtimeBusy = true
+        viewModelScope.launch {
+            try {
+                operationMutex.withLock {
+                    if (title != null) operation = OperationState(title, phase)
+                    try {
+                        block()
+                    } finally {
+                        operation = null
+                    }
+                }
+            } finally {
+                queuedOperations -= 1
+                runtimeBusy = queuedOperations > 0
+            }
         }
     }
 
-    private suspend fun handleFailure(result: RuntimeResult, packageName: String) {
+    internal suspend fun handleFailure(result: RuntimeResult, packageName: String) {
         when (result) {
             is RuntimeResult.Rejected -> {
                 if (result.code in setOf("recovery_required", "quarantined")) {
                     runtimeHealth = RuntimeHealth.RecoveryRequired
-                    message = "状态无法安全证明，App 已保持禁用"
-                } else message = UiMappings.errorText(result.code)
+                    message = "Runtime 已要求隔离该 App；请重新读取状态确认门禁"
+                } else {
+                    if (result.code == "runtime_pair_mismatch") {
+                        runtimeHealth = RuntimeHealth.ModuleMissing
+                    }
+                    message = UiMappings.errorText(result.code)
+                }
             }
             is RuntimeResult.Unknown -> unknown(packageName)
             is RuntimeResult.Success -> Unit
@@ -249,17 +235,15 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun unknown(packageName: String) {
         operation = operation?.copy(phase = "结果未知，正在重新确认", resultUnknown = true)
-        runtime.reconcile(packageName)
-        loadPackage(packageName, recoverUnknown = false)
-        message = "客户端未取得确定结果，已重新读取 Runtime 状态"
-    }
-
-    private fun reject(text: String) {
-        message = text
-    }
-
-    private fun record(text: String) {
-        taskHistory = (listOf(text) + taskHistory).take(20)
+        val reconciled = runtime.reconcile(packageName)
+        val loaded = reconciled is RuntimeResult.Success &&
+            loadPackage(packageName, recoverUnknown = false)
+        message = if (loaded && selectedStatus?.requiresRecovery == false) {
+            "客户端未取得原操作结果，已重新读取安全状态；不会自动启动 App"
+        } else {
+            runtimeHealth = RuntimeHealth.RecoveryRequired
+            "无法证明最终数据视图，也无法确认 App 当前是否已禁用；不会自动启动"
+        }
     }
 
 }

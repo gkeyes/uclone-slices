@@ -62,7 +62,9 @@ CLI 对应命令为：
 slotctl enroll <package> --accept-direct-boot-conditional
 ```
 
-旧客户端没有该字段时按 `false` 处理，避免在升级 Runtime 后静默扩大权限。
+协议 v2 要求 APK 与 Runtime 的 `build_id` 完全一致。旧协议或混装构建会以
+`runtime_pair_mismatch` 失败，不能依靠缺省字段跨版本降级。协议 v2 内部若登记请求
+没有该字段，仍按 `false` 处理，避免同一协议客户端静默扩大 Direct Boot 授权。
 
 ## 小红书验证提供了什么证据
 
@@ -78,4 +80,5 @@ slotctl enroll <package> --accept-direct-boot-conditional
 - App私有服务端风控、签名校验或开放平台配置兼容性；
 - 系统 App、Shared UID App和 user0 以外用户。
 
-在完成 Direct Boot 重启测试前，建议先在 Base 槽关机；若状态无法证明，Runtime 必须保持 App禁用并要求安全退回 Base。
+在完成 Direct Boot 重启测试前，建议先在 Base 槽关机。若条件支持 App 的扩展槽跨重启，
+Runtime 会保持 Gate，不自动开放 App，并要求解锁后重新确认或安全退回 Base。

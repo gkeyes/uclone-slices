@@ -41,6 +41,7 @@ exit 0
 EOF
 chmod 755 "$FIXTURE/rescue.sh" "$FIXTURE/bin/toybox" "$FIXTURE/bin/slotctl"
 sed -e "s|^TOYBOX_BIN=.*$|TOYBOX_BIN='$FIXTURE/bin/toybox'|" \
+    -e "s|^UCLONE_RUNTIME_ROOT=/data/adb/uclone-slices-preview$|UCLONE_RUNTIME_ROOT='$FIXTURE/runtime'|" \
     "$FIXTURE/rescue.sh" >"$FIXTURE/rescue.patched"
 mv "$FIXTURE/rescue.patched" "$FIXTURE/rescue.sh"
 chmod 755 "$FIXTURE/rescue.sh"

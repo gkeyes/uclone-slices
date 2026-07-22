@@ -12,7 +12,8 @@ use uclone_slot_runtime::domain::{
 };
 use uclone_slot_runtime::reconcile::ReconcileOutcome;
 use uclone_slot_runtime::service::{
-    PackageSnapshot, PackageState, RescueExecution, ServiceError, SwitchExecution,
+    CapabilitySnapshot, PackageSnapshot, PackageState, RescueExecution, ServiceError,
+    SwitchExecution,
 };
 
 mod fixtures;
@@ -83,6 +84,7 @@ pub(crate) struct FakePlatform {
     rescue_execution: Option<RescueExecution>,
     reconcile_outcome: ReconcileOutcome,
     inspection_compatibility: PackageCompatibility,
+    capability: CapabilitySnapshot,
 }
 
 impl Default for FakePlatform {
@@ -96,6 +98,7 @@ impl Default for FakePlatform {
             rescue_execution: None,
             reconcile_outcome: ReconcileOutcome::RestoredBase,
             inspection_compatibility: PackageCompatibility::compatible(),
+            capability: CapabilitySnapshot::new(true, true, true),
         }
     }
 }
@@ -133,6 +136,11 @@ impl FakePlatform {
         compatibility: PackageCompatibility,
     ) -> Self {
         self.inspection_compatibility = compatibility;
+        self
+    }
+
+    pub(crate) const fn with_capability(mut self, capability: CapabilitySnapshot) -> Self {
+        self.capability = capability;
         self
     }
 

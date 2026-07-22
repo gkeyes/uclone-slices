@@ -3,12 +3,15 @@
 mod composition;
 mod containment;
 mod enrollment;
+mod enrollment_capability;
 mod enrollment_ops;
 mod management;
 mod mapping;
 mod metadata;
 mod reconciliation;
+mod reconciliation_clean;
 mod reconciliation_pending;
+mod reconciliation_policy;
 mod reconciliation_safety;
 mod reconciliation_validation;
 mod rescue;
@@ -21,8 +24,12 @@ pub use composition::ProductionPlatform;
 pub use metadata::{MetadataSource, SystemMetadataSource};
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "validated production test fixtures")]
 mod tests {
+    mod direct_boot_reconcile;
+    mod enrollment_recheck;
     mod orphan_gate;
+    mod publication_digest;
 
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;

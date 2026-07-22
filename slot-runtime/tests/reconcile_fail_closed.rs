@@ -11,9 +11,12 @@ use reconcile_support::{
     transaction,
 };
 use tempfile::TempDir;
-use uclone_slot_runtime::domain::PackageObservation;
+use uclone_slot_runtime::domain::{
+    ManagedPackage, PackageKey, PackageName, PackageObservation, SlotId, SlotView, UserId,
+};
 use uclone_slot_runtime::enrollment::EnrollmentStore;
 use uclone_slot_runtime::journal::{JournalEvent, JournalStore, TransactionView};
+use uclone_slot_runtime::lifecycle::LifecycleState;
 use uclone_slot_runtime::reconcile::{
     ReconcileError, ReconcileOutcome, ReconcileReason, Reconciler,
 };
@@ -37,6 +40,38 @@ fn clean_empty_enrollment_does_not_gate_allowlisted_package() {
     assert!(report.results().is_empty());
     assert_eq!(reconciler.backend().emergency_gate_calls, 0);
     assert!(!reconciler.backend().gate_held);
+}
+
+#[test]
+fn package_scoped_reconcile_never_gates_an_unrelated_enrollment() {
+    let selected = base_package();
+    let stores = TestStores::new(&selected);
+    let unrelated = ManagedPackage::new(
+        PackageKey::new(
+            PackageName::parse("com.example.unrelated").unwrap(),
+            UserId::PRIMARY,
+        ),
+        selected.identity().clone(),
+        selected.base_inodes(),
+        SlotView::new(SlotId::base(), selected.base_inodes()),
+        LifecycleState::Normal,
+    )
+    .unwrap();
+    stores.enrollment.create(&unrelated).unwrap();
+    let backend = FakeBackend::rebooted(&selected);
+    let mut reconciler = Reconciler::for_package(
+        backend,
+        stores.enrollment.clone(),
+        stores.journal.clone(),
+        stores.registry.clone(),
+        selected.package_name().clone(),
+    );
+
+    let report = reconciler.early_boot().unwrap();
+
+    assert_eq!(report.results().len(), 1);
+    assert_eq!(report.results()[0].package_name(), selected.package_name());
+    assert_eq!(reconciler.backend().emergency_gate_calls, 1);
 }
 
 #[test]

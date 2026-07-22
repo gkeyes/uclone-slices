@@ -16,7 +16,7 @@ impl ServicePlatform for FakePlatform {
     fn probe(&self) -> Result<CapabilitySnapshot, ServiceError> {
         self.record(Call::Probe);
         self.fail(FailurePoint::Probe)?;
-        Ok(CapabilitySnapshot::new(true, true, true))
+        Ok(self.capability)
     }
 
     fn inspect_package(&self, key: &PackageKey) -> Result<PackageInspection, ServiceError> {

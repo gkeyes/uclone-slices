@@ -7,8 +7,12 @@ import java.io.InputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
-class RootRpcClient {
-    suspend fun call(request: RuntimeRequest, timeoutMs: Long): RuntimeResult =
+interface RpcClient {
+    suspend fun call(request: RuntimeRequest, timeoutMs: Long): RuntimeResult
+}
+
+class RootRpcClient : RpcClient {
+    override suspend fun call(request: RuntimeRequest, timeoutMs: Long): RuntimeResult =
         withContext(Dispatchers.IO) { execute(RuntimeProtocol.encode(request), timeoutMs) }
 
     private fun execute(frame: String, timeoutMs: Long): RuntimeResult {

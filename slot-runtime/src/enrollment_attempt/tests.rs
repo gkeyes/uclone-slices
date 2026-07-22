@@ -17,6 +17,9 @@ use crate::lifecycle::LifecycleState;
 
 const PACKAGE: &str = "com.uclone.slotprobe";
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const POLICY_DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const CATALOG_DIGEST: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const STATE_DIGEST: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
 
 #[test]
 fn pending_attempt_is_enumerable_without_enrollment_store_and_survives_restart() {
@@ -85,7 +88,14 @@ fn markerless_commit_is_non_authoritative_recovery_required() {
     let gate = GateSnapshot::new(PackageEnabledState::DisabledUser, false);
     let store = EnrollmentAttemptStore::new(root.path()).unwrap();
     store.create_pending(&key, gate).unwrap();
-    let proof = CommitProof::new(managed(), DIGEST, DIGEST, DIGEST).unwrap();
+    let proof = CommitProof::new(
+        managed(),
+        DIGEST,
+        POLICY_DIGEST,
+        CATALOG_DIGEST,
+        STATE_DIGEST,
+    )
+    .unwrap();
     store.commit(&key, proof).unwrap();
     fs::remove_file(
         root.path()
@@ -108,8 +118,21 @@ fn commit_requires_all_publication_digests_and_retire_requires_exact_proof() {
     let incomplete = CommitProof::from_managed(managed()).unwrap();
     assert!(store.commit(&key, incomplete).is_err());
 
-    let proof = CommitProof::new(managed(), DIGEST, DIGEST, DIGEST).unwrap();
+    let proof = CommitProof::new(
+        managed(),
+        DIGEST,
+        POLICY_DIGEST,
+        CATALOG_DIGEST,
+        STATE_DIGEST,
+    )
+    .unwrap();
     store.commit(&key, proof).unwrap();
+    let loaded = store.load(&key).unwrap().unwrap();
+    let committed = loaded.committed().unwrap();
+    assert_eq!(committed.enrollment_sha256(), DIGEST);
+    assert_eq!(committed.compatibility_policy_sha256(), POLICY_DIGEST);
+    assert_eq!(committed.base_catalog_sha256(), CATALOG_DIGEST);
+    assert_eq!(committed.package_state_sha256(), STATE_DIGEST);
     assert!(
         store
             .retire(&key, RetirementProof::verified(gate, true, false))

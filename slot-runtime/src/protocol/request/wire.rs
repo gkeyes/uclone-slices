@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize, Serializer};
 
 use super::{Command, Request, RequestId};
 use crate::domain::{PackageName, SlotId};
-use crate::protocol::{ProtocolError, SCHEMA_VERSION};
+use crate::protocol::{ProtocolError, RUNTIME_BUILD_ID, SCHEMA_VERSION};
 use crate::slot_metadata::{SlotDisplayName, SlotSeedMode};
 
 mod validation;
@@ -13,6 +13,8 @@ pub(super) struct WireRequest {
     schema_version: u32,
     request_id: RequestId,
     command: String,
+    #[serde(default)]
+    build_id: Option<String>,
     #[serde(default)]
     package: Option<PackageName>,
     #[serde(default)]
@@ -30,6 +32,7 @@ struct WireRequestOut<'a> {
     schema_version: u32,
     request_id: &'a RequestId,
     command: &'a str,
+    build_id: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     package: Option<&'a PackageName>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,6 +55,7 @@ pub(super) fn serialize<S: Serializer>(
         schema_version: SCHEMA_VERSION,
         request_id,
         command: name,
+        build_id: RUNTIME_BUILD_ID,
         package,
         slot,
         display_name,
@@ -146,7 +150,7 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
         }
         "list_managed_apps" => validation::no_fields(&wire, Command::ListManagedApps)?,
         "enroll_package" => {
-            validation::enroll_fields(&wire)?;
+            validation::validate(&wire, validation::WireSchema::ENROLL)?;
             Command::EnrollPackage {
                 package: validation::required_package(&wire)?,
                 accept_direct_boot_conditional: wire
@@ -158,7 +162,7 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
             validation::package_only(&wire, |package| Command::StatusPackage { package })?
         }
         "create_slot" => {
-            validation::reject(&wire, true, false, true, true, false)?;
+            validation::validate(&wire, validation::WireSchema::CREATE)?;
             Command::CreateSlot {
                 package: validation::required_package(&wire)?,
                 display_name: wire
@@ -175,7 +179,7 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
             validation::package_slot(&wire, |package, slot| Command::Switch { package, slot })?
         }
         "rename_slot" => {
-            validation::reject(&wire, true, true, true, false, false)?;
+            validation::validate(&wire, validation::WireSchema::RENAME)?;
             Command::RenameSlot {
                 package: validation::required_package(&wire)?,
                 slot: wire.slot.clone().ok_or(ProtocolError::MissingSlot)?,
@@ -200,5 +204,10 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
         }
         unknown => return Err(ProtocolError::UnknownCommand(unknown.to_owned())),
     };
+    if !matches!(&command, Command::Probe | Command::RescueToBase { .. })
+        && wire.build_id.as_deref() != Some(RUNTIME_BUILD_ID)
+    {
+        return Err(ProtocolError::RuntimePairMismatch);
+    }
     Request::new(wire.request_id, command)
 }

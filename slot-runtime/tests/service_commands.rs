@@ -8,7 +8,7 @@ use uclone_slot_runtime::domain::SlotId;
 use uclone_slot_runtime::protocol::{
     AckOperation, Command, ReconcileOutcome, ResponsePayload, ResponseStatus,
 };
-use uclone_slot_runtime::service::PreviewService;
+use uclone_slot_runtime::service::{CapabilitySnapshot, PreviewService};
 use uclone_slot_runtime::slot_metadata::{SlotDisplayName, SlotSeedMode};
 
 #[test]
@@ -83,7 +83,10 @@ fn direct_boot_enrollment_requires_explicit_confirmation() {
         rejected.error_code(),
         Some(uclone_slot_runtime::protocol::ErrorCode::DirectBootConfirmationRequired),
     );
-    assert_eq!(service.platform().calls(), vec![Call::State, Call::Inspect]);
+    assert_eq!(
+        service.platform().calls(),
+        vec![Call::Probe, Call::State, Call::Inspect]
+    );
 
     service.platform().clear_calls();
     let accepted = service.handle(&request(Command::EnrollPackage {
@@ -94,6 +97,7 @@ fn direct_boot_enrollment_requires_explicit_confirmation() {
     assert_eq!(
         service.platform().calls(),
         vec![
+            Call::Probe,
             Call::State,
             Call::Inspect,
             Call::BeginEnrollment,
@@ -124,6 +128,24 @@ fn reconcile_all_retries_instead_of_acknowledging_a_locked_user() {
         service.platform().calls(),
         vec![Call::ListManaged, Call::Reconcile]
     );
+}
+
+#[test]
+fn locked_user_rejects_ce_de_mutation_before_any_package_state_access() {
+    let platform = FakePlatform::with_state(ready_base())
+        .with_capability(CapabilitySnapshot::new(true, false, true));
+    let mut service = PreviewService::new(platform);
+
+    let response = service.handle(&request(Command::Switch {
+        package: allowed(),
+        slot: preview_view().slot_id().clone(),
+    }));
+
+    assert_eq!(
+        response.error_code(),
+        Some(uclone_slot_runtime::protocol::ErrorCode::UserLocked)
+    );
+    assert_eq!(service.platform().calls(), vec![Call::Probe]);
 }
 
 #[test]
@@ -161,6 +183,7 @@ fn all_commands_return_typed_payloads_when_platform_proofs_succeed() {
         service.platform().calls(),
         vec![
             Call::Probe,
+            Call::Probe,
             Call::State,
             Call::Inspect,
             Call::BeginEnrollment,
@@ -196,6 +219,7 @@ fn all_commands_return_typed_payloads_when_platform_proofs_succeed() {
     assert_eq!(
         service.platform().calls(),
         vec![
+            Call::Probe,
             Call::State,
             Call::CaptureGate,
             Call::HoldGate,
@@ -221,6 +245,7 @@ fn all_commands_return_typed_payloads_when_platform_proofs_succeed() {
     assert_eq!(
         service.platform().calls(),
         vec![
+            Call::Probe,
             Call::State,
             Call::Switch {
                 slot: uclone_slot_runtime::domain::SlotId::base(),
@@ -239,6 +264,7 @@ fn all_commands_return_typed_payloads_when_platform_proofs_succeed() {
     assert_eq!(
         service.platform().calls(),
         vec![
+            Call::Probe,
             Call::State,
             Call::Switch {
                 slot: preview_view().slot_id().clone(),
@@ -280,7 +306,7 @@ fn repeated_mutations_are_idempotent_when_target_is_already_durable() {
         accept_direct_boot_conditional: false,
     }));
     assert_eq!(response.status(), ResponseStatus::Ok);
-    assert_eq!(service.platform().calls(), vec![Call::State]);
+    assert_eq!(service.platform().calls(), vec![Call::Probe, Call::State]);
 
     // When: switch once, then repeat
     service.platform().clear_calls();
@@ -297,7 +323,7 @@ fn repeated_mutations_are_idempotent_when_target_is_already_durable() {
 
     // Then
     assert_eq!(response.status(), ResponseStatus::Ok);
-    assert_eq!(service.platform().calls(), vec![Call::State]);
+    assert_eq!(service.platform().calls(), vec![Call::Probe, Call::State]);
 
     // When: rescue once, then repeat
     assert_eq!(

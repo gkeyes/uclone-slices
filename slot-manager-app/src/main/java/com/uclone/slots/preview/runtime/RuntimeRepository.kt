@@ -1,11 +1,24 @@
 package com.uclone.slots.preview.runtime
 
-class RuntimeRepository(private val client: RootRpcClient = RootRpcClient()) {
-    suspend fun probe() = call("probe", timeout = READ_TIMEOUT)
-    suspend fun inspect(packageName: String) =
-        call("inspect_package", packageName, timeout = READ_TIMEOUT)
-    suspend fun listManaged() = call("list_managed_apps", timeout = READ_TIMEOUT)
-    suspend fun enroll(packageName: String, acceptDirectBootConditional: Boolean) = client.call(
+import com.uclone.slots.preview.BuildConfig
+
+class RuntimeRepository(private val client: RpcClient = RootRpcClient()) : RuntimeGateway {
+    override suspend fun probe(): RuntimeResult {
+        val result = client.call(RuntimeRequest("probe"), READ_TIMEOUT)
+        if (result !is RuntimeResult.Success) return result
+        val report = result.payload as? RuntimePayload.Probe
+            ?: return RuntimeResult.Rejected("invalid_probe")
+        return if (report.buildId == BuildConfig.PREVIEW_BUILD_ID) {
+            result
+        } else {
+            RuntimeResult.Rejected("runtime_pair_mismatch")
+        }
+    }
+    override suspend fun inspect(packageName: String) =
+        pairedCall(RuntimeRequest("inspect_package", packageName), READ_TIMEOUT)
+    override suspend fun listManaged() =
+        pairedCall(RuntimeRequest("list_managed_apps"), READ_TIMEOUT)
+    override suspend fun enroll(packageName: String, acceptDirectBootConditional: Boolean) = pairedCall(
         RuntimeRequest(
             command = "enroll_package",
             packageName = packageName,
@@ -13,12 +26,12 @@ class RuntimeRepository(private val client: RootRpcClient = RootRpcClient()) {
         ),
         MUTATION_TIMEOUT,
     )
-    suspend fun status(packageName: String) =
-        call("status_package", packageName, timeout = READ_TIMEOUT)
-    suspend fun listSlots(packageName: String) =
-        call("list_slots", packageName, timeout = READ_TIMEOUT)
+    override suspend fun status(packageName: String) =
+        pairedCall(RuntimeRequest("status_package", packageName), READ_TIMEOUT)
+    override suspend fun listSlots(packageName: String) =
+        pairedCall(RuntimeRequest("list_slots", packageName), READ_TIMEOUT)
 
-    suspend fun createSlot(packageName: String, name: String, blank: Boolean) = client.call(
+    override suspend fun createSlot(packageName: String, name: String, blank: Boolean) = pairedCall(
         RuntimeRequest(
             command = "create_slot",
             packageName = packageName,
@@ -28,31 +41,39 @@ class RuntimeRepository(private val client: RootRpcClient = RootRpcClient()) {
         CREATE_TIMEOUT,
     )
 
-    suspend fun switch(packageName: String, slotId: String) = client.call(
+    override suspend fun switch(packageName: String, slotId: String) = pairedCall(
         RuntimeRequest("switch", packageName, slotId),
         MUTATION_TIMEOUT,
     )
 
-    suspend fun rename(packageName: String, slotId: String, name: String) = client.call(
+    override suspend fun rename(packageName: String, slotId: String, name: String) = pairedCall(
         RuntimeRequest("rename_slot", packageName, slotId, name),
         MUTATION_TIMEOUT,
     )
 
-    suspend fun delete(packageName: String, slotId: String) = client.call(
+    override suspend fun delete(packageName: String, slotId: String) = pairedCall(
         RuntimeRequest("delete_slot", packageName, slotId),
         MUTATION_TIMEOUT,
     )
 
-    suspend fun reconcile(packageName: String) =
-        call("reconcile_package", packageName, timeout = MUTATION_TIMEOUT)
-    suspend fun rescue(packageName: String) =
-        call("rescue_to_base", packageName, timeout = RESCUE_TIMEOUT)
+    override suspend fun reconcile(packageName: String) =
+        pairedCall(RuntimeRequest("reconcile_package", packageName), MUTATION_TIMEOUT)
+    override suspend fun rescue(packageName: String) =
+        client.call(RuntimeRequest("rescue_to_base", packageName), RESCUE_TIMEOUT)
 
-    private suspend fun call(
-        command: String,
-        packageName: String? = null,
+    private suspend fun pairedCall(
+        request: RuntimeRequest,
         timeout: Long,
-    ) = client.call(RuntimeRequest(command, packageName), timeout)
+    ): RuntimeResult {
+        val pairing = probe()
+        val report = (pairing as? RuntimeResult.Success)?.payload as? RuntimePayload.Probe
+            ?: return pairing
+        if (!report.userUnlocked) return RuntimeResult.Rejected("user_locked")
+        if (!report.ready || !report.ceDeSupported) {
+            return RuntimeResult.Rejected("unsupported_device")
+        }
+        return client.call(request, timeout)
+    }
 
     private companion object {
         const val READ_TIMEOUT = 30_000L

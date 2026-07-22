@@ -66,7 +66,7 @@ verify_production_wiring() {
     assert_source_contains slot-bridge/src/main/java/com/uclone/slotbridge/PackagePolicy.java \
         'static final int ALLOWED_USER_ID = 0;'
     assert_source_contains slot-fsprobe/src/path_policy.c '#include "target_profile.h"'
-    assert_source_contains slot-kernelsu/emergency-containment.sh '. "$PROFILE_FILE"'
+    assert_source_contains slot-kernelsu/emergency-containment.sh 'uclone_load_profile "$PROFILE_FILE"'
     assert_source_contains slot-preview-controller/build.gradle.kts \
         'generatedTargetProfile.resolve("java/controller")'
     assert_source_contains slot-preview-controller/src/main/java/com/uclone/slotpreview/controller/PreviewCommand.java \
@@ -84,7 +84,8 @@ verify_production_wiring() {
         {
         find "$ROOT_DIR/slot-bridge/src/main" -type f -name '*.java'
         find "$ROOT_DIR/slot-fsprobe/src" -type f \( -name '*.c' -o -name '*.h' \)
-        find "$ROOT_DIR/slot-kernelsu" -maxdepth 1 -type f -name '*.sh'
+        find "$ROOT_DIR/slot-kernelsu" -maxdepth 1 -type f -name '*.sh' \
+            ! -name 'profile-loader.sh'
         find "$ROOT_DIR/slot-preview-controller/src/main" -type f \
             \( -name '*.java' -o -name '*.xml' \)
         } | xargs grep -nE 'com\.(uclone\.slotprobe|asksky\.fitness)' || true

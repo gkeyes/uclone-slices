@@ -63,6 +63,7 @@ impl<P: ServicePlatform> PreviewService<P> {
     fn mutate(&mut self, operation: &Mutation<'_>) -> Result<ResponsePayload, ServiceError> {
         let guard = self.mutations.clone();
         let _permit = guard.try_acquire().map_err(|_| ServiceError::Busy)?;
+        self.require_mutation_capability(operation)?;
         match operation {
             Mutation::Enroll(package, accept) => self.enroll_command(package, *accept),
             Mutation::Create(package, display_name, seed_mode) => {
@@ -78,5 +79,25 @@ impl<P: ServicePlatform> PreviewService<P> {
             Mutation::Retire(package) => self.retire_package_command(package),
             Mutation::Rescue(package) => self.rescue_command(package),
         }
+    }
+
+    fn require_mutation_capability(&self, operation: &Mutation<'_>) -> Result<(), ServiceError> {
+        if matches!(
+            operation,
+            Mutation::ReconcileAll
+                | Mutation::ReconcilePackage(_)
+                | Mutation::Retire(_)
+                | Mutation::Rescue(_)
+        ) {
+            return Ok(());
+        }
+        let capability = self.platform.probe()?;
+        if !capability.user_unlocked() {
+            return Err(ServiceError::UserLocked);
+        }
+        if !capability.ready() || !capability.ce_de_supported() {
+            return Err(ServiceError::UnsupportedDevice);
+        }
+        Ok(())
     }
 }

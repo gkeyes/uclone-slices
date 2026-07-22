@@ -21,6 +21,8 @@ pub enum ErrorCode {
     InvalidRequest,
     /// The request schema is newer than this runtime.
     UnsupportedSchema,
+    /// The APK and Runtime are not from the same paired build.
+    RuntimePairMismatch,
     /// The package is outside the initial allowlist.
     PackageNotAllowed,
     /// Direct Boot conditional support was not explicitly acknowledged.

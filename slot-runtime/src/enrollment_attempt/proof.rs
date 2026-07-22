@@ -2,14 +2,15 @@ use crate::domain::{GateSnapshot, ManagedPackage};
 use crate::integrity::digest_json;
 
 use super::super::EnrollmentAttemptError;
-use super::anchors::CommittedAnchors;
+use super::anchors::{CommittedAnchors, PublishedAnchorDigests};
 
-#[doc = "Caller evidence that all three enrollment stores are published."]
+#[doc = "Caller evidence that every authoritative enrollment store is published."]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitProof {
     pub(super) managed: ManagedPackage,
     pub(super) managed_sha256: String,
     pub(super) enrollment_sha256: String,
+    pub(super) compatibility_policy_sha256: String,
     pub(super) base_catalog_sha256: String,
     pub(super) package_state_sha256: String,
 }
@@ -19,6 +20,7 @@ impl CommitProof {
     pub fn new(
         managed: ManagedPackage,
         enrollment_sha256: &str,
+        compatibility_policy_sha256: &str,
         base_catalog_sha256: &str,
         package_state_sha256: &str,
     ) -> Result<Self, EnrollmentAttemptError> {
@@ -27,6 +29,7 @@ impl CommitProof {
             managed,
             managed_sha256,
             enrollment_sha256: enrollment_sha256.to_ascii_lowercase(),
+            compatibility_policy_sha256: compatibility_policy_sha256.to_ascii_lowercase(),
             base_catalog_sha256: base_catalog_sha256.to_ascii_lowercase(),
             package_state_sha256: package_state_sha256.to_ascii_lowercase(),
         };
@@ -51,6 +54,7 @@ impl CommitProof {
             managed,
             managed_sha256,
             enrollment_sha256: String::new(),
+            compatibility_policy_sha256: String::new(),
             base_catalog_sha256: String::new(),
             package_state_sha256: String::new(),
         })
@@ -64,6 +68,7 @@ impl From<ManagedPackage> for CommitProof {
             managed: value,
             managed_sha256,
             enrollment_sha256: String::new(),
+            compatibility_policy_sha256: String::new(),
             base_catalog_sha256: String::new(),
             package_state_sha256: String::new(),
         }
@@ -146,6 +151,10 @@ impl CommittedAnchors {
         for (label, value) in [
             ("managed", proof.managed_sha256.as_str()),
             ("enrollment", proof.enrollment_sha256.as_str()),
+            (
+                "compatibility policy",
+                proof.compatibility_policy_sha256.as_str(),
+            ),
             ("base catalog", proof.base_catalog_sha256.as_str()),
             ("package state", proof.package_state_sha256.as_str()),
         ] {
@@ -164,9 +173,12 @@ impl CommittedAnchors {
             proof.managed_sha256.clone(),
             managed.identity().clone(),
             managed.base_inodes(),
-            proof.enrollment_sha256.clone(),
-            proof.base_catalog_sha256.clone(),
-            proof.package_state_sha256.clone(),
+            PublishedAnchorDigests::new(
+                proof.enrollment_sha256.clone(),
+                proof.compatibility_policy_sha256.clone(),
+                proof.base_catalog_sha256.clone(),
+                proof.package_state_sha256.clone(),
+            ),
         ))
     }
 }

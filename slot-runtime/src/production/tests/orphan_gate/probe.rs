@@ -3,23 +3,73 @@ use crate::android::{
 };
 use crate::catalog::{PathSecurityProof, SecurityProfileProof};
 use crate::domain::{
-    AppIdentity, DataInodes, GateSnapshot, PackageName, PackageObservation, SlotId, UserId,
+    AppIdentity, DataInodes, GateSnapshot, PackageCandidate, PackageCompatibility, PackageName,
+    PackageObservation, SlotId, UserId,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 
 const BASE_CE: u64 = 977_407;
 const BASE_DE: u64 = 977_417;
 
 #[derive(Debug, Clone)]
-pub(super) struct NativeBaseProbe {
+pub(in crate::production::tests) struct NativeBaseProbe {
     observation: PackageObservation,
+    user_unlocked: bool,
+    pending_after_capture: Option<Rc<Cell<bool>>>,
 }
 
 impl NativeBaseProbe {
-    pub(super) fn new() -> Self {
+    pub(in crate::production::tests) fn new() -> Self {
         let base = base_inodes();
         Self {
             observation: PackageObservation::new(identity(), base, base, base, false),
+            user_unlocked: true,
+            pending_after_capture: None,
         }
+    }
+
+    pub(in crate::production::tests) fn direct_boot() -> Self {
+        let base = base_inodes();
+        Self {
+            observation: PackageObservation::with_compatibility(
+                identity(),
+                base,
+                base,
+                base,
+                false,
+                PackageCompatibility::new(false, false, true),
+            ),
+            user_unlocked: true,
+            pending_after_capture: None,
+        }
+    }
+
+    pub(in crate::production::tests) fn locked_direct_boot() -> Self {
+        Self {
+            user_unlocked: false,
+            ..Self::direct_boot()
+        }
+    }
+
+    pub(in crate::production::tests) fn pending_install() -> Self {
+        let base = base_inodes();
+        Self {
+            observation: PackageObservation::new(identity(), base, base, base, true),
+            user_unlocked: true,
+            pending_after_capture: None,
+        }
+    }
+
+    pub(in crate::production::tests) fn pending_after_capture(captured: Rc<Cell<bool>>) -> Self {
+        Self {
+            pending_after_capture: Some(captured),
+            ..Self::new()
+        }
+    }
+
+    pub(in crate::production::tests) const fn set_user_unlocked(&mut self, unlocked: bool) {
+        self.user_unlocked = unlocked;
     }
 }
 
@@ -34,6 +84,24 @@ impl PackageProbe for NativeBaseProbe {
         _user_id: UserId,
     ) -> Result<PackageObservation, ProbeError> {
         Ok(self.observation.clone())
+    }
+
+    fn inspect_package(
+        &mut self,
+        _package: &PackageName,
+        _user_id: UserId,
+    ) -> Result<PackageCandidate, ProbeError> {
+        let pending = self.observation.pending_install()
+            || self
+                .pending_after_capture
+                .as_ref()
+                .is_some_and(|captured| captured.get());
+        Ok(PackageCandidate::new(
+            self.observation.identity().clone(),
+            self.observation.package_manager_inodes(),
+            pending,
+            self.observation.compatibility(),
+        ))
     }
 
     fn gate_snapshot(
@@ -74,15 +142,15 @@ impl PackageProbe for NativeBaseProbe {
     }
 
     fn user0_unlocked(&mut self) -> Result<bool, ProbeError> {
-        Ok(true)
+        Ok(self.user_unlocked)
     }
 }
 
-pub(super) fn base_inodes() -> DataInodes {
+pub(in crate::production::tests) fn base_inodes() -> DataInodes {
     DataInodes::new(BASE_CE, BASE_DE).unwrap()
 }
 
-pub(super) fn identity() -> AppIdentity {
+pub(in crate::production::tests) fn identity() -> AppIdentity {
     AppIdentity::new(
         10_321,
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -92,7 +160,7 @@ pub(super) fn identity() -> AppIdentity {
     .unwrap()
 }
 
-pub(super) fn security_profile() -> SecurityProfileProof {
+pub(in crate::production::tests) fn security_profile() -> SecurityProfileProof {
     let path = PathSecurityProof::new(
         identity().uid(),
         identity().uid(),

@@ -9,7 +9,7 @@ data class ManagedApp(
     val packageName: String,
     val label: String,
     val activeSlot: String,
-    val lifecycle: String,
+    val lifecycle: PackageLifecycle,
 )
 
 data class SlotSpace(
@@ -27,15 +27,16 @@ data class SlotSpace(
 data class PackageInspection(
     val packageName: String,
     val compatible: Boolean,
-    val supportLevel: String,
-    val constraints: Set<String>,
+    val supportLevel: PackageSupport,
     val systemApp: Boolean,
     val sharedUid: Boolean,
     val directBootAware: Boolean,
 ) {
     val requiresDirectBootConfirmation: Boolean
-        get() = supportLevel == "direct_boot_conditional"
-    val blocked: Boolean get() = supportLevel == "blocked"
+        get() = supportLevel == PackageSupport.DirectBootConditional
+    val blocked: Boolean
+        get() = supportLevel != PackageSupport.Supported &&
+            supportLevel != PackageSupport.DirectBootConditional
 
     fun blockerText(): String = when {
         systemApp -> "系统应用暂不支持"
@@ -53,12 +54,54 @@ data class EnrollmentReview(
 data class PackageRuntimeStatus(
     val packageName: String,
     val activeSlot: String,
-    val lifecycle: String,
+    val lifecycle: PackageLifecycle,
     val enabled: Boolean,
     val suspended: Boolean,
 ) {
     val requiresRecovery: Boolean
-        get() = lifecycle == "recovery_required" || lifecycle == "quarantined"
+        get() = lifecycle != PackageLifecycle.Normal
+}
+
+enum class PackageSupport {
+    Supported,
+    DirectBootConditional,
+    Blocked,
+    Unknown;
+
+    companion object {
+        fun fromWire(value: String): PackageSupport = when (value) {
+            "supported" -> Supported
+            "direct_boot_conditional" -> DirectBootConditional
+            "blocked" -> Blocked
+            else -> Unknown
+        }
+    }
+}
+
+enum class PackageLifecycle {
+    Normal,
+    UpdatePreparing,
+    UpdateWindowOpen,
+    UpdateVerifying,
+    LifecycleDrifted,
+    RepairWaiting,
+    RecoveryRequired,
+    Quarantined,
+    Unknown;
+
+    companion object {
+        fun fromWire(value: String): PackageLifecycle = when (value) {
+            "normal" -> Normal
+            "update_preparing" -> UpdatePreparing
+            "update_window_open" -> UpdateWindowOpen
+            "update_verifying" -> UpdateVerifying
+            "lifecycle_drifted" -> LifecycleDrifted
+            "repair_waiting" -> RepairWaiting
+            "recovery_required" -> RecoveryRequired
+            "quarantined" -> Quarantined
+            else -> Unknown
+        }
+    }
 }
 
 enum class RuntimeHealth {

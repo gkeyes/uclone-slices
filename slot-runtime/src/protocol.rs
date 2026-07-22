@@ -20,7 +20,13 @@ pub use response::{ErrorCode, Response, ResponseStatus, decode_response, encode_
 use framing::{encode_json_line, frame_line};
 
 /// Current wire schema version.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
+
+/// Build identity that must match the manager APK before mutations are enabled.
+pub const RUNTIME_BUILD_ID: &str = match option_env!("UCLONE_PREVIEW_BUILD_ID") {
+    Some(value) => value,
+    None => "development",
+};
 /// Maximum encoded request or response frame, including its newline delimiter.
 pub const MAX_FRAME_SIZE: usize = 16 * 1024;
 /// Legacy single-target profile package retained only for fixed regression fixtures.
@@ -56,6 +62,9 @@ pub enum ProtocolError {
     /// A request id was empty or contained unsafe characters.
     #[error("invalid request id: {0}")]
     InvalidRequestId(String),
+    /// The client and Runtime were not produced by the same paired build.
+    #[error("client and Runtime build identities do not match")]
+    RuntimePairMismatch,
     /// A package name was not present where required.
     #[error("missing package field")]
     MissingPackage,

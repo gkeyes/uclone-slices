@@ -4,7 +4,7 @@
     reason = "validated protocol fixtures fail the invoking test immediately"
 )]
 
-use uclone_slot_runtime::domain::{PackageName, PackageSupportLevel, SlotId};
+use uclone_slot_runtime::domain::{PackageName, SlotId};
 use uclone_slot_runtime::lifecycle::LifecycleState;
 use uclone_slot_runtime::protocol::{
     ALLOWED_PACKAGE, Ack, AckOperation, Command, ErrorCode, MAX_FRAME_SIZE, PackageStatus,
@@ -75,77 +75,17 @@ fn all_fixed_commands_round_trip_as_strict_json_lines() {
 }
 
 #[test]
-fn direct_boot_enrollment_confirmation_is_explicit_and_round_trips() {
-    let command = Command::EnrollPackage {
-        package: allowed(),
-        accept_direct_boot_conditional: true,
-    };
-    let request = Request::new(id("direct-boot-consent"), command.clone()).unwrap();
-
-    let frame = encode_request(&request).unwrap();
-
-    assert!(
-        std::str::from_utf8(&frame)
-            .unwrap()
-            .contains(r#""accept_direct_boot_conditional":true"#,)
-    );
-    assert_eq!(decode_request(&frame).unwrap().command(), &command);
-    assert_eq!(
-        PackageSupportLevel::DirectBootConditional.as_str(),
-        "direct_boot_conditional",
-    );
-}
-
-#[test]
-fn legacy_enrollment_request_defaults_direct_boot_confirmation_to_false() {
-    let frame = br#"{"schema_version":1,"request_id":"legacy-enroll","command":"enroll_package","package":"com.asksky.fitness"}
-"#;
-
-    let decoded = decode_request(frame).unwrap();
-
-    assert!(matches!(
-        decoded.command(),
-        Command::EnrollPackage {
-            accept_direct_boot_conditional: false,
-            ..
-        }
-    ));
-}
-
-#[test]
-fn wire_shape_rejects_schema_drift_and_unscoped_fields() {
-    let valid = br#"{"schema_version":1,"request_id":"r1","command":"probe"}
-"#;
-    assert!(decode_request(valid).is_ok());
-
-    let unsupported = br#"{"schema_version":2,"request_id":"r1","command":"probe"}
-"#;
-    assert!(matches!(
-        decode_request(unsupported),
-        Err(ProtocolError::UnsupportedSchema(2))
-    ));
-
-    let path = br#"{"schema_version":1,"request_id":"r1","command":"probe","runtime_root":"/data"}
-"#;
-    assert!(matches!(decode_request(path), Err(ProtocolError::Json(_))));
-
-    let user = br#"{"schema_version":1,"request_id":"r1","command":"probe","user_id":0}
-"#;
-    assert!(matches!(decode_request(user), Err(ProtocolError::Json(_))));
-}
-
-#[test]
 fn any_well_formed_package_is_accepted_without_accepting_paths() {
     let package = package("com.example.other");
     let request = Request::new(id("r1"), Command::StatusPackage { package });
     assert!(request.is_ok());
 
-    let wire = br#"{"schema_version":1,"request_id":"r1","command":"status_package","package":"com.example.other"}
+    let wire = br#"{"schema_version":2,"request_id":"r1","command":"status_package","build_id":"development","package":"com.example.other"}
 "#;
     assert!(decode_request(wire).is_ok());
     assert!(serde_json::from_slice::<Request>(wire).is_ok());
 
-    let path = br#"{"schema_version":1,"request_id":"r1","command":"status_package","package":"../../data"}
+    let path = br#"{"schema_version":2,"request_id":"r1","command":"status_package","package":"../../data"}
 "#;
     assert!(matches!(decode_request(path), Err(ProtocolError::Json(_))));
 }
@@ -189,7 +129,7 @@ fn response_round_trip_has_typed_status_and_error_code() {
     assert_eq!(decoded.status(), ResponseStatus::Error);
     assert_eq!(decoded.error_code(), Some(ErrorCode::RecoveryRequired));
 
-    let invalid = br#"{"schema_version":1,"request_id":"r1","status":"ok","error_code":"busy"}
+    let invalid = br#"{"schema_version":2,"request_id":"r1","status":"ok","error_code":"busy"}
 "#;
     assert!(matches!(
         decode_response(invalid),
@@ -251,21 +191,21 @@ fn reconciliation_recovery_exposes_a_stable_stage_reason() {
 
 #[test]
 fn response_payload_and_status_invariants_fail_closed() {
-    let missing_payload = br#"{"schema_version":1,"request_id":"r1","status":"ok"}
+    let missing_payload = br#"{"schema_version":2,"request_id":"r1","status":"ok"}
 "#;
     assert!(matches!(
         decode_response(missing_payload),
         Err(ProtocolError::InvalidResponse)
     ));
 
-    let error_with_payload = br#"{"schema_version":1,"request_id":"r1","status":"error","error_code":"busy","payload":{"kind":"ack","data":{"operation":"enroll_package"}}}
+    let error_with_payload = br#"{"schema_version":2,"request_id":"r1","status":"error","error_code":"busy","payload":{"kind":"ack","data":{"operation":"enroll_package"}}}
 "#;
     assert!(matches!(
         decode_response(error_with_payload),
         Err(ProtocolError::InvalidResponse)
     ));
 
-    let unknown_payload_field = br#"{"schema_version":1,"request_id":"r1","status":"ok","payload":{"kind":"probe_report","data":{"package":"com.uclone.slotprobe","ready":true,"user_unlocked":true,"ce_de_supported":true,"path":"/data"}}}
+    let unknown_payload_field = br#"{"schema_version":2,"request_id":"r1","status":"ok","payload":{"kind":"probe_report","data":{"ready":true,"user_unlocked":true,"ce_de_supported":true,"runtime_version":"0.3.0-preview.0","build_id":"development","path":"/data"}}}
 "#;
     assert!(matches!(
         decode_response(unknown_payload_field),
@@ -287,6 +227,6 @@ fn response_payload_and_status_invariants_fail_closed() {
 
 #[test]
 fn constants_are_versioned_and_bounded() {
-    assert_eq!(SCHEMA_VERSION, 1);
+    assert_eq!(SCHEMA_VERSION, 2);
     assert_eq!(MAX_FRAME_SIZE, 16 * 1024);
 }

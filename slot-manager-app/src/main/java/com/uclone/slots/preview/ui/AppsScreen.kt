@@ -14,6 +14,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.uclone.slots.preview.model.ManagedApp
+import com.uclone.slots.preview.model.PackageLifecycle
 import com.uclone.slots.preview.model.RuntimeHealth
 
 @Composable
@@ -24,33 +25,37 @@ fun AppsScreen(
     onAdd: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
+    val runtimeReady = health == RuntimeHealth.Ready
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 100.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item { RuntimeBanner(health, onRuntime) }
+                item { RuntimeBanner(health, onRuntime) }
             if (apps.isEmpty()) {
-                item { EmptyApps(onAdd) }
+                item { EmptyApps(runtimeReady, onAdd) }
             } else {
                 items(apps, key = { it.packageName }) { app ->
-                    ManagedAppCard(app) { onOpen(app.packageName) }
+                    ManagedAppCard(app, runtimeReady) { onOpen(app.packageName) }
                 }
             }
         }
-        ExtendedFloatingActionButton(
-            onClick = onAdd,
-            icon = { Icon(Icons.Outlined.Add, null) },
-            text = { Text("添加应用") },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
-        )
+        if (runtimeReady) {
+            ExtendedFloatingActionButton(
+                onClick = onAdd,
+                icon = { Icon(Icons.Outlined.Add, null) },
+                text = { Text("添加应用") },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
+            )
+        }
     }
 }
 
 @Composable
-private fun ManagedAppCard(app: ManagedApp, onClick: () -> Unit) {
+private fun ManagedAppCard(app: ManagedApp, enabled: Boolean, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
+        enabled = enabled,
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(20.dp),
         modifier = Modifier.fillMaxWidth(),
@@ -65,7 +70,7 @@ private fun ManagedAppCard(app: ManagedApp, onClick: () -> Unit) {
                 Text(app.label, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    HealthDot(app.lifecycle == "normal")
+                    HealthDot(app.lifecycle == PackageLifecycle.Normal)
                     Spacer(Modifier.width(7.dp))
                     Text(
                         if (app.activeSlot == "base") "Base · Android 原生数据" else "活动空间 · ${app.activeSlot}",
@@ -80,7 +85,7 @@ private fun ManagedAppCard(app: ManagedApp, onClick: () -> Unit) {
 }
 
 @Composable
-private fun EmptyApps(onAdd: () -> Unit) {
+private fun EmptyApps(enabled: Boolean, onAdd: () -> Unit) {
     SectionCard {
         Text("还没有受管应用", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
@@ -89,6 +94,6 @@ private fun EmptyApps(onAdd: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(18.dp))
-        Button(onClick = onAdd) { Text("选择应用") }
+        Button(onClick = onAdd, enabled = enabled) { Text("选择应用") }
     }
 }

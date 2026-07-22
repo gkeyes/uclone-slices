@@ -37,6 +37,10 @@ pub(super) fn load<Q: PackageProbe>(
         .journal
         .list()
         .map_err(|_| ServiceError::RecoveryRequired)?;
+    let policy = stores
+        .compatibility_policy
+        .load(key.package_name())
+        .map_err(|_| ServiceError::RecoveryRequired)?;
 
     if attempt.is_some() {
         return Ok(PackageState::RecoveryRequired);
@@ -45,6 +49,7 @@ pub(super) fn load<Q: PackageProbe>(
         return if catalog.is_empty()
             && state.is_none()
             && registry.is_none()
+            && policy.is_none()
             && journal_for(&journal, key).next().is_none()
         {
             Ok(PackageState::Absent)
@@ -82,15 +87,8 @@ pub(super) fn load<Q: PackageProbe>(
     if support_level == crate::domain::PackageSupportLevel::Blocked {
         return Ok(PackageState::Quarantined);
     }
-    match stores
-        .compatibility_policy
-        .load(key.package_name())
-        .map_err(|_| ServiceError::RecoveryRequired)?
-    {
-        Some(policy) if policy.accepts(observation.identity(), support_level) => {}
-        Some(_) => return Ok(PackageState::Quarantined),
-        None if support_level == crate::domain::PackageSupportLevel::Supported => {}
-        None => return Ok(PackageState::Quarantined),
+    if !policy.is_some_and(|value| value.accepts(observation.identity(), support_level)) {
+        return Ok(PackageState::Quarantined);
     }
     match PackageLifecycleGuard::assess(&managed, &observation) {
         GuardDecision::Quarantine => return Ok(PackageState::Quarantined),

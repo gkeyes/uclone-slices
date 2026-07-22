@@ -8,8 +8,16 @@ case "$0" in
     *) exit 0 ;;
 esac
 PROFILE_FILE=$SCRIPT_DIR/target-profile.sh
-[ -f "$PROFILE_FILE" ] && [ ! -L "$PROFILE_FILE" ] || exit 0
-. "$PROFILE_FILE"
+PROFILE_LOADER=$SCRIPT_DIR/profile-loader.sh
+UCLONE_TARGET_PROFILE=generic
+UCLONE_TARGET_PACKAGE=com.uclone.slots.preview
+UCLONE_TARGET_USER=0
+UCLONE_MODULE=uclone-slices-preview
+UCLONE_RUNTIME_ROOT=/data/adb/uclone-slices-preview
+if [ -f "$PROFILE_LOADER" ] && [ ! -L "$PROFILE_LOADER" ]; then
+    . "$PROFILE_LOADER"
+    uclone_load_profile "$PROFILE_FILE" || :
+fi
 RUNTIME_ROOT=$UCLONE_RUNTIME_ROOT
 RUN_ROOT=$RUNTIME_ROOT/run
 READY_FILE=$RUN_ROOT/startup-gate.ready

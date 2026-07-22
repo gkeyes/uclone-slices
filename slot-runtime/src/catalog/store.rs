@@ -12,16 +12,23 @@ use super::{CatalogEntry, CatalogError, SecurityProfileProof};
 #[doc = "Filesystem-backed create-only slot catalog store."]
 #[derive(Debug, Clone)]
 pub struct CatalogStore {
+    root: PathBuf,
     packages: PathBuf,
 }
 
 impl CatalogStore {
     #[doc = "Creates or opens the root-only catalog directory."]
     pub fn new(root: impl AsRef<Path>) -> Result<Self, CatalogError> {
-        let packages = root.as_ref().join("packages");
+        let root = root.as_ref().to_path_buf();
+        let packages = root.join("packages");
         ensure_directory(&packages)
             .map_err(|source| CatalogError::io("create catalog packages", &packages, source))?;
-        Ok(Self { packages })
+        Ok(Self { root, packages })
+    }
+
+    #[doc = "Returns the catalog root used to derive immutable artifact paths."]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     #[doc = "Creates one package catalog with its immutable Android-owned base entry."]

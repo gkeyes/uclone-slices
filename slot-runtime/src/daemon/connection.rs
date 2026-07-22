@@ -45,14 +45,14 @@ fn drain_oversized_frame(stream: &mut UnixStream) -> Result<(), DaemonError> {
     }
 }
 
-pub(super) fn invalid_request_response(frame: &[u8]) -> Option<Response> {
+pub(super) fn invalid_request_response(frame: &[u8], error_code: ErrorCode) -> Option<Response> {
     let line = frame.split(|byte| *byte == b'\n').next()?;
     let request_id = serde_json::from_slice::<Value>(line)
         .ok()
         .and_then(|value| value.get("request_id")?.as_str().map(str::to_owned))
         .or_else(|| truncated_request_id(line))?;
     RequestId::new(&request_id)
-        .map(|id| Response::error(id, ErrorCode::InvalidRequest))
+        .map(|id| Response::error(id, error_code))
         .ok()
 }
 

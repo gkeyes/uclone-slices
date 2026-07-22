@@ -56,7 +56,10 @@ fn conditional_acceptance_is_identity_bound_and_digest_protected() {
         .path()
         .join("policy/packages/com.xingin.xhs/policy.json");
     let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    value["direct_boot_accepted"] = serde_json::Value::Bool(false);
+    value.as_object_mut().unwrap().insert(
+        "direct_boot_accepted".to_owned(),
+        serde_json::Value::Bool(false),
+    );
     fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
     assert!(store.load(&package()).is_err());

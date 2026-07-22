@@ -2,6 +2,15 @@ use crate::domain::{GateSnapshot, ManagedPackage, PackageName, SlotId, Transacti
 use crate::registry::PackageRevision;
 use serde::{Deserialize, Serialize};
 
+#[doc = "Limits reconciliation side effects to one package or the complete boot set."]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReconcileScope {
+    #[doc = "Reconciles every discovered managed package during daemon startup."]
+    All,
+    #[doc = "Reconciles only the exact package requested by the control plane."]
+    Package(PackageName),
+}
+
 #[doc = "Stable reason why a package remains execution-gated."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +29,8 @@ pub enum ReconcileReason {
     MissingGateSnapshot,
     #[doc = "Installed package metadata drifted from enrollment."]
     PackageStateDrift,
+    #[doc = "A conditional Direct Boot package cannot release a non-base reboot view yet."]
+    ConditionalDirectBoot,
     #[doc = "The required CE and DE view could not be restored and proved."]
     ViewRestoreFailed,
     #[doc = "The exact package gate state could not be restored."]
@@ -42,6 +53,7 @@ impl ReconcileReason {
             Self::GateHoldFailed => "gate_hold_failed",
             Self::MissingGateSnapshot => "missing_gate_snapshot",
             Self::PackageStateDrift => "package_state_drift",
+            Self::ConditionalDirectBoot => "conditional_direct_boot",
             Self::ViewRestoreFailed => "view_restore_failed",
             Self::GateRestoreFailed => "gate_restore_failed",
             Self::GateLeaseRetirement => "gate_lease_retirement",

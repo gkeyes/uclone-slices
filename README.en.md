@@ -69,12 +69,14 @@ Managed-app updates, clear-data, uninstall/reinstall, and OTA flows require life
 
 This repository combines Android, Rust, C, and KernelSU shell components. Release artifacts must come from one source commit and pass component tests, strict Clippy, Android lint, ELF/signing checks, and KernelSU ZIP content review.
 
-Typical local checks:
+Release builds run only in the repository's pinned GitHub Actions environment.
+Local work is limited to static source, shell/YAML syntax, formatting, and path
+policy checks; local caches and toolchains are not release evidence. CI runs:
 
 ```bash
-cargo test --manifest-path slot-runtime/Cargo.toml
-cargo clippy --manifest-path slot-runtime/Cargo.toml --all-targets --all-features -- -D warnings
-./gradlew :slot-manager-app:testDebugUnitTest :slot-manager-app:lintDebug :slot-manager-app:assembleDebug
+Rust fmt, tests, strict Clippy, and rustdoc
+Android unit tests, lint, and release assembly
+Bridge, fsprobe, KernelSU boot, containment, and rescue contract tests
 ```
 
 The CLI requires explicit consent when enrolling a Direct Boot package:
@@ -85,7 +87,20 @@ slotctl enroll com.example.app --accept-direct-boot-conditional
 
 The KernelSU ZIP is produced by the fixed-path packaging workflow. The source skeleton itself is not an installable release artifact.
 
-The GitHub Action on `main` builds a paired fixed-signed `uclone-slots-preview.apk` and generic `uclone-slices-preview-kernelsu.zip`. It uploads the APK, Runtime ZIP, SHA-256 checksums, signing report, and module manifest to both Actions artifacts and a GitHub Preview Release. Moving from a debug-signed APK requires one uninstall; later builds signed by this fixed identity can update in place. The private key exists only in GitHub Actions Secrets and a protected local backup. The repository stores only the public certificate and fingerprint.
+The GitHub Action on `main` builds a paired fixed-signed
+`uclone-slots-preview.apk` and generic `uclone-slices-preview-kernelsu.zip`.
+The signing job receives only the validated unsigned bundle; the publishing job
+cannot read signing secrets. A draft Release is populated and its exact asset
+set is verified before publication. Protocol v2 requires the APK and Runtime to
+have the same `build_id`, so mixed builds fail closed. Before a paired upgrade,
+all managed apps must be rescued to Base and active gate/management state must
+be retired. Migrating from the legacy v1/Fitness control plane also requires
+stopping the old daemon and renaming its control-plane directory into a
+reversible archive after native Base is proved; v1 state must not be overwritten
+in place. Moving from a debug-signed APK requires one uninstall; later builds
+with the fixed identity can update in place. The private key exists only in
+GitHub Actions Secrets and a protected local backup. The repository stores only
+the public certificate and fingerprint.
 
 ## Safety contract
 

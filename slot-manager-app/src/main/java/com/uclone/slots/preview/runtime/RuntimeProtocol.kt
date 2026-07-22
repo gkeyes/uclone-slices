@@ -1,7 +1,10 @@
 package com.uclone.slots.preview.runtime
 
+import com.uclone.slots.preview.BuildConfig
 import com.uclone.slots.preview.model.PackageInspection
+import com.uclone.slots.preview.model.PackageLifecycle
 import com.uclone.slots.preview.model.PackageRuntimeStatus
+import com.uclone.slots.preview.model.PackageSupport
 import com.uclone.slots.preview.model.SlotSpace
 import org.json.JSONObject
 import java.util.UUID
@@ -9,9 +12,10 @@ import java.util.UUID
 object RuntimeProtocol {
     fun encode(request: RuntimeRequest): String {
         val json = JSONObject()
-            .put("schema_version", 1)
+            .put("schema_version", SCHEMA_VERSION)
             .put("request_id", "apk-${UUID.randomUUID()}")
             .put("command", request.command)
+            .put("build_id", BuildConfig.PREVIEW_BUILD_ID)
         request.packageName?.let { json.put("package", it) }
         request.slotId?.let { json.put("slot", it) }
         request.displayName?.let { json.put("display_name", it) }
@@ -24,7 +28,9 @@ object RuntimeProtocol {
 
     fun decode(line: String): RuntimeResult {
         val root = JSONObject(line)
-        if (root.getInt("schema_version") != 1) return RuntimeResult.Unknown("协议版本不匹配")
+        if (root.getInt("schema_version") != SCHEMA_VERSION) {
+            return RuntimeResult.Rejected("runtime_pair_mismatch")
+        }
         return when (root.getString("status")) {
             "error" -> RuntimeResult.Rejected(root.getString("error_code"))
             "ok" -> RuntimeResult.Success(parsePayload(root.getJSONObject("payload")))
@@ -39,6 +45,8 @@ object RuntimeProtocol {
                 data.getBoolean("ready"),
                 data.getBoolean("user_unlocked"),
                 data.getBoolean("ce_de_supported"),
+                data.getString("runtime_version"),
+                data.getString("build_id"),
             )
             "package_inspection" -> RuntimePayload.Inspection(parseInspection(data))
             "managed_apps" -> RuntimePayload.ManagedApps(
@@ -48,7 +56,7 @@ object RuntimeProtocol {
                             ManagedRow(
                                 it.getString("package"),
                                 it.getString("active_slot"),
-                                it.getString("lifecycle"),
+                                PackageLifecycle.fromWire(it.getString("lifecycle")),
                             )
                         }
                     }
@@ -77,10 +85,7 @@ object RuntimeProtocol {
     private fun parseInspection(data: JSONObject) = PackageInspection(
         data.getString("package"),
         data.getBoolean("compatible"),
-        data.getString("support_level"),
-        data.getJSONArray("constraints").let { array ->
-            buildSet { repeat(array.length()) { add(array.getString(it)) } }
-        },
+        PackageSupport.fromWire(data.getString("support_level")),
         data.getBoolean("system_app"),
         data.getBoolean("shared_uid"),
         data.getBoolean("direct_boot_aware"),
@@ -89,7 +94,7 @@ object RuntimeProtocol {
     private fun parseStatus(data: JSONObject) = PackageRuntimeStatus(
         data.getString("package"),
         data.getString("slot"),
-        data.getString("lifecycle"),
+        PackageLifecycle.fromWire(data.getString("lifecycle")),
         data.getBoolean("enabled"),
         data.getBoolean("suspended"),
     )
@@ -106,4 +111,6 @@ object RuntimeProtocol {
             inodes.getLong("de"),
         )
     }
+
+    private const val SCHEMA_VERSION = 2
 }

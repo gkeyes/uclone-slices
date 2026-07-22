@@ -11,15 +11,19 @@ pub struct ProbeReport {
     ready: bool,
     user_unlocked: bool,
     ce_de_supported: bool,
+    runtime_version: String,
+    build_id: String,
 }
 
 impl ProbeReport {
     /// Creates a bounded capability report.
-    pub const fn new(ready: bool, user_unlocked: bool, ce_de_supported: bool) -> Self {
+    pub fn new(ready: bool, user_unlocked: bool, ce_de_supported: bool) -> Self {
         Self {
             ready,
             user_unlocked,
             ce_de_supported,
+            runtime_version: env!("CARGO_PKG_VERSION").to_owned(),
+            build_id: crate::protocol::RUNTIME_BUILD_ID.to_owned(),
         }
     }
 
@@ -36,6 +40,16 @@ impl ProbeReport {
     /// Returns whether paired CE and DE views are supported.
     pub const fn ce_de_supported(&self) -> bool {
         self.ce_de_supported
+    }
+
+    /// Returns the semantic Runtime version embedded in this binary.
+    pub fn runtime_version(&self) -> &str {
+        &self.runtime_version
+    }
+
+    /// Returns the immutable paired-build identity embedded by CI.
+    pub fn build_id(&self) -> &str {
+        &self.build_id
     }
 }
 

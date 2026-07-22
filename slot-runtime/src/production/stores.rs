@@ -34,6 +34,7 @@ pub(super) struct ProductionStores {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PublishedDigests {
     pub(super) enrollment: String,
+    pub(super) compatibility_policy: String,
     pub(super) base_catalog: String,
     pub(super) package_state: String,
 }
@@ -67,43 +68,75 @@ impl ProductionStores {
         state: &PackageStateRevision,
     ) -> Result<PublishedDigests, ServiceError> {
         let package = key.package_name();
+        let owner_uid = self.trusted_store_owner()?;
         Ok(PublishedDigests {
-            enrollment: hash_file(&enrollment_path(package))?,
-            base_catalog: hash_file(&base_catalog_path(package))?,
+            enrollment: hash_file(&enrollment_path(self.enrollment.root(), package), owner_uid)?,
+            compatibility_policy: hash_file(
+                &compatibility_policy_path(self.compatibility_policy.root(), package),
+                owner_uid,
+            )?,
+            base_catalog: hash_file(&base_catalog_path(self.catalog.root(), package), owner_uid)?,
             package_state: hash_file(
                 &self
                     .package_state
                     .revision_path(package, state.generation()),
+                owner_uid,
             )?,
         })
     }
+
+    fn trusted_store_owner(&self) -> Result<u32, ServiceError> {
+        let roots = [
+            self.enrollment.root(),
+            self.compatibility_policy.root(),
+            self.catalog.root(),
+            self.package_state.root(),
+        ];
+        let first = fs::symlink_metadata(roots[0]).map_err(|_| ServiceError::RecoveryRequired)?;
+        if !trusted_root(&first) {
+            return Err(ServiceError::RecoveryRequired);
+        }
+        let owner_uid = first.uid();
+        for root in roots.iter().skip(1) {
+            let metadata =
+                fs::symlink_metadata(root).map_err(|_| ServiceError::RecoveryRequired)?;
+            if !trusted_root(&metadata) || metadata.uid() != owner_uid {
+                return Err(ServiceError::RecoveryRequired);
+            }
+        }
+        Ok(owner_uid)
+    }
 }
 
-fn enrollment_path(package: &PackageName) -> PathBuf {
-    RuntimeLayout::enrollment_root()
-        .join("packages")
+fn compatibility_policy_path(root: &Path, package: &PackageName) -> PathBuf {
+    root.join("packages")
+        .join(package.as_str())
+        .join("policy.json")
+}
+
+fn enrollment_path(root: &Path, package: &PackageName) -> PathBuf {
+    root.join("packages")
         .join(package.as_str())
         .join("enrollment.json")
 }
 
-fn base_catalog_path(package: &PackageName) -> PathBuf {
-    RuntimeLayout::catalog_root()
-        .join("packages")
+fn base_catalog_path(root: &Path, package: &PackageName) -> PathBuf {
+    root.join("packages")
         .join(package.as_str())
         .join("slots")
         .join("base.json")
 }
 
-fn hash_file(path: &Path) -> Result<String, ServiceError> {
+fn hash_file(path: &Path, owner_uid: u32) -> Result<String, ServiceError> {
     let before = fs::symlink_metadata(path).map_err(|_| ServiceError::RecoveryRequired)?;
-    if !trusted_artifact(&before) || before.len() > MAX_ARTIFACT_BYTES {
+    if !trusted_artifact(&before, owner_uid) || before.len() > MAX_ARTIFACT_BYTES {
         return Err(ServiceError::RecoveryRequired);
     }
     let file = File::open(path).map_err(|_| ServiceError::RecoveryRequired)?;
     let opened = file
         .metadata()
         .map_err(|_| ServiceError::RecoveryRequired)?;
-    if !same_artifact(&before, &opened) {
+    if !same_artifact(&before, &opened, owner_uid) {
         return Err(ServiceError::RecoveryRequired);
     }
     let mut bytes = Vec::new();
@@ -115,22 +148,26 @@ fn hash_file(path: &Path) -> Result<String, ServiceError> {
         return Err(ServiceError::RecoveryRequired);
     }
     let after = fs::symlink_metadata(path).map_err(|_| ServiceError::RecoveryRequired)?;
-    if !same_artifact(&before, &after) || after.len() != opened.len() {
+    if !same_artifact(&before, &after, owner_uid) || after.len() != opened.len() {
         return Err(ServiceError::RecoveryRequired);
     }
     let digest = Sha256::digest(bytes);
     Ok(format!("{digest:x}"))
 }
 
-fn trusted_artifact(metadata: &fs::Metadata) -> bool {
+fn trusted_root(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_dir() && metadata.mode() & 0o777 == 0o700
+}
+
+fn trusted_artifact(metadata: &fs::Metadata, owner_uid: u32) -> bool {
     metadata.file_type().is_file()
-        && metadata.uid() == 0
+        && metadata.uid() == owner_uid
         && metadata.nlink() == 1
         && metadata.mode() & 0o777 == 0o600
 }
 
-fn same_artifact(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    trusted_artifact(right)
+fn same_artifact(left: &fs::Metadata, right: &fs::Metadata, owner_uid: u32) -> bool {
+    trusted_artifact(right, owner_uid)
         && left.dev() == right.dev()
         && left.ino() == right.ino()
         && left.mode() == right.mode()

@@ -1,7 +1,8 @@
 package com.uclone.slots.preview
 
-import android.app.Application
+import android.content.Context
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import com.uclone.slots.preview.model.RuntimeHealth
 import com.uclone.slots.preview.runtime.RuntimePayload
 import com.uclone.slots.preview.runtime.RuntimeResult
@@ -20,6 +21,7 @@ internal object UiMappings {
         "user_locked" -> RuntimeHealth.UserLocked
         "recovery_required", "quarantined" -> RuntimeHealth.RecoveryRequired
         "unsupported_device" -> RuntimeHealth.Unsupported
+        "runtime_pair_mismatch" -> RuntimeHealth.ModuleMissing
         else -> RuntimeHealth.DaemonOffline
     }
 
@@ -30,6 +32,7 @@ internal object UiMappings {
         "direct_boot_confirmation_required" -> "请确认 Direct Boot 条件支持提示后再登记"
         "not_found" -> "目标尚未登记或空间不存在"
         "user_locked" -> "请先解锁主用户"
+        "runtime_pair_mismatch" -> "APK 与 Runtime 不是同一构建，请成对更新"
         else -> "Runtime 拒绝操作：$code"
     }
 }
@@ -37,11 +40,25 @@ internal object UiMappings {
 internal inline fun <reified T : RuntimePayload> RuntimeResult.payloadAs(): T? =
     (this as? RuntimeResult.Success)?.payload as? T
 
-internal fun launchInstalledApp(application: Application, packageName: String): Boolean {
-    val intent = application.packageManager
+internal fun SlotsViewModel.handleInspectionFailure(result: RuntimeResult) {
+    when (result) {
+        is RuntimeResult.Rejected -> reject(UiMappings.errorText(result.code))
+        is RuntimeResult.Unknown -> reject("Runtime 状态未知，已停止登记")
+        is RuntimeResult.Success -> reject("Runtime 返回了无法识别的检查结果")
+    }
+}
+
+internal fun launchInstalledApp(context: Context, packageName: String): Boolean {
+    val intent = context.packageManager
         .getLaunchIntentForPackage(packageName)
         ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ?: return false
-    application.startActivity(intent)
-    return true
+    return try {
+        context.startActivity(intent)
+        true
+    } catch (_: ActivityNotFoundException) {
+        false
+    } catch (_: SecurityException) {
+        false
+    }
 }

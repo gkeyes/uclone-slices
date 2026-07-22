@@ -1,7 +1,6 @@
 use crate::android::PackageProbe;
 use crate::domain::{ManagedPackage, PackageKey};
 use crate::enrollment_attempt::{EnrollmentAttempt, EnrollmentAttemptPhase, RetirementProof};
-use crate::journal::Transaction;
 use crate::materializer::MaterializationBackend;
 use crate::reconcile::{ReconcileOutcome, ReconcileReason, Reconciler, RecoveryBackend};
 use crate::service::{PackageState, ServiceError};
@@ -68,12 +67,21 @@ where
         {
             return Ok(outcome);
         }
+        match self.release_policy(key)? {
+            ReleasePolicy::Allowed => {}
+            ReleasePolicy::UserLocked => return Ok(ReconcileOutcome::Locked),
+            ReleasePolicy::ConditionalActiveSlot => {
+                return self.retain_conditional_boot(key);
+            }
+            ReleasePolicy::Invalid => return self.retain_invalid_policy(key),
+        }
         let report = {
-            let mut reconciler = Reconciler::new(
+            let mut reconciler = Reconciler::for_package(
                 &mut self.runtime,
                 self.stores.enrollment.clone(),
                 self.stores.journal.clone(),
                 self.stores.registry.clone(),
+                key.package_name().clone(),
             );
             reconciler
                 .early_boot()
@@ -100,11 +108,12 @@ where
         &mut self,
         key: &PackageKey,
     ) -> Result<Option<ReconcileOutcome>, ServiceError> {
-        let report = Reconciler::new(
+        let report = Reconciler::for_package(
             &mut self.runtime,
             self.stores.enrollment.clone(),
             self.stores.journal.clone(),
             self.stores.registry.clone(),
+            key.package_name().clone(),
         )
         .early_boot();
         let Ok(report) = report else {
@@ -129,42 +138,10 @@ where
         ))
     }
 
-    fn pristine_pending(&self, key: &PackageKey) -> Result<bool, ServiceError> {
-        let no_enrollment = self
-            .stores
-            .enrollment
-            .load(key.package_name())
-            .map_err(|_| ServiceError::RecoveryRequired)?
-            .is_none();
-        let no_catalog = self
-            .stores
-            .catalog
-            .list(key)
-            .map_err(|_| ServiceError::RecoveryRequired)?
-            .is_empty();
-        let no_state = self
-            .stores
-            .package_state
-            .latest(key)
-            .map_err(|_| ServiceError::RecoveryRequired)?
-            .is_none();
-        let no_registry = self
-            .stores
-            .registry
-            .latest(key.package_name())
-            .map_err(|_| ServiceError::RecoveryRequired)?
-            .is_none();
-        let no_journal = !self
-            .stores
-            .journal
-            .list()
-            .map_err(|_| ServiceError::RecoveryRequired)?
-            .iter()
-            .any(|transaction| belongs_to(transaction, key));
-        Ok(no_enrollment && no_catalog && no_state && no_registry && no_journal)
-    }
-
-    fn load_enrollment(&self, key: &PackageKey) -> Result<Option<ManagedPackage>, ServiceError> {
+    pub(super) fn load_enrollment(
+        &self,
+        key: &PackageKey,
+    ) -> Result<Option<ManagedPackage>, ServiceError> {
         self.stores
             .enrollment
             .load(key.package_name())
@@ -195,9 +172,12 @@ where
     }
 }
 
-fn belongs_to(transaction: &Transaction, key: &PackageKey) -> bool {
-    transaction.spec().package_name() == key.package_name()
-        && transaction.spec().user_id() == key.user_id()
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReleasePolicy {
+    Allowed,
+    UserLocked,
+    ConditionalActiveSlot,
+    Invalid,
 }
 
 const fn enrollment_recovery() -> ReconcileOutcome {

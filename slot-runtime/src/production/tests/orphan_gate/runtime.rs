@@ -5,19 +5,19 @@ use crate::runtime::{PlatformError, RuntimeBackend};
 use super::probe::base_inodes;
 
 #[derive(Debug)]
-pub(super) struct OrphanGateRuntime {
+pub(in crate::production::tests) struct OrphanGateRuntime {
     snapshot: GateSnapshot,
     managed: Option<ManagedPackage>,
-    pub(super) held: bool,
-    pub(super) restored: Option<GateSnapshot>,
-    pub(super) retired: bool,
+    pub(in crate::production::tests) held: bool,
+    pub(in crate::production::tests) restored: Option<GateSnapshot>,
+    pub(in crate::production::tests) retired: bool,
     emergency_calls: usize,
-    pub(super) confirmations: usize,
-    pub(super) base_proofs: usize,
+    pub(in crate::production::tests) confirmations: usize,
+    pub(in crate::production::tests) base_proofs: usize,
 }
 
 impl OrphanGateRuntime {
-    pub(super) const fn new(snapshot: GateSnapshot) -> Self {
+    pub(in crate::production::tests) const fn new(snapshot: GateSnapshot) -> Self {
         Self {
             snapshot,
             managed: None,
@@ -30,7 +30,10 @@ impl OrphanGateRuntime {
         }
     }
 
-    pub(super) fn enrolled(snapshot: GateSnapshot, managed: ManagedPackage) -> Self {
+    pub(in crate::production::tests) fn enrolled(
+        snapshot: GateSnapshot,
+        managed: ManagedPackage,
+    ) -> Self {
         Self {
             managed: Some(managed),
             ..Self::new(snapshot)

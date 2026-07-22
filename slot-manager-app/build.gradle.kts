@@ -15,7 +15,8 @@ val hasReleaseSigning = listOf(
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
 val previewVersionCode = providers.gradleProperty("previewVersionCode").orElse("1")
-val previewVersionName = providers.gradleProperty("previewVersionName").orElse("0.2.0-preview.3")
+val previewVersionName = providers.gradleProperty("previewVersionName").orElse("0.3.0-preview.dev")
+val previewBuildId = providers.gradleProperty("previewBuildId").orElse("development")
 
 android {
     namespace = "com.uclone.slots.preview"
@@ -27,6 +28,7 @@ android {
         targetSdk = 36
         versionCode = previewVersionCode.get().toInt()
         versionName = previewVersionName.get()
+        buildConfigField("String", "PREVIEW_BUILD_ID", "\"${previewBuildId.get()}\"")
     }
 
     buildFeatures {

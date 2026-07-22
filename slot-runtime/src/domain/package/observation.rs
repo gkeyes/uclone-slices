@@ -14,17 +14,6 @@ pub enum PackageSupportLevel {
     Blocked,
 }
 
-impl PackageSupportLevel {
-    #[doc = "Returns the stable protocol spelling."]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Supported => "supported",
-            Self::DirectBootConditional => "direct_boot_conditional",
-            Self::Blocked => "blocked",
-        }
-    }
-}
-
 #[doc = "Installed-package properties that bound the first multi-App Preview."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PackageCompatibility {
@@ -80,7 +69,7 @@ impl PackageCompatibility {
     }
 }
 
-#[doc = "Lightweight PackageManager candidate independent of running-process namespaces."]
+#[doc = "Lightweight `PackageManager` candidate independent of running-process namespaces."]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageCandidate {
     identity: AppIdentity,
@@ -90,7 +79,7 @@ pub struct PackageCandidate {
 }
 
 impl PackageCandidate {
-    #[doc = "Creates one package candidate from typed PackageManager facts."]
+    #[doc = "Creates one package candidate from typed `PackageManager` facts."]
     pub const fn new(
         identity: AppIdentity,
         package_manager_inodes: DataInodes,
@@ -109,7 +98,7 @@ impl PackageCandidate {
     pub const fn identity(&self) -> &AppIdentity {
         &self.identity
     }
-    #[doc = "Returns PackageManager's CE/DE inode anchors."]
+    #[doc = "Returns `PackageManager`'s CE/DE inode anchors."]
     pub const fn package_manager_inodes(&self) -> DataInodes {
         self.package_manager_inodes
     }

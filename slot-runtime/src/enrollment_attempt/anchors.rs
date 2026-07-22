@@ -12,8 +12,33 @@ pub struct CommittedAnchors {
     identity: AppIdentity,
     base_inodes: DataInodes,
     enrollment_sha256: String,
+    compatibility_policy_sha256: String,
     base_catalog_sha256: String,
     package_state_sha256: String,
+}
+
+#[derive(Debug)]
+pub(super) struct PublishedAnchorDigests {
+    enrollment: String,
+    compatibility_policy: String,
+    base_catalog: String,
+    package_state: String,
+}
+
+impl PublishedAnchorDigests {
+    pub(super) const fn new(
+        enrollment: String,
+        compatibility_policy: String,
+        base_catalog: String,
+        package_state: String,
+    ) -> Self {
+        Self {
+            enrollment,
+            compatibility_policy,
+            base_catalog,
+            package_state,
+        }
+    }
 }
 
 impl CommittedAnchors {
@@ -37,6 +62,11 @@ impl CommittedAnchors {
         &self.enrollment_sha256
     }
 
+    #[doc = "Returns the published compatibility-policy digest."]
+    pub fn compatibility_policy_sha256(&self) -> &str {
+        &self.compatibility_policy_sha256
+    }
+
     #[doc = "Returns the published base-catalog digest."]
     pub fn base_catalog_sha256(&self) -> &str {
         &self.base_catalog_sha256
@@ -51,17 +81,16 @@ impl CommittedAnchors {
         managed_sha256: String,
         identity: AppIdentity,
         base_inodes: DataInodes,
-        enrollment_sha256: String,
-        base_catalog_sha256: String,
-        package_state_sha256: String,
+        digests: PublishedAnchorDigests,
     ) -> Self {
         Self {
             managed_sha256,
             identity,
             base_inodes,
-            enrollment_sha256,
-            base_catalog_sha256,
-            package_state_sha256,
+            enrollment_sha256: digests.enrollment,
+            compatibility_policy_sha256: digests.compatibility_policy,
+            base_catalog_sha256: digests.base_catalog,
+            package_state_sha256: digests.package_state,
         }
     }
 
@@ -69,6 +98,10 @@ impl CommittedAnchors {
         for (label, value) in [
             ("managed", self.managed_sha256.as_str()),
             ("enrollment", self.enrollment_sha256.as_str()),
+            (
+                "compatibility policy",
+                self.compatibility_policy_sha256.as_str(),
+            ),
             ("base catalog", self.base_catalog_sha256.as_str()),
             ("package state", self.package_state_sha256.as_str()),
         ] {

@@ -1,8 +1,9 @@
 use crate::domain::{ManagedPackage, PackageObservation, SlotView, TransactionId};
 use crate::journal::JournalEvent;
 
+use super::assessment::initial_reason;
 use super::backend::RecoveryBackend;
-use super::coordinator::{Reconciler, initial_reason};
+use super::coordinator::Reconciler;
 use super::error::ReconcileError;
 use super::model::{HeldPackage, JournalMetadata, ReconcileOutcome, ReconcileReason};
 

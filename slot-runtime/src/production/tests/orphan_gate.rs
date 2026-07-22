@@ -1,5 +1,5 @@
-mod probe;
-mod runtime;
+pub(super) mod probe;
+pub(super) mod runtime;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -12,8 +12,8 @@ use super::super::stores::ProductionStores;
 use crate::android::{AndroidMaterializer, SystemMaterializerExecutor};
 use crate::catalog::CatalogStore;
 use crate::domain::{
-    GateSnapshot, ManagedPackage, PackageEnabledState, PackageKey, PackageName, SlotId, SlotView,
-    UserId,
+    GateSnapshot, ManagedPackage, PackageEnabledState, PackageKey, PackageName,
+    PackageSupportLevel, SlotId, SlotView, UserId,
 };
 use crate::enrollment::EnrollmentStore;
 use crate::enrollment_attempt::EnrollmentAttemptStore;
@@ -23,6 +23,7 @@ use crate::package_state::{PackageStateReason, PackageStateStore};
 use crate::protocol::ALLOWED_PACKAGE;
 use crate::reconcile::ReconcileOutcome;
 use crate::registry::RegistryStore;
+use crate::service::PackageState;
 
 use self::probe::NativeBaseProbe;
 use self::runtime::OrphanGateRuntime;
@@ -76,6 +77,15 @@ fn proved_base_reconciliation_recovers_a_transient_boot_failure_state() {
     .unwrap();
     stores.enrollment.create(&managed).unwrap();
     stores
+        .compatibility_policy
+        .create(
+            key.package_name(),
+            managed.identity(),
+            PackageSupportLevel::Supported,
+            false,
+        )
+        .unwrap();
+    stores
         .catalog
         .create_base(
             key.clone(),
@@ -126,7 +136,68 @@ fn proved_base_reconciliation_recovers_a_transient_boot_failure_state() {
     );
 }
 
-fn stores(root: &std::path::Path) -> ProductionStores {
+#[test]
+fn orphan_compatibility_policy_is_recovery_required_not_absent() {
+    let root = tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let stores = stores(root.path());
+    let key = PackageKey::new(
+        PackageName::parse(ALLOWED_PACKAGE).unwrap(),
+        UserId::PRIMARY,
+    );
+    stores
+        .compatibility_policy
+        .create(
+            key.package_name(),
+            &probe::identity(),
+            PackageSupportLevel::Supported,
+            false,
+        )
+        .unwrap();
+    let mut package_probe = NativeBaseProbe::new();
+
+    let state = super::super::state::load(&stores, &mut package_probe, &key).unwrap();
+
+    assert!(matches!(state, PackageState::RecoveryRequired));
+}
+
+#[test]
+fn orphan_policy_cannot_be_retired_as_a_pristine_enrollment() {
+    let root = tempdir().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let stores = stores(root.path());
+    let key = PackageKey::new(
+        PackageName::parse(ALLOWED_PACKAGE).unwrap(),
+        UserId::PRIMARY,
+    );
+    stores
+        .compatibility_policy
+        .create(
+            key.package_name(),
+            &probe::identity(),
+            PackageSupportLevel::Supported,
+            false,
+        )
+        .unwrap();
+    let snapshot = GateSnapshot::new(PackageEnabledState::Default, false);
+    let runtime = OrphanGateRuntime::new(snapshot);
+    let materializer = AndroidMaterializer::new(SystemMaterializerExecutor, NativeBaseProbe::new());
+    let mut platform = ProductionPlatform {
+        runtime,
+        materializer,
+        probe: std::cell::RefCell::new(NativeBaseProbe::new()),
+        metadata: SystemMetadataSource::new(),
+        stores,
+    };
+
+    let result = platform.do_reconcile(&key);
+
+    assert!(matches!(result, Err(ServiceError::RecoveryRequired)));
+    assert_eq!(platform.runtime().restored, None);
+    assert!(!platform.runtime().retired);
+}
+
+pub(in crate::production::tests) fn stores(root: &std::path::Path) -> ProductionStores {
     ProductionStores {
         enrollment: EnrollmentStore::new(root.join("enrollment")).unwrap(),
         compatibility_policy: crate::compatibility_policy::CompatibilityPolicyStore::new(

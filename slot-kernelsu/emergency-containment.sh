@@ -8,8 +8,16 @@ case "$0" in
     *) exit 1 ;;
 esac
 PROFILE_FILE=$SCRIPT_DIR/target-profile.sh
-[ -f "$PROFILE_FILE" ] && [ ! -L "$PROFILE_FILE" ] || exit 1
-. "$PROFILE_FILE"
+PROFILE_LOADER=$SCRIPT_DIR/profile-loader.sh
+UCLONE_TARGET_PROFILE=generic
+UCLONE_TARGET_PACKAGE=com.uclone.slots.preview
+UCLONE_TARGET_USER=0
+UCLONE_MODULE=uclone-slices-preview
+UCLONE_RUNTIME_ROOT=/data/adb/uclone-slices-preview
+if [ -f "$PROFILE_LOADER" ] && [ ! -L "$PROFILE_LOADER" ]; then
+    . "$PROFILE_LOADER"
+    uclone_load_profile "$PROFILE_FILE" || :
+fi
 RUNTIME_ROOT=$UCLONE_RUNTIME_ROOT
 PACKAGE=$UCLONE_TARGET_PACKAGE
 USER_ID=$UCLONE_TARGET_USER
@@ -17,6 +25,7 @@ TOYBOX_BIN=/system/bin/toybox
 CMD_BIN=/system/bin/cmd
 AM_BIN=/system/bin/am
 RUNTIME_BIN=$SCRIPT_DIR/bin/ucloned
+JOURNAL_PACKAGES=$SCRIPT_DIR/journal-packages.sh
 
 root_has_artifact() {
     root="$1"
@@ -48,12 +57,15 @@ management_artifact_present() {
         return 0
     fi
     [ -d "$RUNTIME_ROOT" ] || return 1
+    root_has_artifact "$RUNTIME_ROOT/journal/transactions" && return 0
     if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
         for root in \
             "$RUNTIME_ROOT/enrollment/packages" \
+            "$RUNTIME_ROOT/compatibility-policy/packages" \
             "$RUNTIME_ROOT/catalog/packages" \
             "$RUNTIME_ROOT/registry/packages" \
             "$RUNTIME_ROOT/package-state/packages" \
+            "$RUNTIME_ROOT/slot-metadata/packages" \
             "$RUNTIME_ROOT/enrollment-attempts/attempts" \
             "$RUNTIME_ROOT/rescue-journal/packages" \
             "/data/misc_de/$USER_ID/$UCLONE_MODULE/slots"
@@ -68,9 +80,11 @@ management_artifact_present() {
     fi
     for path in \
         "$RUNTIME_ROOT/enrollment/packages/$PACKAGE" \
+        "$RUNTIME_ROOT/compatibility-policy/packages/$PACKAGE" \
         "$RUNTIME_ROOT/catalog/packages/$PACKAGE" \
         "$RUNTIME_ROOT/registry/packages/$PACKAGE" \
         "$RUNTIME_ROOT/package-state/packages/$PACKAGE" \
+        "$RUNTIME_ROOT/slot-metadata/packages/$PACKAGE" \
         "$RUNTIME_ROOT/enrollment-attempts/attempts/$PACKAGE" \
         "$RUNTIME_ROOT/rescue-journal/packages/$PACKAGE" \
         "$RUNTIME_ROOT/state/$PACKAGE.gate" \
@@ -96,9 +110,11 @@ valid_package() {
 discover_packages() {
     for root in \
         "$RUNTIME_ROOT/enrollment/packages" \
+        "$RUNTIME_ROOT/compatibility-policy/packages" \
         "$RUNTIME_ROOT/catalog/packages" \
         "$RUNTIME_ROOT/registry/packages" \
         "$RUNTIME_ROOT/package-state/packages" \
+        "$RUNTIME_ROOT/slot-metadata/packages" \
         "$RUNTIME_ROOT/enrollment-attempts/attempts" \
         "$RUNTIME_ROOT/rescue-journal/packages" \
         "/data/misc_de/$USER_ID/$UCLONE_MODULE/slots"
@@ -117,6 +133,8 @@ discover_packages() {
         candidate=${candidate%%.gate*}
         valid_package "$candidate" && printf '%s\n' "$candidate"
     done
+    safe_binary "$JOURNAL_PACKAGES" || return 1
+    "$JOURNAL_PACKAGES"
 }
 
 package_is_disabled() {
@@ -152,6 +170,8 @@ contain_once() {
 
 contain_discovered() {
     packages="$(discover_packages)"
+    status=$?
+    [ "$status" -eq 0 ] || return 1
     [ -n "$packages" ] || return 1
     result=0
     while IFS= read -r package; do
@@ -165,7 +185,7 @@ EOF
 
 contain_with_runtime() {
     safe_binary "$RUNTIME_BIN" || return 1
-    result="$("$TOYBOX_BIN" timeout -s 9 30 "$TOYBOX_BIN" nsenter -t 1 -m -- \
+    result="$("$TOYBOX_BIN" timeout -s 9 8 "$TOYBOX_BIN" nsenter -t 1 -m -- \
         "$RUNTIME_BIN" --startup-gate 2>/dev/null)" || return 1
     [ "$result" = held ]
 }
@@ -176,7 +196,7 @@ attempt_once() {
         return 0
     fi
     if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
-        contain_with_runtime || contain_discovered || {
+        contain_discovered || contain_with_runtime || {
             printf '%s\n' recovery-required
             return 1
         }

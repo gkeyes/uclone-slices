@@ -3,10 +3,12 @@ use crate::domain::{GateSnapshot, ManagedPackage, PackageKey};
 use crate::enrollment_attempt::{CommitProof, EnrollmentAttemptPhase, RetirementProof};
 use crate::materializer::MaterializationBackend;
 use crate::reconcile::RecoveryBackend;
-use crate::service::{CapabilitySnapshot, EnrollmentPublicationError, PackageState, ServiceError};
+use crate::service::{EnrollmentPublicationError, ServiceError};
 
 use super::composition::ProductionPlatform;
-use super::enrollment::{candidate_managed, capture_base, initial_managed, require_key};
+use super::enrollment::{
+    candidate_managed, capture_base, initial_managed, inspect_candidate, require_key,
+};
 use super::metadata::MetadataSource;
 
 impl<B, M, Q, T> ProductionPlatform<B, M, Q, T>
@@ -16,36 +18,6 @@ where
     Q: PackageProbe,
     T: MetadataSource,
 {
-    pub(super) fn do_probe(&self) -> Result<CapabilitySnapshot, ServiceError> {
-        let mut probe = self
-            .probe
-            .try_borrow_mut()
-            .map_err(|_| ServiceError::Busy)?;
-        let unlocked = probe
-            .user0_unlocked()
-            .map_err(|_| ServiceError::UnsupportedDevice)?;
-        let global = probe
-            .mount_namespace_proof()
-            .map_err(|_| ServiceError::UnsupportedDevice)?
-            .is_global();
-        let paired = global;
-        Ok(CapabilitySnapshot::new(
-            unlocked && global && paired,
-            unlocked,
-            paired,
-        ))
-    }
-
-    pub(super) fn do_capture_gate(
-        &mut self,
-        key: &PackageKey,
-    ) -> Result<GateSnapshot, ServiceError> {
-        let package = self.ready_managed(key)?;
-        self.runtime
-            .capture_gate_snapshot(&package)
-            .map_err(|_| ServiceError::Internal)
-    }
-
     pub(super) fn do_begin_enrollment(
         &mut self,
         key: &PackageKey,
@@ -104,17 +76,16 @@ where
                 .map_err(|_| EnrollmentPublicationError::Unpublished(ServiceError::Busy))?;
             let package = initial_managed(&mut *probe, key)
                 .map_err(EnrollmentPublicationError::Unpublished)?;
-            let candidate = probe
-                .inspect_package(key.package_name(), key.user_id())
-                .map_err(|_| EnrollmentPublicationError::Unpublished(ServiceError::Internal))?;
-            if candidate.identity() != package.identity()
-                || candidate.package_manager_inodes() != package.base_inodes()
-            {
+            let (candidate, compatibility) = inspect_candidate(&mut *probe, key)
+                .map_err(EnrollmentPublicationError::Unpublished)?;
+            let same_identity = candidate.identity() == package.identity();
+            let same_inodes = candidate.base_inodes() == package.base_inodes();
+            if !same_identity || !same_inodes {
                 return Err(EnrollmentPublicationError::Unpublished(
                     ServiceError::RecoveryRequired,
                 ));
             }
-            (package, candidate.compatibility().support_level())
+            (package, compatibility.support_level())
         };
         if support_level == crate::domain::PackageSupportLevel::DirectBootConditional
             && !accept_direct_boot_conditional
@@ -125,6 +96,22 @@ where
         }
         let base = capture_base(&mut self.materializer, &package)
             .map_err(EnrollmentPublicationError::Unpublished)?;
+        {
+            let mut probe = self
+                .probe
+                .try_borrow_mut()
+                .map_err(|_| EnrollmentPublicationError::Unpublished(ServiceError::Busy))?;
+            let (final_package, final_compatibility) = inspect_candidate(&mut *probe, key)
+                .map_err(EnrollmentPublicationError::Unpublished)?;
+            if final_package.identity() != package.identity()
+                || final_package.base_inodes() != package.base_inodes()
+                || final_compatibility.support_level() != support_level
+            {
+                return Err(EnrollmentPublicationError::Unpublished(
+                    ServiceError::RecoveryRequired,
+                ));
+            }
+        }
         let published: Result<ManagedPackage, ServiceError> = (|| {
             self.stores
                 .enrollment
@@ -157,6 +144,7 @@ where
             let proof = CommitProof::new(
                 package.clone(),
                 &digests.enrollment,
+                &digests.compatibility_policy,
                 &digests.base_catalog,
                 &digests.package_state,
             )
@@ -232,18 +220,5 @@ where
             .try_borrow_mut()
             .map_err(|_| ServiceError::Busy)?;
         candidate_managed(&mut *probe, key)
-    }
-
-    fn ready_managed(&self, key: &PackageKey) -> Result<ManagedPackage, ServiceError> {
-        let mut probe = self
-            .probe
-            .try_borrow_mut()
-            .map_err(|_| ServiceError::Busy)?;
-        match super::state::load(&self.stores, &mut *probe, key)? {
-            PackageState::Ready(snapshot) => Ok(snapshot.managed().clone()),
-            PackageState::Absent => Err(ServiceError::NotFound),
-            PackageState::RecoveryRequired => Err(ServiceError::RecoveryRequired),
-            PackageState::Quarantined => Err(ServiceError::Quarantined),
-        }
     }
 }

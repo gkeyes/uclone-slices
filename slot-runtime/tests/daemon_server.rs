@@ -129,7 +129,7 @@ fn malformed_request_with_safe_id_gets_invalid_request_response() {
     let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
     stream
         .write_all(
-            br#"{"schema_version":1,"request_id":"safe-id","command":"nope"}
+            br#"{"schema_version":2,"request_id":"safe-id","command":"nope"}
 "#,
         )
         .unwrap();
@@ -138,6 +138,28 @@ fn malformed_request_with_safe_id_gets_invalid_request_response() {
     let response = decode_response(&response_frame).unwrap();
     assert_eq!(response.request_id().as_str(), "safe-id");
     assert_eq!(response.error_code(), Some(ErrorCode::InvalidRequest));
+    join.join().unwrap().unwrap();
+}
+
+#[test]
+fn build_mismatch_is_rejected_before_dispatch() {
+    let (_temp, path) = socket_path();
+    let handler = ProbeHandler::default();
+    let calls = Arc::clone(&handler.calls);
+    let mut server = DaemonServer::bind_at(&path, handler).unwrap();
+    let join = thread::spawn(move || server.run_once());
+    let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
+    stream
+        .write_all(
+            br#"{"schema_version":2,"request_id":"pair-id","command":"status_package","build_id":"other","package":"com.example.app"}
+"#,
+        )
+        .unwrap();
+    let mut response_frame = Vec::new();
+    stream.read_to_end(&mut response_frame).unwrap();
+    let response = decode_response(&response_frame).unwrap();
+    assert_eq!(response.error_code(), Some(ErrorCode::RuntimePairMismatch));
+    assert_eq!(*calls.lock().unwrap(), 0);
     join.join().unwrap().unwrap();
 }
 
@@ -162,7 +184,7 @@ fn oversized_frame_with_safe_id_gets_invalid_request_response() {
     let join = thread::spawn(move || server.run_once());
     let mut stream = std::os::unix::net::UnixStream::connect(&path).unwrap();
     let mut frame =
-        br#"{"schema_version":1,"request_id":"big-id","command":"probe","padding":""#.to_vec();
+        br#"{"schema_version":2,"request_id":"big-id","command":"probe","padding":""#.to_vec();
     frame.extend(std::iter::repeat_n(b'x', 16 * 1024));
     frame.extend_from_slice(b"\"}\n");
     stream.write_all(&frame).unwrap();

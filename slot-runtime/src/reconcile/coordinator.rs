@@ -3,12 +3,13 @@ use crate::enrollment::EnrollmentStore;
 use crate::journal::{JournalEvent, JournalStep, JournalStore, Transaction};
 use crate::registry::RegistryStore;
 
+use super::assessment::{early_result, initial_reason, package_result};
 use super::backend::RecoveryBackend;
 use super::error::ReconcileError;
 use super::gate::orphan_result;
 use super::model::{
-    HeldPackage, JournalMetadata, PackageReconcileResult, ReconcileOutcome, ReconcileReason,
-    ReconcileReport, RegistryMetadata,
+    HeldPackage, JournalMetadata, ReconcileOutcome, ReconcileReport, ReconcileScope,
+    RegistryMetadata,
 };
 
 #[doc = "Owns the metadata stores and platform backend for two-phase reconciliation."]
@@ -20,6 +21,7 @@ pub struct Reconciler<B> {
     pub(super) registry: RegistryStore,
     pub(super) held: Vec<HeldPackage>,
     pub(super) orphaned: Vec<PackageName>,
+    scope: ReconcileScope,
     boot_started: bool,
 }
 
@@ -38,7 +40,22 @@ impl<B: RecoveryBackend> Reconciler<B> {
             registry,
             held: Vec::new(),
             orphaned: Vec::new(),
+            scope: ReconcileScope::All,
             boot_started: false,
+        }
+    }
+
+    #[doc = "Creates a reconciler whose mutations are restricted to one package."]
+    pub fn for_package(
+        backend: B,
+        enrollment: EnrollmentStore,
+        journal: JournalStore,
+        registry: RegistryStore,
+        package: PackageName,
+    ) -> Self {
+        Self {
+            scope: ReconcileScope::Package(package),
+            ..Self::new(backend, enrollment, journal, registry)
         }
     }
 
@@ -58,8 +75,14 @@ impl<B: RecoveryBackend> Reconciler<B> {
         );
         package_names.sort();
         package_names.dedup();
+        if let ReconcileScope::Package(package) = &self.scope {
+            package_names.retain(|candidate| candidate == package);
+        }
         let snapshots = self.emergency_gate_discovered(&package_names)?;
-        let packages = self.enrollment.list()?;
+        let mut packages = self.enrollment.list()?;
+        if let ReconcileScope::Package(package) = &self.scope {
+            packages.retain(|candidate| candidate.package_name() == package);
+        }
         let transactions = self.journal.list().ok();
         self.orphaned = snapshots
             .keys()
@@ -198,39 +221,4 @@ fn journal_metadata(
         ),
         _ => (JournalMetadata::Ambiguous, None),
     }
-}
-
-fn early_result(held: &HeldPackage) -> PackageReconcileResult {
-    let outcome =
-        initial_reason(held).map_or(ReconcileOutcome::Held, ReconcileOutcome::RecoveryRequired);
-    package_result(held, outcome)
-}
-
-pub(super) const fn initial_reason(held: &HeldPackage) -> Option<ReconcileReason> {
-    if !held.gate_proved {
-        return Some(ReconcileReason::GateHoldFailed);
-    }
-    match held.journal {
-        JournalMetadata::Invalid => return Some(ReconcileReason::JournalMetadata),
-        JournalMetadata::Ambiguous => return Some(ReconcileReason::AmbiguousTransactions),
-        JournalMetadata::Clean | JournalMetadata::Transaction(_) => {}
-    }
-    if matches!(held.registry, RegistryMetadata::Invalid) {
-        return Some(ReconcileReason::RegistryMetadata);
-    }
-    if held.snapshot.is_none() {
-        return Some(ReconcileReason::MissingGateSnapshot);
-    }
-    None
-}
-
-pub(super) fn package_result(
-    held: &HeldPackage,
-    outcome: ReconcileOutcome,
-) -> PackageReconcileResult {
-    PackageReconcileResult::new(
-        held.managed.package_name().clone(),
-        held.transaction_id().cloned(),
-        outcome,
-    )
 }

@@ -1,6 +1,6 @@
 use std::io::{BufRead, Write};
 
-use crate::protocol::{MAX_FRAME_SIZE, ProtocolError, decode_request};
+use crate::protocol::{Command, MAX_FRAME_SIZE, ProtocolError, decode_request};
 
 use super::{CliError, UnixTransport, execute_request, fail, timeout};
 
@@ -21,7 +21,13 @@ where
         );
     }
     let request = decode_request(&frame).map_err(CliError::Protocol)?;
-    let mut transport = UnixTransport::connect().map_err(CliError::Protocol)?;
+    let mut transport = match UnixTransport::connect() {
+        Ok(transport) => transport,
+        Err(_) if matches!(request.command(), Command::RescueToBase { .. }) => {
+            return super::direct::run(&request, output, diagnostics);
+        }
+        Err(error) => return fail(CliError::Protocol(error), diagnostics),
+    };
     transport
         .set_timeout(timeout::for_request(request.command()))
         .map_err(CliError::Protocol)?;

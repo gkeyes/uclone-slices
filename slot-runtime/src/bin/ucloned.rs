@@ -1,10 +1,11 @@
 #![doc = "Fixed-root `UClone` Slots Preview daemon entry point."]
 
-use std::collections::BTreeMap;
-use std::io::{self, Write};
-use std::process::ExitCode;
-
 use clap::Parser;
+use std::collections::BTreeMap;
+use std::fs;
+use std::io::{self, Write};
+use std::path::Path;
+use std::process::ExitCode;
 use uclone_slot_runtime::android::{
     AndroidBackend, AndroidMaterializer, FileGateLeaseStore, GateLeaseStore, SystemCommandRunner,
     SystemMaterializerExecutor, SystemPackageProbe,
@@ -13,6 +14,7 @@ use uclone_slot_runtime::daemon::{DaemonError, DaemonServer, RuntimeLock, Runtim
 use uclone_slot_runtime::domain::{PackageKey, PackageName, UserId};
 use uclone_slot_runtime::enrollment::EnrollmentStore;
 use uclone_slot_runtime::enrollment_attempt::EnrollmentAttemptStore;
+use uclone_slot_runtime::journal::JournalStore;
 use uclone_slot_runtime::layout::RuntimeLayout;
 use uclone_slot_runtime::production::{ProductionPlatform, SystemMetadataSource};
 use uclone_slot_runtime::rescue::{OfflineRescuePlatform, RescueStartup};
@@ -78,7 +80,7 @@ fn run(startup_gate: bool) -> Result<(), UclonedError> {
     }
     if startup_gate {
         let mut stdout = io::stdout().lock();
-        writeln!(stdout, "{}", if held > 0 { "held" } else { "not-managed" })
+        writeln!(stdout, "{}", startup_gate_value(held, corrupt_discovery)?)
             .map_err(|error| UclonedError::Reconcile(error.to_string()))?;
         return Ok(());
     }
@@ -99,6 +101,15 @@ fn run(startup_gate: bool) -> Result<(), UclonedError> {
         }
     }
     run_ordinary(rescue, &keys, lock)
+}
+
+fn startup_gate_value(held: usize, corrupt_discovery: bool) -> Result<&'static str, UclonedError> {
+    if corrupt_discovery {
+        return Err(UclonedError::Reconcile(
+            "management artifacts are corrupt; boot containment cannot be proved".to_owned(),
+        ));
+    }
+    Ok(if held > 0 { "held" } else { "not-managed" })
 }
 
 fn run_ordinary(
@@ -124,49 +135,103 @@ fn run_ordinary(
 }
 
 fn startup_keys() -> Result<(Vec<PackageKey>, bool), UclonedError> {
-    let enrollment = EnrollmentStore::new(RuntimeLayout::enrollment_root())
-        .map_err(|error| UclonedError::Reconcile(error.to_string()))?;
-    let scan = enrollment
-        .package_names()
-        .map_err(|error| UclonedError::Reconcile(error.to_string()))?;
     let mut packages = BTreeMap::<String, PackageName>::new();
-    for package in scan.package_names() {
-        packages.insert(package.as_str().to_owned(), package.clone());
+    let mut corrupt_discovery = false;
+    for root in management_package_roots() {
+        corrupt_discovery |= scan_package_root(&root, &mut packages);
     }
-    let attempts = EnrollmentAttemptStore::fixed()
-        .map_err(|error| UclonedError::Reconcile(error.to_string()))?;
-    let attempts = attempts
-        .list()
-        .map_err(|error| UclonedError::Reconcile(error.to_string()))?;
-    for attempt in attempts {
-        let package = attempt.package_key().package_name().clone();
-        packages.insert(package.as_str().to_owned(), package);
+    match EnrollmentStore::new(RuntimeLayout::enrollment_root())
+        .and_then(|store| store.package_names())
+    {
+        Ok(scan) => {
+            corrupt_discovery |= scan.corrupt_artifact();
+            for package in scan.package_names() {
+                insert_package(&mut packages, package.clone());
+            }
+        }
+        Err(_) => corrupt_discovery = true,
+    }
+    match EnrollmentAttemptStore::fixed().and_then(|store| store.list()) {
+        Ok(attempts) => {
+            for attempt in attempts {
+                insert_package(&mut packages, attempt.package_key().package_name().clone());
+            }
+        }
+        Err(_) => corrupt_discovery = true,
+    }
+    match JournalStore::new(RuntimeLayout::journal_root()).and_then(|store| store.list()) {
+        Ok(transactions) => {
+            for transaction in transactions {
+                insert_package(&mut packages, transaction.spec().package_name().clone());
+            }
+        }
+        Err(_) => corrupt_discovery = true,
     }
     let mut leases = FileGateLeaseStore;
-    for package in leases
-        .package_names()
-        .map_err(|error| UclonedError::Reconcile(error.to_string()))?
-    {
-        packages.insert(package.as_str().to_owned(), package);
+    match leases.package_names() {
+        Ok(leased) => {
+            for package in leased {
+                insert_package(&mut packages, package);
+            }
+        }
+        Err(_) => corrupt_discovery = true,
     }
     Ok((
         packages
             .into_values()
             .map(|package| PackageKey::new(package, UserId::PRIMARY))
             .collect(),
-        scan.corrupt_artifact(),
+        corrupt_discovery,
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use clap::Parser;
-
-    use super::Cli;
-
-    #[test]
-    fn accepts_only_the_fixed_startup_gate_flag() {
-        assert!(Cli::try_parse_from(["ucloned", "--startup-gate"]).is_ok());
-        assert!(Cli::try_parse_from(["ucloned", "--package", "other"]).is_err());
-    }
+fn management_package_roots() -> Vec<std::path::PathBuf> {
+    vec![
+        RuntimeLayout::enrollment_root().join("packages"),
+        RuntimeLayout::compatibility_policy_root().join("packages"),
+        RuntimeLayout::catalog_root().join("packages"),
+        RuntimeLayout::registry_root().join("packages"),
+        RuntimeLayout::package_state_root().join("packages"),
+        RuntimeLayout::slot_metadata_root().join("packages"),
+        RuntimeLayout::enrollment_attempt_root().join("attempts"),
+        RuntimeLayout::rescue_journal_root().join("packages"),
+        Path::new(uclone_slot_runtime::target::DE_SLOT_ROOT).to_path_buf(),
+    ]
 }
+
+fn scan_package_root(root: &Path, packages: &mut BTreeMap<String, PackageName>) -> bool {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(_) => return true,
+    };
+    let mut corrupt = false;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            corrupt = true;
+            continue;
+        };
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            corrupt = true;
+            continue;
+        };
+        match PackageName::parse(&name) {
+            Ok(package) => {
+                if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    corrupt = true;
+                }
+                insert_package(packages, package);
+            }
+            Err(_) => corrupt = true,
+        }
+    }
+    corrupt
+}
+
+fn insert_package(packages: &mut BTreeMap<String, PackageName>, package: PackageName) {
+    packages.insert(package.as_str().to_owned(), package);
+}
+
+#[cfg(test)]
+#[path = "ucloned/tests.rs"]
+mod tests;

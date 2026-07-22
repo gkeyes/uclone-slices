@@ -26,7 +26,7 @@ fn ambiguous_and_quarantined_state_return_stable_codes_without_mutation() {
 
         // Then
         assert_eq!(response.error_code(), Some(expected));
-        assert_eq!(service.platform().calls(), vec![Call::State]);
+        assert_eq!(service.platform().calls(), vec![Call::Probe, Call::State]);
     }
 }
 
@@ -103,6 +103,7 @@ fn enrollment_lease_retirement_failure_recontains_before_recovery() {
     assert_eq!(
         service.platform().calls(),
         vec![
+            Call::Probe,
             Call::State,
             Call::Inspect,
             Call::BeginEnrollment,
@@ -138,6 +139,7 @@ fn materialization_failure_never_runs_switch_or_restores_gate() {
     assert_eq!(
         service.platform().calls(),
         vec![
+            Call::Probe,
             Call::State,
             Call::CaptureGate,
             Call::HoldGate,

@@ -15,8 +15,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.uclone.slots.preview.model.PackageRuntimeStatus
+import com.uclone.slots.preview.model.PackageLifecycle
 import com.uclone.slots.preview.model.SlotSpace
-
 @Composable
 fun DetailScreen(
     packageName: String,
@@ -24,6 +24,7 @@ fun DetailScreen(
     status: PackageRuntimeStatus?,
     slots: List<SlotSpace>,
     enabled: Boolean,
+    recoveryEnabled: Boolean,
     onCreate: (String, Boolean) -> Unit,
     onSwitch: (String) -> Unit,
     onRename: (String, String) -> Unit,
@@ -32,19 +33,29 @@ fun DetailScreen(
     onRescue: () -> Unit,
 ) {
     var createDialog by remember { mutableStateOf(false) }
+    var pendingDelete by remember { mutableStateOf<SlotSpace?>(null) }
+    val baseActive = status?.activeSlot == "base"
     LazyColumn(
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { AppHeader(packageName, label, status) }
         if (status == null || status.requiresRecovery) {
-            item { RecoveryCard(status == null, onReconcile, onRescue) }
+            item {
+                RecoveryCard(
+                    runtimeOffline = status == null,
+                    containmentProved = status?.enabled == false,
+                    enabled = recoveryEnabled,
+                    onReconcile = onReconcile,
+                    onRescue = onRescue,
+                )
+            }
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("数据空间", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.weight(1f))
-                FilledTonalButton(onClick = { createDialog = true }, enabled = enabled) {
+                FilledTonalButton(onClick = { createDialog = true }, enabled = enabled && baseActive) {
                     Icon(Icons.Outlined.Add, null)
                     Spacer(Modifier.width(6.dp))
                     Text("创建空间")
@@ -52,7 +63,15 @@ fun DetailScreen(
             }
         }
         items(slots, key = { it.id }) { slot ->
-            SlotCard(slot, enabled, onSwitch, onRename, onDelete)
+            SlotCard(
+                slot = slot,
+                enabled = enabled,
+                baseActive = baseActive,
+                currentSlot = status?.activeSlot,
+                onSwitch = onSwitch,
+                onRename = onRename,
+                onDelete = { pendingDelete = slot },
+            )
         }
         item {
             Text(
@@ -69,8 +88,25 @@ fun DetailScreen(
             onCreate = { name, blank -> createDialog = false; onCreate(name, blank) },
         )
     }
+    pendingDelete?.let { slot ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除 ${slot.displayName}？") },
+            text = { Text("此操作会永久删除该空间的 CE + DE 文件，且不能撤销。") },
+            confirmButton = {
+                Button(
+                    onClick = { pendingDelete = null; onDelete(slot.id) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                    ),
+                ) { Text("永久删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
+    }
 }
-
 @Composable
 private fun AppHeader(packageName: String, label: String, status: PackageRuntimeStatus?) {
     SectionCard {
@@ -86,7 +122,7 @@ private fun AppHeader(packageName: String, label: String, status: PackageRuntime
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            HealthDot(status?.lifecycle == "normal")
+            HealthDot(status?.lifecycle == PackageLifecycle.Normal)
             Spacer(Modifier.width(8.dp))
             Text(
                 when {
@@ -100,11 +136,12 @@ private fun AppHeader(packageName: String, label: String, status: PackageRuntime
         }
     }
 }
-
 @Composable
 private fun SlotCard(
     slot: SlotSpace,
     enabled: Boolean,
+    baseActive: Boolean,
+    currentSlot: String?,
     onSwitch: (String) -> Unit,
     onRename: (String, String) -> Unit,
     onDelete: (String) -> Unit,
@@ -131,7 +168,7 @@ private fun SlotCard(
                     Icon(Icons.Outlined.Edit, "重命名")
                 }
                 if (!slot.active) {
-                    IconButton(onClick = { onDelete(slot.id) }, enabled = enabled) {
+                    IconButton(onClick = { onDelete(slot.id) }, enabled = enabled && baseActive) {
                         Icon(Icons.Outlined.DeleteOutline, "删除")
                     }
                 }
@@ -140,7 +177,8 @@ private fun SlotCard(
         Spacer(Modifier.height(14.dp))
         Button(
             onClick = { onSwitch(slot.id) },
-            enabled = enabled,
+            enabled = enabled &&
+                (slot.active || slot.isBase || currentSlot == "base"),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (slot.active) "打开此空间" else "切换并打开")
@@ -155,64 +193,31 @@ private fun SlotCard(
         )
     }
 }
-
 @Composable
-private fun RecoveryCard(runtimeOffline: Boolean, onReconcile: () -> Unit, onRescue: () -> Unit) {
+private fun RecoveryCard(
+    runtimeOffline: Boolean,
+    containmentProved: Boolean,
+    enabled: Boolean,
+    onReconcile: () -> Unit,
+    onRescue: () -> Unit,
+) {
     Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(20.dp)) {
         Column(Modifier.padding(18.dp)) {
-            Text("App 已保持禁用", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(
+                if (containmentProved) "App 已保持禁用" else "App 状态尚未验证",
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
             Spacer(Modifier.height(6.dp))
             Text(
-                if (runtimeOffline) "Runtime 当前不可用。独立 Base 救援仍可执行。"
+                if (runtimeOffline) "Runtime 当前不可用，无法确认门禁状态。独立 Base 救援仍可执行。"
                 else "Runtime 无法证明当前数据视图。重新检查失败时，请安全退回 Base。",
             )
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = onReconcile) { Text("重新检查") }
-                Button(onClick = onRescue) { Text("安全退回 Base") }
+                OutlinedButton(onClick = onReconcile, enabled = enabled) { Text("重新检查") }
+                Button(onClick = onRescue, enabled = enabled) { Text("安全退回 Base") }
             }
         }
     }
-}
-
-@Composable
-private fun CreateSpaceDialog(onDismiss: () -> Unit, onCreate: (String, Boolean) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var blank by remember { mutableStateOf(true) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("创建数据空间") },
-        text = {
-            Column {
-                OutlinedTextField(name, { name = it }, label = { Text("显示名称") }, singleLine = true)
-                Spacer(Modifier.height(14.dp))
-                ChoiceRow("空白空间", "首次打开像新安装", blank) { blank = true }
-                ChoiceRow("复制 Base", "只在创建时复制一次", !blank) { blank = false }
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onCreate(name, blank) }, enabled = name.trim().isNotEmpty()) { Text("创建") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
-}
-
-@Composable
-private fun ChoiceRow(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        RadioButton(selected, onClick)
-        Column { Text(title, fontWeight = FontWeight.Medium); Text(subtitle, style = MaterialTheme.typography.bodySmall) }
-    }
-}
-
-@Composable
-private fun NameDialog(title: String, initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
-    var name by remember { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { OutlinedTextField(name, { name = it }, singleLine = true) },
-        confirmButton = { Button(onClick = { onConfirm(name.trim()) }, enabled = name.trim().isNotEmpty()) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
 }

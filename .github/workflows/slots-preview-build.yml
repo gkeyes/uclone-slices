@@ -1,36 +1,55 @@
-name: Build Slots Preview Bundle
+name: Validate and Release Slots Preview
 
 on:
+  pull_request:
   push:
     branches: ["main"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  EXPECTED_RELEASE_CERT_SHA256: 3A98013499C588855AC936D884D9E55497F72827C91CA01E50CF9CA4FC290648
 
 concurrency:
   group: slots-preview-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 55
-
+  validate-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Derive paired build identity
+        run: |
+          echo "PREVIEW_VERSION_CODE=$((300000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
+          echo "PREVIEW_VERSION_NAME=0.3.0-preview.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "PREVIEW_BUILD_ID=${GITHUB_SHA}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Verify checked-in release certificate identity
+        run: |
+          openssl x509 -in signing/uclone-slices-preview-cert.pem -outform DER -out "$RUNNER_TEMP/release-cert.der"
+          PEM_CERT="$(sha256sum "$RUNNER_TEMP/release-cert.der" | awk '{print toupper($1)}')"
+          PIN_CERT="$(tr -d '[:space:]' < signing/UCLONE_SLICES_PREVIEW_CERT_SHA256)"
+          test "$PEM_CERT" = "$PIN_CERT"
+          test "$PIN_CERT" = "$EXPECTED_RELEASE_CERT_SHA256"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
 
-      - name: Install Android platform
+      - name: Install pinned Android toolchain
         run: |
           sdkmanager --install \
             "platforms;android-36" \
@@ -39,7 +58,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
 
       - name: Set up Gradle 8.13
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
         with:
           gradle-version: "8.13"
 
@@ -51,40 +70,13 @@ jobs:
           --component clippy
           --target aarch64-linux-android
 
-      - name: Require fixed release signing
-        env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: |
-          test -n "$RELEASE_KEYSTORE_BASE64"
-          test -n "$RELEASE_STORE_PASSWORD"
-          test -n "$RELEASE_KEY_ALIAS"
-          test -n "$RELEASE_KEY_PASSWORD"
-
-      - name: Decode release keystore
-        env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-        run: |
-          install -d -m 0700 "$RUNNER_TEMP/uclone-signing"
-          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/uclone-signing/release.p12"
-          chmod 0600 "$RUNNER_TEMP/uclone-signing/release.p12"
-          echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/uclone-signing/release.p12" >> "$GITHUB_ENV"
-          echo "RELEASE_STORE_TYPE=pkcs12" >> "$GITHUB_ENV"
-
-      - name: Calculate monotonic Preview version
-        run: |
-          echo "PREVIEW_VERSION_CODE=$((200000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-          echo "PREVIEW_VERSION_NAME=0.2.0-preview.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
-
-      - name: Test and lint Slots manager
+      - name: Validate manager APK
         run: >-
           gradle --no-daemon
           :slot-manager-app:testDebugUnitTest
           :slot-manager-app:lintRelease
 
-      - name: Test generic Runtime safety core
+      - name: Validate Runtime and boot safety
         run: |
           install -d -m 0700 "$RUNNER_TEMP/uclone-rust-tests"
           export TMPDIR="$RUNNER_TEMP/uclone-rust-tests"
@@ -92,13 +84,16 @@ jobs:
           cargo +1.95.0 test --manifest-path slot-runtime/Cargo.toml --locked --all-targets --all-features -- --skip fake_ce_de_switch_stress_keeps_one_mount_pair_and_valid_chain --test-threads=1
           cargo +1.95.0 clippy --manifest-path slot-runtime/Cargo.toml --locked --all-targets --all-features -- -D warnings
           cargo +1.95.0 doc --manifest-path slot-runtime/Cargo.toml --locked --no-deps --all-features
-          tools/test-target-profiles.sh
+          tools/test-target-profiles.sh --adversarial
+          tools/test-kernelsu-profile-loader.sh
           tools/test-generic-emergency-once.sh
           tools/test-generic-rescue.sh
+          tools/test-kernelsu-boot-flow.sh --profile generic
 
-      - name: Build generic Android Runtime
+      - name: Build paired generic Runtime
         env:
           UCLONE_TARGET_PROFILE: generic
+          UCLONE_PREVIEW_BUILD_ID: ${{ env.PREVIEW_BUILD_ID }}
         run: |
           PROFILE_ROOT="$GITHUB_WORKSPACE/slot-runtime/target-profiles/generic"
           mkdir -p "$PROFILE_ROOT/profile"
@@ -112,7 +107,7 @@ jobs:
             --target aarch64-linux-android \
             --bins
 
-      - name: Build generic PackageManager Bridge
+      - name: Build PackageManager bridge
         run: >-
           gradle --no-daemon -p slot-bridge
           testReleaseUnitTest
@@ -120,94 +115,231 @@ jobs:
           appProcessArtifact
           -PtargetProfile=generic
 
-      - name: Build generic filesystem probe
+      - name: Build filesystem probe
         run: >-
           make -C slot-fsprobe
           TARGET_PROFILE=generic
           ANDROID_NDK_HOME="$ANDROID_NDK_HOME"
           test android-check
 
-      - name: Package and test generic KernelSU Runtime
+      - name: Package paired KernelSU Runtime
         run: |
           PACKAGE_ROOT="$RUNNER_TEMP/kernelsu-package"
           tools/package-kernelsu-preview.sh --profile generic --output "$PACKAGE_ROOT"
-          tools/test-kernelsu-boot-flow.sh --profile generic
           test -f "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip"
-          unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" target-profile.sh | \
-            grep -F "UCLONE_TARGET_PROFILE='generic'"
-          unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" module.prop | \
-            grep -F 'version=0.2.0-preview.3'
-          unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" bin/slotctl | \
-            strings | grep -F 'rpc'
-          echo "KERNELSU_PACKAGE_ROOT=$PACKAGE_ROOT" >> "$GITHUB_ENV"
+          unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" module.prop | grep -F -x "version=$PREVIEW_VERSION_NAME"
+          PACKAGE_ZIP="$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" python3 - <<'PY'
+          import os, zipfile
 
-      - name: Assemble fixed-signed release APK
-        env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          build = os.environ["PREVIEW_BUILD_ID"]
+          build_bytes = build.encode()
+          expected = (
+              "Generic fail-closed KernelSU runtime for UClone Slots Preview; "
+              f"RPC v2 paired build {build}; no overlay or system partition changes"
+          )
+          with zipfile.ZipFile(os.environ["PACKAGE_ZIP"]) as archive:
+              props = dict(
+                  line.split("=", 1)
+                  for line in archive.read("module.prop").decode().splitlines()
+                  if "=" in line
+              )
+              assert props.get("description") == expected, props
+              for member in ("bin/ucloned", "bin/slotctl"):
+                  assert build_bytes in archive.read(member), f"missing paired build id in {member}"
+          PY
+          install -d unsigned-dist
+          install -m 0644 "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" unsigned-dist/uclone-slices-preview-kernelsu.zip
+          install -m 0644 "$PACKAGE_ROOT/manifest.txt" unsigned-dist/KERNELSU-MANIFEST.txt
+
+      - name: Assemble unsigned paired APK
         run: >-
           gradle --no-daemon
           :slot-manager-app:assembleRelease
           -PpreviewVersionCode="$PREVIEW_VERSION_CODE"
           -PpreviewVersionName="$PREVIEW_VERSION_NAME"
+          -PpreviewBuildId="$PREVIEW_BUILD_ID"
 
-      - name: Verify package, signature, and certificate
+      - name: Prepare unsigned handoff
         run: |
-          APK="slot-manager-app/build/outputs/apk/release/slot-manager-app-release.apk"
-          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
-          AAPT="$ANDROID_HOME/build-tools/36.0.0/aapt"
-          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee "$RUNNER_TEMP/apksigner.txt"
-          "$AAPT" dump badging "$APK" | tee "$RUNNER_TEMP/badging.txt"
-          grep -q "package: name='com.uclone.slots.preview'" "$RUNNER_TEMP/badging.txt"
-          ACTUAL_CERT="$(awk -F ': ' '/certificate SHA-256 digest/ {print toupper($2); exit}' "$RUNNER_TEMP/apksigner.txt")"
-          EXPECTED_CERT="$(tr -d '[:space:]' < signing/UCLONE_SLICES_PREVIEW_CERT_SHA256)"
-          test -n "$ACTUAL_CERT"
-          test "$ACTUAL_CERT" = "$EXPECTED_CERT"
+          APK="slot-manager-app/build/outputs/apk/release/slot-manager-app-release-unsigned.apk"
+          test -f "$APK"
+          install -m 0644 "$APK" unsigned-dist/uclone-slots-preview-unsigned.apk
+          cat > unsigned-dist/PAIRING-MANIFEST.json <<EOF
+          {"schema_version":1,"protocol_version":2,"commit":"$GITHUB_SHA","build_id":"$PREVIEW_BUILD_ID","version_name":"$PREVIEW_VERSION_NAME","version_code":$PREVIEW_VERSION_CODE}
+          EOF
+          sha256sum unsigned-dist/* > unsigned-dist/UNSIGNED-SHA256SUMS
 
-      - name: Prepare downloadable artifact
-        run: |
-          install -d dist
-          install -m 0644 \
-            slot-manager-app/build/outputs/apk/release/slot-manager-app-release.apk \
-            dist/uclone-slots-preview.apk
-          install -m 0644 \
-            "$KERNELSU_PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" \
-            dist/uclone-slices-preview-kernelsu.zip
-          install -m 0644 \
-            "$KERNELSU_PACKAGE_ROOT/manifest.txt" \
-            dist/KERNELSU-MANIFEST.txt
-          (
-            cd dist
-            sha256sum \
-              uclone-slots-preview.apk \
-              uclone-slices-preview-kernelsu.zip > SHA256SUMS
-          )
-          cp "$RUNNER_TEMP/apksigner.txt" dist/APK-SIGNATURE.txt
-          cp "$RUNNER_TEMP/badging.txt" dist/APK-BADGING.txt
-
-      - name: Upload Actions artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload validated unsigned bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: uclone-slots-preview-bundle-${{ github.run_number }}
-          path: dist/
+          name: validated-unsigned-${{ github.sha }}-${{ github.run_attempt }}
+          path: unsigned-dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  sign-release:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: {}
+    steps:
+      - name: Set up Android signing tools
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+
+      - name: Install apksigner
+        run: sdkmanager --install "build-tools;36.0.0"
+
+      - name: Download validated unsigned bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: validated-unsigned-${{ github.sha }}-${{ github.run_attempt }}
+          path: unsigned-dist
+
+      - name: Decode isolated release key
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          test -n "$RELEASE_KEYSTORE_BASE64"
+          install -d -m 0700 "$RUNNER_TEMP/uclone-signing"
+          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/uclone-signing/release.p12"
+          chmod 0600 "$RUNNER_TEMP/uclone-signing/release.p12"
+
+      - name: Sign and verify APK
+        env:
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          test -n "$RELEASE_STORE_PASSWORD"
+          test -n "$RELEASE_KEY_ALIAS"
+          test -n "$RELEASE_KEY_PASSWORD"
+          install -d signed-dist
+          cp unsigned-dist/uclone-slots-preview-unsigned.apk signed-dist/uclone-slots-preview.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign \
+            --ks "$RUNNER_TEMP/uclone-signing/release.p12" \
+            --ks-type pkcs12 \
+            --ks-key-alias "$RELEASE_KEY_ALIAS" \
+            --ks-pass "pass:$RELEASE_STORE_PASSWORD" \
+            --key-pass "pass:$RELEASE_KEY_PASSWORD" \
+            signed-dist/uclone-slots-preview.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs signed-dist/uclone-slots-preview.apk | tee signed-dist/APK-SIGNATURE.txt
+          ACTUAL_CERT="$(awk -F ': ' '/certificate SHA-256 digest/ {print toupper($2); exit}' signed-dist/APK-SIGNATURE.txt)"
+          test -n "$ACTUAL_CERT"
+          test "$ACTUAL_CERT" = "$EXPECTED_RELEASE_CERT_SHA256"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging signed-dist/uclone-slots-preview.apk | tee signed-dist/APK-BADGING.txt
+          python3 - <<'PY'
+          import json, re, zipfile
+          from pathlib import Path
+
+          manifest = json.loads(Path("unsigned-dist/PAIRING-MANIFEST.json").read_text())
+          badging = Path("signed-dist/APK-BADGING.txt").read_text().splitlines()[0]
+          code = re.search(r"versionCode='([^']+)'", badging).group(1)
+          name = re.search(r"versionName='([^']+)'", badging).group(1)
+          assert code == str(manifest["version_code"]), (code, manifest)
+          assert name == manifest["version_name"], (name, manifest)
+          build_bytes = manifest["build_id"].encode()
+          with zipfile.ZipFile("signed-dist/uclone-slots-preview.apk") as archive:
+              dex = b"".join(
+                  archive.read(member)
+                  for member in archive.namelist()
+                  if member.startswith("classes") and member.endswith(".dex")
+              )
+          assert build_bytes in dex, "signed APK does not embed the paired build id"
+          module = Path("unsigned-dist/uclone-slices-preview-kernelsu.zip")
+          with zipfile.ZipFile(module) as archive:
+              props = dict(
+                  line.split("=", 1)
+                  for line in archive.read("module.prop").decode().splitlines()
+                  if "=" in line
+              )
+              for member in ("bin/ucloned", "bin/slotctl"):
+                  assert build_bytes in archive.read(member), f"missing paired build id in {member}"
+          assert props["version"] == manifest["version_name"], (props, manifest)
+          assert props["versionCode"] == str(manifest["version_code"]), (props, manifest)
+          expected = (
+              "Generic fail-closed KernelSU runtime for UClone Slots Preview; "
+              f"RPC v2 paired build {manifest['build_id']}; no overlay or system partition changes"
+          )
+          assert props["description"] == expected, (props, manifest)
+          PY
+          install -m 0644 unsigned-dist/uclone-slices-preview-kernelsu.zip signed-dist/uclone-slices-preview-kernelsu.zip
+          install -m 0644 unsigned-dist/KERNELSU-MANIFEST.txt signed-dist/KERNELSU-MANIFEST.txt
+          install -m 0644 unsigned-dist/PAIRING-MANIFEST.json signed-dist/PAIRING-MANIFEST.json
+          (cd signed-dist && sha256sum uclone-slots-preview.apk uclone-slices-preview-kernelsu.zip PAIRING-MANIFEST.json > SHA256SUMS)
+
+      - name: Destroy isolated release key
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/uclone-signing/release.p12"
+          rmdir "$RUNNER_TEMP/uclone-signing" 2>/dev/null || true
+          test ! -e "$RUNNER_TEMP/uclone-signing/release.p12"
+
+      - name: Upload signed paired bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-paired-${{ github.sha }}-${{ github.run_attempt }}
+          path: signed-dist/
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish downloadable Preview release
-        if: github.event_name != 'pull_request'
+  publish-release:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: sign-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download signed paired bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: signed-paired-${{ github.sha }}-${{ github.run_attempt }}
+          path: dist
+
+      - name: Publish exact-commit Preview release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          TAG="preview-v0.3-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
           gh release create \
-            "preview-build-${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" \
+            "$TAG" \
             dist/uclone-slots-preview.apk \
             dist/uclone-slices-preview-kernelsu.zip \
             dist/SHA256SUMS \
             dist/APK-SIGNATURE.txt \
+            dist/APK-BADGING.txt \
             dist/KERNELSU-MANIFEST.txt \
+            dist/PAIRING-MANIFEST.json \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --prerelease \
-            --title "UClone Slices Preview build ${GITHUB_RUN_NUMBER}" \
-            --notes "Paired fixed-signed APK and generic KernelSU Runtime from commit ${GITHUB_SHA}. Install the ZIP through KernelSU; the packaged disable marker keeps a fresh module disabled until explicitly enabled."
+            --draft \
+            --title "UClone Slices Preview 0.3 build ${GITHUB_RUN_NUMBER}" \
+            --notes "Paired APK and KernelSU Runtime from commit ${GITHUB_SHA}. Protocol v2 rejects mixed-version installation. Reboot testing still requires explicit user confirmation."
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > "$RUNNER_TEMP/assets.actual"
+          printf '%s\n' \
+            APK-BADGING.txt \
+            APK-SIGNATURE.txt \
+            KERNELSU-MANIFEST.txt \
+            PAIRING-MANIFEST.json \
+            SHA256SUMS \
+            uclone-slices-preview-kernelsu.zip \
+            uclone-slots-preview.apk | sort > "$RUNNER_TEMP/assets.expected"
+          diff -u "$RUNNER_TEMP/assets.expected" "$RUNNER_TEMP/assets.actual"
+          VERIFY_DIR="$RUNNER_TEMP/release-verify"
+          mkdir -p "$VERIFY_DIR"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$VERIFY_DIR"
+          for asset in \
+            APK-BADGING.txt \
+            APK-SIGNATURE.txt \
+            KERNELSU-MANIFEST.txt \
+            PAIRING-MANIFEST.json \
+            SHA256SUMS \
+            uclone-slices-preview-kernelsu.zip \
+            uclone-slots-preview.apk
+          do
+            cmp -s "dist/$asset" "$VERIFY_DIR/$asset"
+          done
+          (cd "$VERIFY_DIR" && sha256sum -c SHA256SUMS)
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease

@@ -43,6 +43,7 @@ pub(super) fn publications_match(
     }
     let digests = stores.published_digests(key, &state)?;
     Ok(digests.enrollment == anchors.enrollment_sha256()
+        && digests.compatibility_policy == anchors.compatibility_policy_sha256()
         && digests.base_catalog == anchors.base_catalog_sha256()
         && digests.package_state == anchors.package_state_sha256())
 }

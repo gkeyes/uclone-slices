@@ -207,8 +207,13 @@ impl<H: RequestHandler> DaemonServer<H> {
                 };
                 write_response(&mut stream, &response)?;
             }
-            Err(_) => {
-                if let Some(response) = invalid_request_response(&frame) {
+            Err(error) => {
+                let code = if matches!(error, ProtocolError::RuntimePairMismatch) {
+                    ErrorCode::RuntimePairMismatch
+                } else {
+                    ErrorCode::InvalidRequest
+                };
+                if let Some(response) = invalid_request_response(&frame, code) {
                     write_response(&mut stream, &response)?;
                 }
             }

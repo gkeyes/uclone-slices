@@ -76,7 +76,7 @@ do
         exit 1
     }
 done
-for script in customize.sh post-fs-data.sh emergency-containment.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh rescue.sh; do
+for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh; do
     require_regular_file "$KERNELSU_ROOT/$script"
     /bin/sh -n "$KERNELSU_ROOT/$script"
     cp "$KERNELSU_ROOT/$script" "$STAGING/$script"
@@ -85,7 +85,17 @@ require_regular_file "$KERNELSU_ROOT/module.prop"
 require_regular_file "$KERNELSU_ROOT/skip_mount"
 [ ! -e "$KERNELSU_ROOT/sepolicy.rule" ] && [ ! -L "$KERNELSU_ROOT/sepolicy.rule" ] || die 'sepolicy.rule is not allowed in the Preview package'
 grep -F -x "id=$UCLONE_MODULE" "$KERNELSU_ROOT/module.prop" >/dev/null || exit 1
-cp "$KERNELSU_ROOT/module.prop" "$STAGING/module.prop"
+PREVIEW_VERSION_NAME=${PREVIEW_VERSION_NAME:-0.3.0-preview.dev}
+PREVIEW_VERSION_CODE=${PREVIEW_VERSION_CODE:-300000}
+PREVIEW_BUILD_ID=${PREVIEW_BUILD_ID:-development}
+case "$PREVIEW_VERSION_NAME" in *[!A-Za-z0-9._-]*|'') die 'invalid Preview version name' ;; esac
+case "$PREVIEW_VERSION_CODE" in *[!0-9]*|'') die 'invalid Preview version code' ;; esac
+case "$PREVIEW_BUILD_ID" in *[!A-Za-z0-9._-]*|'') die 'invalid Preview build id' ;; esac
+sed \
+    -e "s/^version=.*/version=$PREVIEW_VERSION_NAME/" \
+    -e "s/^versionCode=.*/versionCode=$PREVIEW_VERSION_CODE/" \
+    -e "s|^description=.*|description=Generic fail-closed KernelSU runtime for UClone Slots Preview; RPC v2 paired build $PREVIEW_BUILD_ID; no overlay or system partition changes|" \
+    "$KERNELSU_ROOT/module.prop" >"$STAGING/module.prop"
 cp "$KERNELSU_ROOT/skip_mount" "$STAGING/skip_mount"
 cp "$GENERATED_PROFILE/target-profile.sh" "$STAGING/target-profile.sh"
 cp "$UCLONED_BIN" "$STAGING/bin/ucloned"
@@ -97,14 +107,15 @@ chmod 0700 "$STAGING/bin/ucloned" "$STAGING/bin/slotctl" "$STAGING/runtime/slot-
 chmod 0700 "$STAGING/post-fs-data.sh" "$STAGING/startup-gate.sh" \
     "$STAGING/emergency-containment.sh" "$STAGING/service.sh" \
     "$STAGING/boot-completed.sh" "$STAGING/customize.sh" \
-    "$STAGING/boot-state.sh" "$STAGING/rescue.sh"
+    "$STAGING/boot-state.sh" "$STAGING/profile-loader.sh" \
+    "$STAGING/post-fs-setup.sh" "$STAGING/journal-packages.sh" "$STAGING/rescue.sh"
 chmod 0644 "$STAGING/disable" "$STAGING/module.prop" "$STAGING/skip_mount"
 chmod 0444 "$STAGING/target-profile.sh"
 chmod 0600 "$STAGING/runtime/slot-bridge.apk"
 for executable in \
     bin/ucloned bin/slotctl runtime/slot-fsprobe \
-    post-fs-data.sh emergency-containment.sh startup-gate.sh service.sh \
-    boot-completed.sh boot-state.sh customize.sh rescue.sh
+    post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh \
+    boot-completed.sh boot-state.sh profile-loader.sh customize.sh rescue.sh
 do
     [ "$(file_mode "$STAGING/$executable")" = 700 ] || {
         printf 'unexpected executable mode: %s\n' "$executable" >&2
@@ -133,7 +144,6 @@ while IFS= read -r file; do
     digest=$(shasum -a 256 "$file" | awk '{print $1}')
     printf '%s  %s\n' "$digest" "$relative" >>"$STAGED_SHA256_PATH"
 done < <(find "$STAGING" -type f -print | sort)
-
 {
     printf 'UClone Slots Preview KernelSU package\n'
     printf 'repository=%s\n' "$REPO_ROOT"
@@ -153,7 +163,6 @@ rm -f "$ZIP_PATH"
     cd "$STAGING"
     /usr/bin/zip -X -q -r "$ZIP_PATH" .
 )
-
 /usr/bin/unzip -tq "$ZIP_PATH"
 VERIFY_ROOT="$TARGET_ROOT/verify-extract"
 rm -rf "$VERIFY_ROOT"
@@ -162,8 +171,8 @@ mkdir -p "$VERIFY_ROOT"
 [ -z "$(find "$VERIFY_ROOT" -type l -print -quit)" ] || die 'ZIP extraction produced a symlink'
 for executable in \
     bin/ucloned bin/slotctl runtime/slot-fsprobe \
-    post-fs-data.sh emergency-containment.sh startup-gate.sh service.sh \
-    boot-completed.sh boot-state.sh rescue.sh
+    post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh \
+    boot-completed.sh boot-state.sh profile-loader.sh rescue.sh
 do
     [ "$(file_mode "$VERIFY_ROOT/$executable")" = 700 ] || {
         printf 'ZIP executable mode drift: %s\n' "$executable" >&2
@@ -193,8 +202,11 @@ boot-state.sh
 customize.sh
 disable
 emergency-containment.sh
+journal-packages.sh
 module.prop
 post-fs-data.sh
+post-fs-setup.sh
+profile-loader.sh
 rescue.sh
 runtime/slot-bridge.apk
 runtime/slot-fsprobe
@@ -208,7 +220,6 @@ EOF
     printf '%s\n' 'ZIP entries differ from the fixed KernelSU package contract' >&2
     exit 1
 }
-
 zip_digest=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')
 {
     printf '%s  %s\n' "$zip_digest" "$(basename "$ZIP_PATH")"
@@ -216,7 +227,6 @@ zip_digest=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')
         printf '%s  staging/%s\n' "$digest" "$relative"
     done <"$STAGED_SHA256_PATH"
 } >"$SHA256_PATH"
-
 (
     cd "$STAGING"
     /usr/bin/shasum -a 256 -c "$STAGED_SHA256_PATH"
@@ -230,13 +240,11 @@ actual_zip_digest=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')
     cd "$TARGET_ROOT"
     /usr/bin/shasum -a 256 -c "$SHA256_PATH"
 )
-
 {
     printf 'zip_sha256=%s\n' "$zip_digest"
     printf '%s\n' '--- manifest ---'
     cat "$MANIFEST_PATH"
 } >"$SUMMARY_PATH"
-
 printf '%s\n' "KernelSU Preview package: $ZIP_PATH"
 printf '%s\n' "Manifest: $MANIFEST_PATH"
 printf '%s\n' "SHA256: $SHA256_PATH"

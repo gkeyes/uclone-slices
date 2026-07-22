@@ -75,12 +75,13 @@ KernelSU Runtime 是 Slots 的必要组件；LSPosed 不是必要组件。
 
 本仓库包含 Android、Rust、C 与 KernelSU Shell 组件。发布产物必须从同一提交构建，并通过各组件测试、严格 Clippy、Android lint、ELF/签名检查以及 KernelSU ZIP 内容审计。
 
-典型本机构建入口：
+发布构建只由仓库的 GitHub Actions 固定环境执行。本地只做源码格式、Shell/YAML
+语法和路径策略等静态检查，不把本机缓存或工具链结果作为发布证据。CI 固定执行：
 
 ```bash
-cargo test --manifest-path slot-runtime/Cargo.toml
-cargo clippy --manifest-path slot-runtime/Cargo.toml --all-targets --all-features -- -D warnings
-./gradlew :slot-manager-app:testDebugUnitTest :slot-manager-app:lintDebug :slot-manager-app:assembleDebug
+cargo fmt --check、test、严格 clippy 与 rustdoc
+Android 单元测试、lint 与 release assemble
+Bridge、fsprobe、KernelSU 启动/救援契约测试
 ```
 
 CLI 登记 Direct Boot App 时必须显式确认：
@@ -91,7 +92,14 @@ slotctl enroll com.example.app --accept-direct-boot-conditional
 
 KernelSU ZIP 由固定路径打包脚本生成；源码目录中的模块骨架不能直接视为可安装发布包。
 
-`main` 分支的 GitHub Action 会成对构建 `uclone-slots-preview.apk` 和通用 `uclone-slices-preview-kernelsu.zip`，并将 APK、模块、SHA-256、签名报告与模块清单上传到 Actions 产物和 GitHub Preview Release。首次从 debug 签名迁移需要卸载旧 APK；之后使用同一固定签名的构建可以覆盖更新。私钥只保存在 GitHub Actions Secrets 和受保护的本机备份中，仓库仅保存公钥证书与指纹。
+`main` 分支的 GitHub Action 会成对构建 `uclone-slots-preview.apk` 和通用
+`uclone-slices-preview-kernelsu.zip`。签名作业只接收已验证的无签名产物，发布作业不读取
+签名密钥；Release 会先作为草稿上传并核对完整资产清单，核对通过后才公开。APK 与
+Runtime 使用协议 v2 和同一 `build_id`，禁止混装。首次从 debug 签名迁移需要卸载旧
+APK；之后使用同一固定签名的构建可以覆盖更新。安装成对升级前，所有受管 App 必须先
+安全退回 Base，清除活动 Gate 与管理状态；安装器不会替用户猜测或迁移未完成事务。
+从旧的 v1/Fitness 控制面迁移到 v2 时，还必须在确认 Base 原生视图后停止旧 daemon，
+并把旧控制面目录改名归档；不能直接覆盖旧 schema。
 
 ## 安全原则
 
