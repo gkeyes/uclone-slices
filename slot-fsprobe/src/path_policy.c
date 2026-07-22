@@ -10,6 +10,11 @@
 #define SLOT_DE_ROOT UCLONE_DE_SLOT_ROOT "/"
 #define STAGING_SUFFIX ".staging"
 
+static size_t bounded_string_length(const char *value, size_t limit) {
+    const char *terminator = memchr(value, '\0', limit);
+    return terminator == NULL ? limit : (size_t)(terminator - value);
+}
+
 static bool normalized_absolute(const char *path, size_t length) {
     size_t segment_start = 1U;
     if (length < 2U || path[0] != '/' || path[length - 1U] == '/') {
@@ -113,7 +118,7 @@ bool fsprobe_path_allowed(const char *path) {
     if (path == NULL) {
         return false;
     }
-    const size_t length = strnlen(path, FSPROBE_MAX_PATH_BYTES + 1U);
+    const size_t length = bounded_string_length(path, FSPROBE_MAX_PATH_BYTES + 1U);
     if (length == 0U || length > FSPROBE_MAX_PATH_BYTES ||
         !normalized_absolute(path, length)) {
         return false;
