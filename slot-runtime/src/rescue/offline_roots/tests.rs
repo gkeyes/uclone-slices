@@ -50,7 +50,10 @@ fn ordinary_transaction_journal_is_a_management_artifact() {
     let spec = TransactionSpec::new(
         TransactionId::parse("orphan-prepared").unwrap(),
         managed,
-        SlotView::new(SlotId::base(), inodes),
+        SlotView::new(
+            SlotId::parse("preview").unwrap(),
+            DataInodes::new(201, 202).unwrap(),
+        ),
         GateSnapshot::new(PackageEnabledState::Default, false),
         "boot-journal-only",
     )

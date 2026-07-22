@@ -20,6 +20,8 @@ impl CatalogStore {
     #[doc = "Creates or opens the root-only catalog directory."]
     pub fn new(root: impl AsRef<Path>) -> Result<Self, CatalogError> {
         let root = root.as_ref().to_path_buf();
+        ensure_directory(&root)
+            .map_err(|source| CatalogError::io("create catalog root", &root, source))?;
         let packages = root.join("packages");
         ensure_directory(&packages)
             .map_err(|source| CatalogError::io("create catalog packages", &packages, source))?;

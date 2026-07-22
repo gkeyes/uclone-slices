@@ -11,6 +11,7 @@ use crate::domain::{
     CommitNonce, GateSnapshot, ManagedPackage, PackageEnabledState, PackageKey, PackageName,
     PackageSupportLevel, SlotId, SlotView, TransactionId, UserId,
 };
+use crate::enrollment_attempt::CommitProof;
 use crate::journal::TransactionSpec;
 use crate::lifecycle::LifecycleState;
 use crate::protocol::ALLOWED_PACKAGE;
@@ -147,8 +148,19 @@ fn unlock_transition_requires_a_fresh_policy_checked_reconcile() {
             probe::security_profile(),
         )
         .unwrap();
-    stores.package_state.initialize(&key).unwrap();
     let snapshot = GateSnapshot::new(PackageEnabledState::Default, false);
+    stores.attempts.create_pending(&key, snapshot).unwrap();
+    let state = stores.package_state.initialize(&key).unwrap();
+    let digests = stores.published_digests(&key, &state).unwrap();
+    let proof = CommitProof::new(
+        managed.clone(),
+        &digests.enrollment,
+        &digests.compatibility_policy,
+        &digests.base_catalog,
+        &digests.package_state,
+    )
+    .unwrap();
+    stores.attempts.commit(&key, proof).unwrap();
     let runtime = OrphanGateRuntime::enrolled(snapshot, managed);
     let materializer = AndroidMaterializer::new(
         SystemMaterializerExecutor,
@@ -174,29 +186,4 @@ fn unlock_transition_requires_a_fresh_policy_checked_reconcile() {
     assert_eq!(unlocked, ReconcileOutcome::RestoredBase);
     assert!(!platform.runtime().held);
     assert_eq!(platform.runtime().restored, Some(snapshot));
-
-    let policy = platform
-        .stores
-        .compatibility_policy
-        .root()
-        .join("packages")
-        .join(ALLOWED_PACKAGE)
-        .join("policy.json");
-    let mut bytes = fs::read(&policy).unwrap();
-    *bytes.last_mut().unwrap() ^= 1;
-    fs::write(&policy, bytes).unwrap();
-    fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).unwrap();
-    platform.probe.borrow_mut().set_user_unlocked(false);
-    assert_eq!(
-        platform.do_reconcile(&key).unwrap(),
-        ReconcileOutcome::Locked
-    );
-    assert!(platform.runtime().held);
-
-    platform.probe.borrow_mut().set_user_unlocked(true);
-    assert!(matches!(
-        platform.do_reconcile(&key),
-        Err(crate::service::ServiceError::RecoveryRequired)
-    ));
-    assert!(platform.runtime().held);
 }

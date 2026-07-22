@@ -52,15 +52,6 @@ impl NativeBaseProbe {
         }
     }
 
-    pub(in crate::production::tests) fn pending_install() -> Self {
-        let base = base_inodes();
-        Self {
-            observation: PackageObservation::new(identity(), base, base, base, true),
-            user_unlocked: true,
-            pending_after_capture: None,
-        }
-    }
-
     pub(in crate::production::tests) fn pending_after_capture(captured: Rc<Cell<bool>>) -> Self {
         Self {
             pending_after_capture: Some(captured),
