@@ -26,7 +26,7 @@ pub(super) struct PublishedAnchorDigests {
 }
 
 impl PublishedAnchorDigests {
-    pub(super) fn new(
+    pub(super) const fn new(
         enrollment: String,
         compatibility_policy: String,
         base_catalog: String,
