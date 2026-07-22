@@ -75,10 +75,6 @@ paired_upgrade_ready() {
         return 1
     fi
     old_slotctl=$INSTALLED_MODULE/bin/slotctl
-    if ! "$TOYBOX_BIN" timeout -s 9 120 "$old_slotctl" reconcile >/dev/null 2>&1; then
-        UPGRADE_REFUSAL='the installed Runtime could not reconcile every managed App'
-        return 1
-    fi
     apps_frame="$($TOYBOX_BIN timeout -s 9 30 "$old_slotctl" apps 2>/dev/null)" || {
         UPGRADE_REFUSAL='the installed Runtime could not report managed Apps'
         return 1
@@ -115,7 +111,7 @@ paired_upgrade_ready() {
 }
 
 if management_metadata_present; then
-    ui_print "UClone Slots: existing managed Apps detected; proving Base state before paired upgrade."
+    ui_print "UClone Slots: existing managed Apps detected; read-only Base verification before paired upgrade."
     if ! paired_upgrade_ready; then
         ui_print "UClone Slots: $UPGRADE_REFUSAL."
         ui_print "Switch every managed App to Base in the Slots APK, wait for completion, then retry. Existing slots are preserved."

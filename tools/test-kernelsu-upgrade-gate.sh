@@ -118,6 +118,7 @@ recovery='{"schema_version":1,"request_id":"test","status":"ok","payload":{"kind
 
 run_case clean pass no no 0 0 "$empty"
 run_case base_metadata pass yes no 0 0 "$base"
+run_case legacy_reconcile_rejected_but_base_proved pass yes no 1 0 "$base"
 run_case retired_gate_evidence pass yes retired 0 0 "$base"
 run_case active_preview reject yes no 0 0 "$preview"
 run_case recovery_required reject yes no 0 0 "$recovery"
