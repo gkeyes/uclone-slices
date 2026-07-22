@@ -4,6 +4,19 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseKeystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
+val releaseStorePassword = System.getenv("RELEASE_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseKeystorePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+val previewVersionCode = providers.gradleProperty("previewVersionCode").orElse("1")
+val previewVersionName = providers.gradleProperty("previewVersionName").orElse("0.2.0-preview.1")
+
 android {
     namespace = "com.uclone.slots.preview"
     compileSdk = 36
@@ -12,13 +25,34 @@ android {
         applicationId = "com.uclone.slots.preview"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.2.0-preview.1"
+        versionCode = previewVersionCode.get().toInt()
+        versionName = previewVersionName.get()
     }
 
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                storeType = System.getenv("RELEASE_STORE_TYPE") ?: "pkcs12"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 
     compileOptions {

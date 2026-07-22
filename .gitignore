@@ -7,6 +7,10 @@ slot-runtime/target-profiles/
 local.properties
 *.iml
 captures/
+*.jks
+*.keystore
+*.p12
+*.pfx
 app/build/
 .codegraph
 work/
