@@ -57,12 +57,7 @@ impl<B, T, F> OfflineRescuePlatform<B, T, F> {
             return Ok(false);
         }
         if !typed_target_evidence(&self.roots, key)? {
-            return match management_artifacts_present(&self.roots, key)? {
-                false => Ok(false),
-                true => Err(RescueError::Corrupt(
-                    "management evidence exists without valid rescue anchors".to_owned(),
-                )),
-            };
+            return Ok(false);
         }
         self.recovery_targets.insert(key.package_name().clone());
         Ok(true)
