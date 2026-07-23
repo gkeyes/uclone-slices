@@ -59,7 +59,9 @@ where
             let enrollment_valid = matches!(enrolled_package, Ok(Some(_)));
             let (active, lifecycle) = if rescue == Ok(None) && enrollment_valid {
                 match super::state::load(&self.stores, &mut *probe, &key) {
-                    Err(_) => (SlotId::base(), LifecycleState::RecoveryRequired),
+                    Err(_) | Ok(PackageState::Absent) => {
+                        (SlotId::base(), LifecycleState::RecoveryRequired)
+                    }
                     Ok(PackageState::Ready(snapshot)) => (
                         snapshot.managed().active_slot().clone(),
                         snapshot.managed().lifecycle_state(),
@@ -68,7 +70,6 @@ where
                         (SlotId::base(), LifecycleState::RecoveryRequired)
                     }
                     Ok(PackageState::Quarantined) => (SlotId::base(), LifecycleState::Quarantined),
-                    Ok(PackageState::Absent) => (SlotId::base(), LifecycleState::RecoveryRequired),
                 }
             } else {
                 (SlotId::base(), LifecycleState::RecoveryRequired)

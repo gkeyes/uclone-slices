@@ -7,7 +7,7 @@ pub enum LaunchDisposition {
     Launched,
     /// The package has no enabled INFO or LAUNCHER activity for user zero.
     EntryNotFound,
-    /// PackageManager no longer reports the identity enrolled by the runtime.
+    /// `PackageManager` no longer reports the identity enrolled by the runtime.
     IdentityChanged,
     /// Package metadata, Base anchors, or install-session state changed.
     PackageStateChanged,

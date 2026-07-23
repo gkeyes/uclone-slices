@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -92,7 +93,7 @@ fn policy_bytes_are_covered_by_the_authoritative_enrollment_anchor() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
     let outcome = platform.do_reconcile(&key).unwrap();
 

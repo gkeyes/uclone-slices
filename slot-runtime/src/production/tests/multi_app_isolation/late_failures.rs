@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -36,7 +37,7 @@ fn late_store_failure_reacquires_a_retired_gate_before_state_marking() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
     let key = PackageKey::new(managed.package_name().clone(), managed.user_id());
 
@@ -84,7 +85,7 @@ fn late_attempt_failure_contains_one_package_and_healthy_peer_can_reconcile() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
     let key_a = PackageKey::new(managed_a.package_name().clone(), managed_a.user_id());
     let key_b = PackageKey::new(managed_b.package_name().clone(), managed_b.user_id());
@@ -106,9 +107,7 @@ fn late_attempt_failure_contains_one_package_and_healthy_peer_can_reconcile() {
         service
             .handle(&request(
                 "late-broken-status",
-                Command::StatusPackage {
-                    package: package_a.clone(),
-                },
+                Command::StatusPackage { package: package_a },
             ))
             .error_code(),
         Some(ErrorCode::RecoveryRequired)
@@ -148,7 +147,7 @@ fn corrupt_package_state_revision_isolated_from_healthy_peer_and_runtime_reopen(
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
     let mut service = PreviewService::new(platform);
 

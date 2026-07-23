@@ -88,9 +88,9 @@ impl SwitchResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LaunchStatus {
-    /// ActivityTaskManager accepted the explicit launcher activity.
+    /// `ActivityTaskManager` accepted the explicit launcher activity.
     Launched,
-    /// PackageManager reported no enabled launcher entry.
+    /// `PackageManager` reported no enabled launcher entry.
     EntryNotFound,
     /// The package's captured disabled or suspended state was preserved.
     GateBlocked,

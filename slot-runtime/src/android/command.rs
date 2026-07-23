@@ -117,9 +117,8 @@ impl AndroidCommand {
     #[doc = "Returns the typed operation without exposing a shell command string."]
     pub const fn kind(&self) -> CommandKind {
         match &self.0 {
-            CommandSpec::Package { kind, .. } => *kind,
+            CommandSpec::Package { kind, .. } | CommandSpec::ContractMutation { kind, .. } => *kind,
             CommandSpec::Launch { .. } => CommandKind::LaunchPackage,
-            CommandSpec::ContractMutation { kind, .. } => *kind,
             CommandSpec::Bind { domain, .. } => CommandKind::Bind(*domain),
             CommandSpec::Unmount { domain, .. } => CommandKind::Unmount(*domain),
         }
@@ -183,7 +182,7 @@ pub enum CommandError {
     #[doc = "The validated package has no enabled launcher entry for user zero."]
     #[error("validated package has no launcher entry")]
     LaunchEntryNotFound,
-    #[doc = "PackageManager identity changed before the launcher activity could start."]
+    #[doc = "`PackageManager` identity changed before the launcher activity could start."]
     #[error("validated package identity changed before launch")]
     IdentityChanged,
     #[doc = "Package metadata, Base anchors, or install-session state changed."]

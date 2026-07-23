@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::{cell::Cell, rc::Rc};
@@ -40,7 +41,7 @@ fn final_candidate_recheck_rejects_install_that_starts_after_base_capture() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::pending_after_capture(captured)),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let result = platform.do_enroll(&key, false);

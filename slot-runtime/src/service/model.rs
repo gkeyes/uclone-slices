@@ -6,6 +6,10 @@ pub use read::{ManagedAppInfo, PackageInspection, SlotInfo};
 pub use crate::rescue::RescueExecution;
 
 /// Read-only device capability facts used to build a protocol probe report.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the model keeps each independently observed runtime gate explicit"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilitySnapshot {
     ready: bool,
@@ -16,6 +20,10 @@ pub struct CapabilitySnapshot {
 
 impl CapabilitySnapshot {
     /// Groups already-probed user-zero runtime capability facts.
+    #[allow(
+        clippy::fn_params_excessive_bools,
+        reason = "constructor mirrors the independently observed capability facts"
+    )]
     pub const fn new(
         ready: bool,
         user_unlocked: bool,

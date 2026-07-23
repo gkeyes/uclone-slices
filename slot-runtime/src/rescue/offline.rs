@@ -144,14 +144,11 @@ where
                 .map_err(platform_error)?;
             return Ok(StartupGateOutcome::HeldRecovery);
         }
-        let managed = match management_artifacts_present(&self.roots, key) {
-            Ok(value) => value,
-            Err(_) => {
-                self.backend
-                    .emergency_gate(key.package_name())
-                    .map_err(platform_error)?;
-                return Ok(StartupGateOutcome::HeldRecovery);
-            }
+        let Ok(managed) = management_artifacts_present(&self.roots, key) else {
+            self.backend
+                .emergency_gate(key.package_name())
+                .map_err(platform_error)?;
+            return Ok(StartupGateOutcome::HeldRecovery);
         };
         if !managed {
             return Ok(StartupGateOutcome::NotManaged);

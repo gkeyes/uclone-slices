@@ -1,6 +1,7 @@
 pub(super) mod probe;
 pub(super) mod runtime;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -41,7 +42,7 @@ fn pristine_orphan_gate_restores_exact_state_and_retires_lease() {
         probe: std::cell::RefCell::new(NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores: stores(root.path()),
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
     let key = PackageKey::new(
         PackageName::parse(ALLOWED_PACKAGE).unwrap(),
@@ -126,7 +127,7 @@ fn proved_base_reconciliation_recovers_a_transient_boot_failure_state() {
         probe: std::cell::RefCell::new(NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let outcome = platform.do_reconcile(&key).unwrap();
@@ -190,7 +191,7 @@ fn orphan_policy_cannot_be_retired_as_a_pristine_enrollment() {
         probe: std::cell::RefCell::new(NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let result = platform.do_reconcile(&key);

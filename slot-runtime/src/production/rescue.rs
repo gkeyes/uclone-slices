@@ -44,10 +44,11 @@ where
 pub(super) fn require_authorized(
     authorization: Result<bool, RescueError>,
 ) -> Result<(), ServiceError> {
-    match authorization {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(ServiceError::NotFound),
-        Err(_) => Err(ServiceError::RecoveryRequired),
+    let authorized = authorization.map_err(|_| ServiceError::RecoveryRequired)?;
+    if authorized {
+        Ok(())
+    } else {
+        Err(ServiceError::NotFound)
     }
 }
 

@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 /// Typed Runtime mode and device capability report.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the wire report preserves independently auditable runtime gates"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProbeReport {
@@ -15,6 +19,10 @@ pub struct ProbeReport {
 
 impl ProbeReport {
     /// Creates a bounded capability report.
+    #[allow(
+        clippy::fn_params_excessive_bools,
+        reason = "constructor mirrors the stable wire report's independent runtime gates"
+    )]
     pub fn new(
         ready: bool,
         user_unlocked: bool,

@@ -11,7 +11,7 @@ pub(super) fn bridge(error: &BridgeError) -> CommandError {
     }
 }
 
-pub(super) fn launch_bridge(error: &BridgeError) -> CommandError {
+pub(super) const fn launch_bridge(error: &BridgeError) -> CommandError {
     match error.code() {
         BridgeErrorCode::LaunchEntryNotFound => CommandError::LaunchEntryNotFound,
         BridgeErrorCode::IdentityChanged => CommandError::IdentityChanged,
@@ -23,7 +23,7 @@ pub(super) fn launch_bridge(error: &BridgeError) -> CommandError {
     }
 }
 
-pub(super) fn contract_bridge(error: &BridgeError) -> CommandError {
+pub(super) const fn contract_bridge(error: &BridgeError) -> CommandError {
     match error.code() {
         BridgeErrorCode::IdentityChanged => CommandError::IdentityChanged,
         BridgeErrorCode::PackageStateChanged | BridgeErrorCode::PendingSession => {

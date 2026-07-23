@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -25,7 +26,7 @@ fn create_materialization_failure_contains_package_and_marks_recovery() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: FixedMetadata::new("slot-materialize-fail"),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let result = platform.do_create_slot(
@@ -72,7 +73,7 @@ fn create_switch_failure_retains_gate_and_returns_recovery_required() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: FixedMetadata::new("slot-switch-fail"),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let result = platform.do_create_slot(
@@ -145,7 +146,7 @@ fn delete_tombstones_before_cleanup_and_never_reexposes_ready_slot() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: FixedMetadata::new("unused-slot"),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let result = platform.do_delete_slot(&key, &slot);

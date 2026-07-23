@@ -95,6 +95,6 @@ impl BridgeError {
     }
 }
 
-pub(crate) fn invalid_response(message: impl Into<String>) -> BridgeError {
+pub(super) fn invalid_response(message: impl Into<String>) -> BridgeError {
     BridgeError::new(BridgeErrorCode::InvalidResponse, message)
 }

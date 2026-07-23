@@ -159,8 +159,7 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor, F: SystemFacts> PackageProbe
             {
                 snapshot.clone()
             }
-            None => self.refresh_package_snapshot(package, user_id)?,
-            Some(_) => self.refresh_package_snapshot(package, user_id)?,
+            _ => self.refresh_package_snapshot(package, user_id)?,
         };
         let processes = self
             .facts

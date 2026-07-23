@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -41,7 +42,7 @@ fn broken_package_remains_contained_while_healthy_package_reconciles_and_serves(
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
     let key_a = PackageKey::new(managed_a.package_name().clone(), managed_a.user_id());
     let key_b = PackageKey::new(managed_b.package_name().clone(), managed_b.user_id());

@@ -60,10 +60,10 @@ impl<P: ServicePlatform> PreviewService<P> {
         &mut self,
         package: &PackageName,
         enrollment: &ManagedPackage,
-        view: SlotView,
+        view: &SlotView,
     ) -> Result<ResponsePayload, ServiceError> {
         let key = validation::package_key(package);
-        self.confirm_launch_snapshot(&key, enrollment, &view)?;
+        self.confirm_launch_snapshot(&key, enrollment, view)?;
         Ok(ResponsePayload::SwitchResult(SwitchResult::new(
             package.clone(),
             view.slot_id().clone(),

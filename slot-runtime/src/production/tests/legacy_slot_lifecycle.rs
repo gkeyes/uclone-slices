@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -78,7 +79,7 @@ fn catalog_only_legacy_slot_can_be_deleted_after_returning_to_base() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
     let preview = SlotId::parse("preview").unwrap();
 

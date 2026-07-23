@@ -161,8 +161,8 @@ impl BridgeCommand {
             Self::DeviceStatus => "device",
             Self::PackageStatus(_) => "package",
             Self::GateStatus(_) => "gate",
-            Self::LaunchPackage { .. } => "ack",
-            Self::SetEnabled(_, _)
+            Self::LaunchPackage { .. }
+            | Self::SetEnabled(_, _)
             | Self::RestoreEnabled { .. }
             | Self::RestoreSuspended { .. } => "ack",
         }

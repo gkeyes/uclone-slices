@@ -86,20 +86,17 @@ pub(super) fn scan_package_names(
             unattributed_corruption = true;
             continue;
         };
-        match PackageName::parse(name) {
-            Ok(package_name) => {
-                let path = entry.path();
-                let is_directory = entry.file_type().is_ok_and(|value| value.is_dir());
-                if !is_directory || validate_package_directory(&path, owner_uid).is_err() {
-                    corrupt_artifact = true;
-                }
-                package_names.push(package_name);
-            }
-            Err(_) => {
-                corrupt_artifact = true;
-                unattributed_corruption = true;
-            }
+        let Ok(package_name) = PackageName::parse(name) else {
+            corrupt_artifact = true;
+            unattributed_corruption = true;
+            continue;
+        };
+        let path = entry.path();
+        let is_directory = entry.file_type().is_ok_and(|value| value.is_dir());
+        if !is_directory || validate_package_directory(&path, owner_uid).is_err() {
+            corrupt_artifact = true;
         }
+        package_names.push(package_name);
     }
     package_names.sort();
     package_names.dedup();

@@ -22,15 +22,18 @@ where
         key: &PackageKey,
     ) -> Result<ReconcileOutcome, ServiceError> {
         match self.do_reconcile(key) {
-            Ok(outcome @ ReconcileOutcome::RestoredBase)
-            | Ok(outcome @ ReconcileOutcome::RestoredSlot(_))
-            | Ok(outcome @ ReconcileOutcome::RolledBack)
-            | Ok(outcome @ ReconcileOutcome::RolledForward) => {
+            Ok(
+                outcome @ (ReconcileOutcome::RestoredBase
+                | ReconcileOutcome::RestoredSlot(_)
+                | ReconcileOutcome::RolledBack
+                | ReconcileOutcome::RolledForward),
+            ) => {
                 self.clear_recovery_override(key);
                 Ok(outcome)
             }
-            Ok(outcome @ ReconcileOutcome::RecoveryRequired(_))
-            | Ok(outcome @ ReconcileOutcome::Quarantined) => {
+            Ok(
+                outcome @ (ReconcileOutcome::RecoveryRequired(_) | ReconcileOutcome::Quarantined),
+            ) => {
                 let class = if matches!(&outcome, ReconcileOutcome::Quarantined) {
                     ServiceError::Quarantined
                 } else {

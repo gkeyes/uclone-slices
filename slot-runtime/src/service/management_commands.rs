@@ -72,7 +72,7 @@ impl<P: ServicePlatform> PreviewService<P> {
             .create_slot(&key, display_name.clone(), seed_mode)?
         {
             SwitchExecution::Committed(view) => {
-                self.confirmed_switch_result(package, &enrollment, view)
+                self.confirmed_switch_result(package, &enrollment, &view)
             }
             SwitchExecution::RolledBack => Err(ServiceError::Conflict),
             SwitchExecution::RecoveryRequired => Err(ServiceError::RecoveryRequired),
@@ -124,7 +124,8 @@ impl<P: ServicePlatform> PreviewService<P> {
         let mut aggregate = None;
         for package in packages {
             let key = validation::package_key(&package);
-            let failure = reconcile_failure(self.platform.reconcile_two_phase(&key));
+            let result = self.platform.reconcile_two_phase(&key);
+            let failure = reconcile_failure(&result);
             aggregate = merge_reconcile_failure(aggregate, failure);
         }
         if let Some(error) = aggregate {
@@ -149,30 +150,29 @@ impl<P: ServicePlatform> PreviewService<P> {
     }
 }
 
-fn reconcile_failure(result: Result<ReconcileOutcome, ServiceError>) -> Option<ServiceError> {
+fn reconcile_failure(result: &Result<ReconcileOutcome, ServiceError>) -> Option<ServiceError> {
     match result {
-        Ok(ReconcileOutcome::Locked | ReconcileOutcome::Held) => Some(ServiceError::UserLocked),
-        Ok(ReconcileOutcome::RecoveryRequired(_) | ReconcileOutcome::Quarantined) => {
-            Some(ServiceError::RecoveryRequired)
+        Ok(ReconcileOutcome::Locked | ReconcileOutcome::Held) | Err(ServiceError::UserLocked) => {
+            Some(ServiceError::UserLocked)
         }
+        Ok(ReconcileOutcome::RecoveryRequired(_) | ReconcileOutcome::Quarantined)
+        | Err(
+            ServiceError::RecoveryRequired
+            | ServiceError::Quarantined
+            | ServiceError::NotFound
+            | ServiceError::Conflict,
+        ) => Some(ServiceError::RecoveryRequired),
         Ok(
             ReconcileOutcome::RestoredBase
             | ReconcileOutcome::RestoredSlot(_)
             | ReconcileOutcome::RolledBack
             | ReconcileOutcome::RolledForward,
         ) => None,
-        Err(ServiceError::UserLocked) => Some(ServiceError::UserLocked),
-        Err(
-            ServiceError::RecoveryRequired
-            | ServiceError::Quarantined
-            | ServiceError::NotFound
-            | ServiceError::Conflict,
-        ) => Some(ServiceError::RecoveryRequired),
         Err(_) => Some(ServiceError::Internal),
     }
 }
 
-fn merge_reconcile_failure(
+const fn merge_reconcile_failure(
     current: Option<ServiceError>,
     next: Option<ServiceError>,
 ) -> Option<ServiceError> {

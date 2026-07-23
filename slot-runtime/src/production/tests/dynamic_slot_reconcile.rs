@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -32,7 +33,7 @@ fn reconcile_cleans_exact_dynamic_creating_and_deleted_slot_ids() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: FixedMetadata::new("unused-slot"),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let result = platform.cleanup_unpublished_preview(&key);

@@ -30,6 +30,8 @@ pub use metadata::{MetadataSource, SystemMetadataSource};
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "validated production test fixtures")]
 mod tests {
+    use std::collections::BTreeSet;
+
     mod active_slot_metadata;
     mod direct_boot_reconcile;
     mod dynamic_slot_reconcile;
@@ -93,7 +95,7 @@ mod tests {
             probe: std::cell::RefCell::new(SystemPackageProbe::new()),
             metadata: SystemMetadataSource::new(),
             stores,
-            recovery_overrides: Default::default(),
+            recovery_overrides: BTreeSet::default(),
         };
         let package = PackageName::parse(ALLOWED_PACKAGE).unwrap();
         let key = PackageKey::new(package, UserId::PRIMARY);

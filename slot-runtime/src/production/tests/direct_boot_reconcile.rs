@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 
@@ -99,7 +100,7 @@ fn conditional_direct_boot_active_slot_reboot_keeps_gate_held() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::direct_boot()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let outcome = platform.do_reconcile(&key).unwrap();
@@ -173,7 +174,7 @@ fn unlock_transition_requires_a_fresh_policy_checked_reconcile() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::locked_direct_boot()),
         metadata: SystemMetadataSource::new(),
         stores,
-        recovery_overrides: Default::default(),
+        recovery_overrides: BTreeSet::default(),
     };
 
     let outcome = platform.do_reconcile(&key).unwrap();
