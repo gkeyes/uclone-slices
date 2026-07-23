@@ -71,9 +71,21 @@ Preview 的成对构建入口是
 - 将以上 Runtime 组件装入 `slot-kernelsu/` 骨架；
 - 生成同一提交、同一 `build_id` 的管理 APK 与 KernelSU ZIP。
 
-`slot-probe/` 和 `slot-preview-controller/` 是单独的诊断构建目标，不属于
-Preview 配对发布。`app/` 和 `launcher-module/` 也不进入 Preview 配对产物；
-它们使用各自的 Legacy Gradle 任务和协议进行构建、验证。
+Legacy 的独立构建入口是
+[`.github/workflows/legacy-build.yml`](../../.github/workflows/legacy-build.yml)：
+
+- 在 Pull Request、推送到 `main` 和手动触发时独立运行；
+- 仅运行 `app/` 与 `launcher-module/` 的 Legacy 单元测试、Release lint 和
+  unsigned Release assemble 任务：`:app:testDebugUnitTest`、`:app:lintRelease`、
+  `:app:assembleRelease`、`:launcher-module:testDebugUnitTest`、
+  `:launcher-module:lintRelease`、`:launcher-module:assembleRelease`；
+- 使用与 Preview 相同的 JDK 17、Android platform/build-tools 36 和 Gradle 8.13
+  固定环境，但不读取 secrets、不签名、不发布构件。
+
+Preview 和 Legacy 两个根级门禁都不使用路径过滤，因此共享的根
+`settings.gradle.kts` 或构建配置变更会触发两者。`slot-probe/` 和
+`slot-preview-controller/` 是单独的诊断与回归目标，不属于任一产品发布门禁；它们
+可以帮助验证 Preview 行为，但不是 Preview 或 Legacy APK 的构建依赖。
 
 ## 当前与路线图
 
