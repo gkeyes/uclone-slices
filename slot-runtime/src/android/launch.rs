@@ -2,9 +2,14 @@ use crate::domain::ManagedPackage;
 use crate::launch::{AppLaunchBackend, LaunchDisposition};
 
 use super::backend::AndroidBackend;
-use super::command::{AndroidCommand, CommandError, CommandKind, CommandRunner};
+use super::command::{AndroidCommand, CommandError, CommandRunner};
 
-impl<R: CommandRunner, P, L> AppLaunchBackend for AndroidBackend<R, P, L> {
+impl<R, P, L> AppLaunchBackend for AndroidBackend<R, P, L>
+where
+    R: CommandRunner,
+    P: core::fmt::Debug,
+    L: core::fmt::Debug,
+{
     fn launch_package(&mut self, package: &ManagedPackage) -> LaunchDisposition {
         match self.runner.run(&AndroidCommand::launch(package)) {
             Ok(()) => LaunchDisposition::Launched,

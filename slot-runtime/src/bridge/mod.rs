@@ -20,6 +20,8 @@ pub use protocol::PackageSnapshot;
 pub use response::{BridgeResponse, decode_response};
 pub use runner::{AppProcessRunner, BridgeCommandRunner, BridgeRunnerError};
 
+use error::invalid_response;
+
 pub use crate::domain::PackageEnabledState;
 use crate::domain::PackageName;
 use crate::domain::{AppIdentity, DataInodes};
