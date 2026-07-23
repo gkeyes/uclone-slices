@@ -35,34 +35,61 @@ die() {
     exit 1
 }
 
-require_host_tool() {
-    tool_name="$1"
-    fixed_path="$2"
-    [ -x "$fixed_path" ] && [ ! -L "$fixed_path" ] || {
-        die "$tool_name is missing or symlinked at fixed path $fixed_path"
-    }
+require_host_tool() { [ -x "$2" ] || die "missing host tool: $1 (resolved path is not executable: $2)"; }
+require_local_tool() { require_host_tool "$@"; [ ! -L "$2" ] || die "$1 must not be a symlink: $2"; }
+resolve_tool() {
+    variable_name="$1"; tool_name="$2"; candidate="${!variable_name:-}"
+    if [ -n "$candidate" ]; then case "$candidate" in */*) ;; *) candidate=$(command -v "$candidate" 2>/dev/null || true);; esac
+    else candidate=$(command -v "$tool_name" 2>/dev/null || true); fi
+    [ -n "$candidate" ] && [ -x "$candidate" ] || return 1; RESOLVED_TOOL="$candidate"
 }
-
-CARGO="/Users/jianchen/.rustup/toolchains/1.95.0-x86_64-apple-darwin/bin/cargo"
-RUST_TOOLCHAIN_BIN="/Users/jianchen/.rustup/toolchains/1.95.0-x86_64-apple-darwin/bin"
-GRADLE="/Users/jianchen/.local/opt/gradle-8.13/bin/gradle"
-MAKE="/usr/bin/make"
-JAVA_HOME="/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
-ANDROID_HOME="/usr/local/share/android-commandlinetools"
-ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
-require_host_tool cargo "$CARGO"
-require_host_tool gradle "$GRADLE"
-require_host_tool make "$MAKE"
-require_host_tool java "$JAVA_HOME/bin/java"
-require_host_tool rust_android_build "$ANDROID_RUST_BUILD"
-require_host_tool kernelsu_boot_test "$KERNELSU_BOOT_TEST"
-require_host_tool kernelsu_upgrade_test "$KERNELSU_UPGRADE_TEST"
-require_host_tool kernelsu_upgrade_proof_test "$KERNELSU_UPGRADE_PROOF_TEST"
-export PATH="$RUST_TOOLCHAIN_BIN:/usr/bin:/bin:/usr/sbin:/sbin"
-export JAVA_HOME ANDROID_HOME ANDROID_NDK_HOME
-export CARGO_BUILD_JOBS=1
-export CARGO_INCREMENTAL=0
-export CARGO_TARGET_DIR="$RUNTIME_ROOT/target"
+resolve_tool_or_die() {
+    variable_name="$1"; tool_name="$2"; explicit_value="${!variable_name:-}"
+    if ! resolve_tool "$variable_name" "$tool_name"; then
+        [ -n "$explicit_value" ] && die "missing host tool: $tool_name ($variable_name is not executable: $explicit_value)"
+        die "missing host tool: $tool_name (set $variable_name or add $tool_name to PATH)"
+    fi
+    printf -v "$variable_name" '%s' "$RESOLVED_TOOL"
+}
+java_home_candidate="${JAVA_HOME:-}"
+if [ -n "$java_home_candidate" ]; then
+    [ -x "$java_home_candidate/bin/java" ] || die "missing host tool: java (JAVA_HOME is missing executable: $JAVA_HOME/bin/java)"
+else
+    [ -x /usr/libexec/java_home ] && java_home_candidate=$(/usr/libexec/java_home -v 17 2>/dev/null || true)
+    if [ -z "$java_home_candidate" ] || [ ! -x "$java_home_candidate/bin/java" ]; then
+        java_bin=$(command -v java 2>/dev/null || true)
+        case "$java_bin" in */Contents/Home/bin/java) java_home_candidate="${java_bin%/bin/java}";;
+            *) java_home_candidate=$(CDPATH= cd -- "$(dirname -- "$java_bin")/.." 2>/dev/null && pwd -P || true);; esac
+    fi
+    [ -n "$java_home_candidate" ] && [ -x "$java_home_candidate/bin/java" ] || die 'missing host tool: java (set JAVA_HOME or add java to PATH)'
+    JAVA_HOME="$java_home_candidate"
+fi
+if [ -z "${ANDROID_HOME:-}" ]; then
+    ANDROID_HOME="${ANDROID_SDK_ROOT:-}"
+    for sdk_candidate in "${HOME:-}/Library/Android/sdk" "${HOME:-}/Android/Sdk" /usr/local/share/android-commandlinetools /opt/homebrew/share/android-commandlinetools; do
+        [ -n "$ANDROID_HOME" ] || [ ! -d "$sdk_candidate" ] || ANDROID_HOME="$sdk_candidate"
+    done
+fi
+[ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME" ] || die 'missing host tool: Android SDK (set ANDROID_HOME or ANDROID_SDK_ROOT to an SDK directory)'
+if [ -n "${ANDROID_NDK_HOME:-}" ]; then NDK_HOME="$ANDROID_NDK_HOME"; elif [ -n "${NDK_HOME:-}" ]; then ANDROID_NDK_HOME="$NDK_HOME"; else
+    ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+    for ndk_candidate in "$ANDROID_HOME"/ndk/29.*; do [ -d "$ANDROID_NDK_HOME" ] || [ ! -d "$ndk_candidate" ] || ANDROID_NDK_HOME="$ndk_candidate"; done
+    NDK_HOME="$ANDROID_NDK_HOME"
+fi
+[ -d "$ANDROID_NDK_HOME" ] || die "missing host tool: Android NDK 29 (set NDK_HOME or ANDROID_NDK_HOME: $ANDROID_NDK_HOME)"
+BASE_PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+[ -z "${RUST_TOOLCHAIN_BIN:-}" ] || { [ -d "$RUST_TOOLCHAIN_BIN" ] || die "missing Rust toolchain directory: $RUST_TOOLCHAIN_BIN"; export PATH="$RUST_TOOLCHAIN_BIN:$BASE_PATH"; }
+resolve_tool_or_die CARGO cargo
+[ -n "${RUST_TOOLCHAIN_BIN:-}" ] || RUST_TOOLCHAIN_BIN=$(CDPATH= cd -- "$(dirname -- "$CARGO")" && pwd -P)
+export PATH="$RUST_TOOLCHAIN_BIN:$BASE_PATH"
+if [ -z "${GRADLE:-}" ] && [ -x "$REPO_ROOT/gradlew" ]; then GRADLE="$REPO_ROOT/gradlew"; else resolve_tool_or_die GRADLE gradle; fi
+resolve_tool_or_die MAKE make
+require_host_tool cargo "$CARGO"; require_host_tool gradle "$GRADLE"; require_host_tool make "$MAKE"; require_host_tool java "$JAVA_HOME/bin/java"
+require_local_tool rust_android_build "$ANDROID_RUST_BUILD"; require_local_tool kernelsu_boot_test "$KERNELSU_BOOT_TEST"; require_local_tool kernelsu_upgrade_test "$KERNELSU_UPGRADE_TEST"; require_local_tool kernelsu_upgrade_proof_test "$KERNELSU_UPGRADE_PROOF_TEST"
+export JAVA_HOME ANDROID_HOME ANDROID_NDK_HOME NDK_HOME CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${TMPDIR:-/tmp}/uclone-slices-preview-target}"
+log "resolved_java_home=$JAVA_HOME"; log "resolved_android_home=$ANDROID_HOME"; log "resolved_ndk_home=$ANDROID_NDK_HOME"; log "resolved_cargo=$CARGO"; log "resolved_rust_toolchain_bin=$RUST_TOOLCHAIN_BIN"; log "resolved_gradle=$GRADLE"; log "resolved_make=$MAKE"
+[ "${VALIDATE_SLICES_PREVIEW_ENV_ONLY:-0}" = 1 ] && { log 'PASS: host validation environment resolved'; exit 0; }
 
 run_step() {
     step="$1"
@@ -162,7 +189,8 @@ run_fsprobe_host() {
 
 run_fsprobe_android() {
     [ -x "$ANDROID_NDK_HOME/ndk-build" ] || {
-        printf 'Android NDK 29 not found: %s\n' "$ANDROID_NDK_HOME" >&2
+        printf 'missing host tool: ndk-build (set NDK_HOME or ANDROID_NDK_HOME): %s\n' \
+            "$ANDROID_NDK_HOME/ndk-build" >&2
         return 1
     }
     ANDROID_NDK_HOME="$ANDROID_NDK_HOME" "$MAKE" -C "$FSPROBE_ROOT" android-check
