@@ -17,8 +17,8 @@ pub use error::DomainError;
 pub use gate::{GateSnapshot, PackageEnabledState};
 pub use identifier::{PackageName, SlotId};
 pub use package::{
-    AppIdentity, ManagedPackage, PackageCandidate, PackageCompatibility, PackageObservation,
-    PackageSupportLevel,
+    AppIdentity, AppOwnerIdentityRef, InstalledArtifactRef, ManagedPackage, PackageCandidate,
+    PackageCompatibility, PackageObservation, PackageSupportLevel,
 };
 pub use storage::{DataInodes, Inode, PackageKey, SlotView, UserId};
 pub use transaction_token::{BootId, CommitNonce, TransactionId};

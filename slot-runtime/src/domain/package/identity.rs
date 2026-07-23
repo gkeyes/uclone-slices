@@ -4,7 +4,45 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::DomainError;
 
-#[doc = "Package identity fields that must remain stable across slot operations."]
+#[doc = "Borrowed immutable owner identity for a managed Android package."]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppOwnerIdentityRef<'a> {
+    uid: u32,
+    signature_sha256: &'a str,
+}
+
+impl<'a> AppOwnerIdentityRef<'a> {
+    #[doc = "Returns the Android application UID that owns the package data."]
+    pub const fn uid(self) -> u32 {
+        self.uid
+    }
+
+    #[doc = "Returns the lower-case signing certificate digest."]
+    pub const fn signature_sha256(self) -> &'a str {
+        self.signature_sha256
+    }
+}
+
+#[doc = "Borrowed mutable installed-artifact facts for a package identity snapshot."]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InstalledArtifactRef<'a> {
+    version_code: u64,
+    code_path: &'a str,
+}
+
+impl<'a> InstalledArtifactRef<'a> {
+    #[doc = "Returns the installed APK version code."]
+    pub const fn version_code(self) -> u64 {
+        self.version_code
+    }
+
+    #[doc = "Returns the canonical APK code path captured by `PackageManager`."]
+    pub const fn code_path(self) -> &'a str {
+        self.code_path
+    }
+}
+
+#[doc = "Validated package observation containing immutable owner and installed-artifact facts."]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "AppIdentityRecord")]
 pub struct AppIdentity {
@@ -83,6 +121,22 @@ impl AppIdentity {
     #[doc = "Returns the canonical APK code path captured by `PackageManager`."]
     pub fn code_path(&self) -> &str {
         &self.code_path
+    }
+
+    #[doc = "Returns the immutable owner portion without allocating."]
+    pub fn owner_identity(&self) -> AppOwnerIdentityRef<'_> {
+        AppOwnerIdentityRef {
+            uid: self.uid,
+            signature_sha256: &self.signature_sha256,
+        }
+    }
+
+    #[doc = "Returns the mutable installed-artifact portion without allocating."]
+    pub fn installed_artifact(&self) -> InstalledArtifactRef<'_> {
+        InstalledArtifactRef {
+            version_code: self.version_code,
+            code_path: &self.code_path,
+        }
     }
 }
 
