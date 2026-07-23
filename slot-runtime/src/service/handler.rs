@@ -3,7 +3,10 @@ use crate::domain::{PackageName, SlotId};
 use crate::protocol::{Command, Request, Response, ResponsePayload};
 use crate::slot_metadata::{SlotDisplayName, SlotSeedMode};
 
-use super::{PreviewService, ServiceError, ServicePlatform};
+use super::{
+    DiagnosticCause, DiagnosticFailure, OperationContext, OperationPhase, PreviewService,
+    ServiceError, ServicePlatform,
+};
 
 enum Mutation<'a> {
     Enroll(&'a PackageName, bool),
@@ -20,24 +23,41 @@ enum Mutation<'a> {
 
 impl<P: ServicePlatform> RequestHandler for PreviewService<P> {
     fn handle(&mut self, request: &Request) -> Response {
+        let mut context = OperationContext::from_request(request);
         let result = if self.recovery_only() && !recovery_command_allowed(request.command()) {
+            context.set_phase(OperationPhase::RecoveryGate);
             Err(ServiceError::RecoveryRequired)
         } else {
-            self.dispatch(request.command())
+            context.set_phase(OperationPhase::Dispatch);
+            self.dispatch(request.command(), &mut context)
         };
         match result {
-            Ok(payload) => {
-                Response::ok(request.request_id().clone(), payload).unwrap_or_else(|_| {
+            Ok(payload) => match Response::ok(request.request_id().clone(), payload) {
+                Ok(response) => response,
+                Err(_) => {
+                    context.set_phase(OperationPhase::ProtocolEncode);
+                    self.record_diagnostic(DiagnosticFailure::new(
+                        context,
+                        DiagnosticCause::ProtocolEncode,
+                        ServiceError::Internal,
+                    ));
                     Response::error(request.request_id().clone(), ServiceError::Internal.code())
-                })
+                }
+            },
+            Err(error) => {
+                self.record_diagnostic(DiagnosticFailure::from_service_error(context, error));
+                Response::error(request.request_id().clone(), error.code())
             }
-            Err(error) => Response::error(request.request_id().clone(), error.code()),
         }
     }
 }
 
 impl<P: ServicePlatform> PreviewService<P> {
-    fn dispatch(&mut self, command: &Command) -> Result<ResponsePayload, ServiceError> {
+    fn dispatch(
+        &mut self,
+        command: &Command,
+        context: &mut OperationContext,
+    ) -> Result<ResponsePayload, ServiceError> {
         match command {
             Command::Probe => self.probe_command(),
             Command::InspectPackage { package } => self.inspect_command(package),
@@ -48,37 +68,54 @@ impl<P: ServicePlatform> PreviewService<P> {
             Command::EnrollPackage {
                 package,
                 accept_direct_boot_conditional,
-            } => self.mutate(&Mutation::Enroll(package, *accept_direct_boot_conditional)),
+            } => self.mutate(
+                context,
+                &Mutation::Enroll(package, *accept_direct_boot_conditional),
+            ),
             Command::CreateSlot {
                 package,
                 display_name,
                 seed_mode,
-            } => self.mutate(&Mutation::Create(package, display_name, *seed_mode)),
+            } => self.mutate(
+                context,
+                &Mutation::Create(package, display_name, *seed_mode),
+            ),
             Command::ListSlots { package } => self.slots_command(package),
-            Command::Switch { package, slot } => self.mutate(&Mutation::Switch(package, slot)),
+            Command::Switch { package, slot } => {
+                self.mutate(context, &Mutation::Switch(package, slot))
+            }
             Command::LaunchCurrent {
                 package,
                 expected_slot,
-            } => self.mutate(&Mutation::LaunchCurrent(package, expected_slot)),
+            } => self.mutate(context, &Mutation::LaunchCurrent(package, expected_slot)),
             Command::RenameSlot {
                 package,
                 slot,
                 display_name,
-            } => self.mutate(&Mutation::Rename(package, slot, display_name)),
-            Command::DeleteSlot { package, slot } => self.mutate(&Mutation::Delete(package, slot)),
-            Command::Reconcile => self.mutate(&Mutation::ReconcileAll),
-            Command::ReconcilePackage { package } => {
-                self.mutate(&Mutation::ReconcilePackage(package))
+            } => self.mutate(context, &Mutation::Rename(package, slot, display_name)),
+            Command::DeleteSlot { package, slot } => {
+                self.mutate(context, &Mutation::Delete(package, slot))
             }
-            Command::RetirePackage { package } => self.mutate(&Mutation::Retire(package)),
-            Command::RescueToBase { package } => self.mutate(&Mutation::Rescue(package)),
+            Command::Reconcile => self.mutate(context, &Mutation::ReconcileAll),
+            Command::ReconcilePackage { package } => {
+                self.mutate(context, &Mutation::ReconcilePackage(package))
+            }
+            Command::RetirePackage { package } => self.mutate(context, &Mutation::Retire(package)),
+            Command::RescueToBase { package } => self.mutate(context, &Mutation::Rescue(package)),
         }
     }
 
-    fn mutate(&mut self, operation: &Mutation<'_>) -> Result<ResponsePayload, ServiceError> {
+    fn mutate(
+        &mut self,
+        context: &mut OperationContext,
+        operation: &Mutation<'_>,
+    ) -> Result<ResponsePayload, ServiceError> {
+        context.set_phase(OperationPhase::MutationGate);
         let guard = self.mutations.clone();
         let _permit = guard.try_acquire().map_err(|_| ServiceError::Busy)?;
+        context.set_phase(OperationPhase::CapabilityCheck);
         self.require_mutation_capability(operation)?;
+        context.set_phase(OperationPhase::Dispatch);
         match operation {
             Mutation::Enroll(package, accept) => self.enroll_command(package, *accept),
             Mutation::Create(package, display_name, seed_mode) => {
@@ -124,6 +161,12 @@ impl<P: ServicePlatform> PreviewService<P> {
             return Err(ServiceError::UnsupportedDevice);
         }
         Ok(())
+    }
+
+    fn record_diagnostic(&self, failure: DiagnosticFailure) {
+        if let Some(sink) = self.diagnostics.as_ref() {
+            sink.record_failure(failure);
+        }
     }
 }
 

@@ -1,6 +1,9 @@
 #![doc = "Daemon command façade for the fixed user-zero Slots Preview workflow."]
 
+use std::sync::Arc;
+
 mod commands;
+mod diagnostic;
 mod error;
 mod handler;
 mod management_commands;
@@ -10,6 +13,10 @@ mod platform;
 mod switch_commands;
 mod validation;
 
+pub use diagnostic::{
+    DiagnosticCause, DiagnosticCommand, DiagnosticFailure, DiagnosticSink, NoopDiagnosticSink,
+    OperationContext, OperationPhase,
+};
 pub use error::{EnrollmentPublicationError, ServiceError};
 pub use model::{
     CapabilitySnapshot, ManagedAppInfo, ObservedGateState, PackageInspection, PackageSnapshot,
@@ -28,6 +35,7 @@ pub struct PreviewService<P> {
     platform: P,
     mutations: MutationGuard,
     mode: ServiceMode,
+    diagnostics: Option<Arc<dyn DiagnosticSink>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +56,21 @@ impl<P> PreviewService<P> {
             platform,
             mutations: MutationGuard::new(),
             mode: ServiceMode::RecoveryOnly,
+            diagnostics: None,
         }
+    }
+
+    #[doc = "Creates a recovery-only service with an injected diagnostic sink."]
+    pub fn with_recovery_only_diagnostic_sink<S>(platform: P, sink: S) -> Self
+    where
+        S: DiagnosticSink + 'static,
+    {
+        Self::with_mode_and_diagnostic_sink(
+            platform,
+            MutationGuard::new(),
+            ServiceMode::RecoveryOnly,
+            Some(Arc::new(sink)),
+        )
     }
 
     /// Creates a service sharing a caller-provided daemon mutation gate.
@@ -57,6 +79,46 @@ impl<P> PreviewService<P> {
             platform,
             mutations,
             mode: ServiceMode::Production,
+            diagnostics: None,
+        }
+    }
+
+    #[doc = "Creates a production service with an injected diagnostic sink."]
+    pub fn with_diagnostic_sink<S>(platform: P, sink: S) -> Self
+    where
+        S: DiagnosticSink + 'static,
+    {
+        Self::with_mutation_guard_and_diagnostic_sink(platform, MutationGuard::new(), sink)
+    }
+
+    #[doc = "Creates a production service with shared mutation and diagnostic seams."]
+    pub fn with_mutation_guard_and_diagnostic_sink<S>(
+        platform: P,
+        mutations: MutationGuard,
+        sink: S,
+    ) -> Self
+    where
+        S: DiagnosticSink + 'static,
+    {
+        Self::with_mode_and_diagnostic_sink(
+            platform,
+            mutations,
+            ServiceMode::Production,
+            Some(Arc::new(sink)),
+        )
+    }
+
+    fn with_mode_and_diagnostic_sink(
+        platform: P,
+        mutations: MutationGuard,
+        mode: ServiceMode,
+        diagnostics: Option<Arc<dyn DiagnosticSink>>,
+    ) -> Self {
+        Self {
+            platform,
+            mutations,
+            mode,
+            diagnostics,
         }
     }
 
