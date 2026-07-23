@@ -47,7 +47,10 @@ fn linux_owner_path_is_pinned_to_open_directory_fd() {
     let pinned = super::lock_directory::PinnedLockDirectory::open(&path).unwrap();
     let owner_path = pinned.owner_path();
     assert!(owner_path.starts_with("/proc/self/fd/"));
-    assert!(owner_path.ends_with("/owner"));
+    assert_eq!(
+        owner_path.file_name(),
+        Some(std::ffi::OsStr::new("owner"))
+    );
 }
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
