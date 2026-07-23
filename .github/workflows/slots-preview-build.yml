@@ -80,6 +80,7 @@ jobs:
         env:
           UCLONE_TARGET_PROFILE: generic
         run: |
+          umask 077
           install -d -m 0700 "$RUNNER_TEMP/uclone-rust-tests"
           export TMPDIR="$RUNNER_TEMP/uclone-rust-tests"
           cargo +1.95.0 fmt --manifest-path slot-runtime/Cargo.toml --all -- --check

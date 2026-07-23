@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, reason = "validated reconciliation test fixtures")]
 
 use std::fs;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt as _, symlink};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -59,13 +59,16 @@ fn enrollment_load_binds_record_to_requested_directory_name() {
     let other = PackageName::parse("com.example.other").unwrap();
     let other_dir = store.root().join("packages").join(other.as_str());
     fs::create_dir(&other_dir).unwrap();
+    fs::set_permissions(&other_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let other_record = other_dir.join("enrollment.json");
     fs::copy(
         store
             .root()
             .join("packages/com.uclone.slotprobe/enrollment.json"),
-        other_dir.join("enrollment.json"),
+        &other_record,
     )
     .unwrap();
+    fs::set_permissions(other_record, fs::Permissions::from_mode(0o600)).unwrap();
 
     assert!(store.load(&other).is_err());
 }

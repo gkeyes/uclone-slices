@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 
 use uclone_slot_runtime::daemon::RequestHandler;
 use uclone_slot_runtime::domain::PackageName;
@@ -6,6 +7,7 @@ use uclone_slot_runtime::journal::JournalStore;
 use uclone_slot_runtime::protocol::{
     AckOperation, Command, ErrorCode, Request, RequestId, ResponsePayload,
 };
+use uclone_slot_runtime::rescue::StartupGateOutcome;
 use uclone_slot_runtime::service::PreviewService;
 
 use super::support::{CrashOnce, FakeMetadata, Fixture};
@@ -123,7 +125,7 @@ fn direct_rescue_authorizes_only_a_target_with_management_evidence() {
 }
 
 #[test]
-fn damaged_management_evidence_requires_recovery_without_gating() {
+fn weak_management_artifact_is_not_direct_rescue_authority() {
     let fixture = Fixture::new();
     let weak = PackageName::parse("com.example.weakartifact").unwrap();
     let root = fixture.ordinary_root().parent().unwrap();
@@ -142,7 +144,7 @@ fn damaged_management_evidence_requires_recovery_without_gating() {
         uclone_slot_runtime::domain::UserId::PRIMARY,
     );
 
-    assert!(platform.authorize_existing_target(&key).is_err());
+    assert!(!platform.authorize_existing_target(&key).unwrap());
     let mut service = PreviewService::new_recovery_only(platform);
     let listed = service.handle(&request(Command::ListRecoveryTargets));
     assert!(matches!(
@@ -152,6 +154,17 @@ fn damaged_management_evidence_requires_recovery_without_gating() {
     let rescued = service.handle(&request(Command::RescueToBase { package: weak }));
     assert_eq!(rescued.error_code(), Some(ErrorCode::NotFound));
     assert_eq!(service.platform().backend().emergency_gate_calls, 0);
+
+    let mut startup = fixture.platform(
+        fixture.backend(),
+        FakeMetadata::default(),
+        CrashOnce::never(),
+    );
+    assert_eq!(
+        startup.hold_startup_gate(&key).unwrap(),
+        StartupGateOutcome::Held
+    );
+    assert_eq!(startup.backend().emergency_gate_calls, 1);
 }
 
 #[test]
@@ -194,6 +207,7 @@ fn valid_rescue_journal_authorizes_target_when_ordinary_journal_is_corrupt() {
 fn unattributed_journal_corruption_cannot_authorize_or_gate_an_arbitrary_target() {
     let fixture = Fixture::new();
     let root = tempfile::TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let journal_root = root.path().join("journal");
     JournalStore::new(&journal_root).unwrap();
     std::fs::create_dir(journal_root.join("transactions/corrupt-published")).unwrap();
