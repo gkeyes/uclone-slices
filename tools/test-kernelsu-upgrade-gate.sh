@@ -43,6 +43,15 @@ case "$command" in
         fi
         ;;
     chmod) exec "$command" "$@" ;;
+    pidof)
+        [ "${1:-}" = ucloned ] || exit 4
+        case "${OLD_DAEMON_RESULT:-absent}" in
+            absent) exit 1 ;;
+            trusted) printf '%s\n' 123 ;;
+            error) exit 2 ;;
+            *) exit 3 ;;
+        esac
+        ;;
     *) exit 127 ;;
 esac
 EOF
@@ -100,22 +109,40 @@ run_case() {
     interrupt=${10}
     activation_interrupt=${11}
     commit_interrupt=${12}
+    installed_state=${13:-enabled}
+    old_daemon_result=${14:-absent}
+    expected_ui=${15:-}
     case_root=$SCRATCH/$name
     runtime=$case_root/runtime
     installed=$case_root/installed
     staging=$case_root/staging
     state=$case_root/upgrade-state
-    mkdir -p "$runtime" "$installed/bin" "$staging" "$state"
+    mkdir -p "$runtime" "$staging" "$state"
     make_toybox "$case_root/toybox"
     make_upgrade_tool "$staging/prepare-upgrade.sh"
     printf '%s\n' '#!/bin/sh' >"$staging/upgrade-freeze.sh"
     chmod 0700 "$staging/upgrade-freeze.sh"
     : >"$staging/disable"
     chmod 0644 "$staging/disable"
+    case "$installed_state" in
+        enabled) mkdir -p "$installed/bin" ;;
+        disabled)
+            mkdir -p "$installed/bin"
+            : >"$installed/disable"
+            chmod 0644 "$installed/disable"
+            ;;
+        missing) ;;
+        *) fail "unknown installed module state $installed_state" ;;
+    esac
     case "$metadata" in
         yes) mkdir -p "$runtime/enrollment/packages/com.asksky.fitness"; : >"$runtime/enrollment/packages/com.asksky.fitness/enrollment.json" ;;
         active) mkdir -p "$runtime/state"; : >"$runtime/state/com.asksky.fitness.gate" ;;
         retired) mkdir -p "$runtime/state"; : >"$runtime/state/.com.asksky.fitness.gate.retired" ;;
+        retired_managed)
+            mkdir -p "$runtime/enrollment/packages/com.asksky.fitness" "$runtime/state"
+            : >"$runtime/enrollment/packages/com.asksky.fitness/enrollment.json"
+            : >"$runtime/state/.com.asksky.fitness.gate.retired"
+            ;;
         no) ;;
         *) fail "unknown metadata fixture $metadata" ;;
     esac
@@ -134,17 +161,20 @@ run_case() {
         mv "$case_root/customize.injected" "$case_root/customize.sh"
     fi
     : >"$case_root/trace"
+    : >"$case_root/ui"
     set +e
     UPGRADE_TRACE=$case_root/trace \
+        UI_TRACE=$case_root/ui \
         UPGRADE_STATE=$state \
         PREPARE_RESULT=$prepare_result \
         CONSUME_RESULT=$consume_result \
         PROOF_COUNT=$proof_count \
+        OLD_DAEMON_RESULT=$old_daemon_result \
         INTERRUPT_AFTER_PROOF=$interrupt \
         INTERRUPT_AFTER_ACTIVATION=$activation_interrupt \
         STAGED_DISABLE=$staging/disable \
         MODPATH=$staging /bin/sh -c '
-            ui_print() { :; }
+            ui_print() { printf "%s\n" "$*" >>"$UI_TRACE"; }
             abort() { exit 73; }
             set_perm() { :; }
             set_perm_recursive() { [ "$INTERRUPT_AFTER_PROOF" = no ] || kill -TERM $$; }
@@ -170,6 +200,25 @@ run_case() {
         [ ! -e "$state/ready" ] && [ ! -e "$state/staged" ] || fail "$name left the old Runtime frozen after installer failure"
         [ -f "$staging/disable" ] || fail "$name changed the staged activation state on failure or fresh install"
     fi
+    if [ -n "$expected_ui" ]; then
+        grep -F "$expected_ui" "$case_root/ui" >/dev/null ||
+            fail "$name did not explain the fail-closed recovery reinstall"
+        case "$metadata" in
+            active) [ -f "$runtime/state/com.asksky.fitness.gate" ] ||
+                fail "$name changed the active Gate evidence" ;;
+            retired_managed)
+                [ -f "$runtime/enrollment/packages/com.asksky.fitness/enrollment.json" ] &&
+                    [ -f "$runtime/state/.com.asksky.fitness.gate.retired" ] ||
+                    fail "$name changed existing retired recovery state"
+                ;;
+        esac
+        case "$installed_state" in
+            disabled) [ -f "$installed/disable" ] ||
+                fail "$name changed the installed disable marker" ;;
+            missing) [ ! -e "$installed" ] && [ ! -L "$installed" ] ||
+                fail "$name created or replaced the missing installed module" ;;
+        esac
+    fi
 }
 
 run_case clean pass no no pass pass '' no 0 no no no
@@ -182,6 +231,21 @@ run_case stage_failed reject yes no pass reject $'--verify\n--prepare\n--verify\
 run_case signal_after_freeze interrupted yes no pass pass $'--verify\n--prepare\n--verify\n--cancel\n' no 1 yes no no
 run_case cancel_after_stage interrupted yes no pass pass $'--verify\n--prepare\n--verify\n--stage\n--cancel\n' no 1 no yes no
 run_case signal_during_commit pass yes no pass pass $'--verify\n--prepare\n--verify\n--stage\n' yes 1 no no yes
+run_case orphaned_disabled_recovery pass retired_managed no freeze_fail pass '' no 1 no no no \
+    disabled absent \
+    'Recovery reinstall keeps the staged module disabled and does not prove Base, retired, or complete.'
+run_case active_gate_disabled_recovery pass active no freeze_fail pass '' no 1 no no no \
+    disabled absent \
+    'Recovery reinstall keeps the staged module disabled and does not prove Base, retired, or complete.'
+run_case disabled_live_daemon pass yes no pass pass $'--verify\n--prepare\n--verify\n--stage\n' \
+    yes 1 no no no disabled trusted
+run_case disabled_daemon_probe_error reject yes no freeze_fail pass \
+    $'--verify\n--prepare\n--cancel\n' no 1 no no no disabled error
+run_case missing_module_recovery pass retired_managed no freeze_fail pass '' \
+    no 1 no no no missing absent \
+    'Recovery reinstall keeps the staged module disabled and does not prove Base, retired, or complete.'
+run_case missing_module_live_daemon reject yes no freeze_fail pass \
+    $'--verify\n--prepare\n--cancel\n' no 1 no no no missing trusted
 
 ignore_line=$(grep -n "trap '' 0 HUP INT TERM" "$SOURCE" | tail -1 | cut -d: -f1)
 restore_line=$(grep -n 'trap - 0 HUP INT TERM' "$SOURCE" | tail -1 | cut -d: -f1)

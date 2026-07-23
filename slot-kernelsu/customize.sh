@@ -1,12 +1,14 @@
 #!/system/bin/sh
 
 RUNTIME_ROOT=/data/adb/uclone-slices-preview
+INSTALLED_MODULE=/data/adb/modules/uclone-slices-preview
 TOYBOX_BIN=/system/bin/toybox
 SYSTEM_SHELL=/system/bin/sh
 UPGRADE_REFUSAL=
 UPGRADE_APP_COUNT=0
 UPGRADE_PROOF_HELD=0
 UPGRADE_STAGING_ACTIVATED=0
+ORPHANED_RECOVERY_REINSTALL=0
 
 root_has_artifact() {
     root=$1
@@ -66,6 +68,33 @@ safe_upgrade_file() {
     mode="$($TOYBOX_BIN stat -c '%a' "$1" 2>/dev/null)" || return 1
     case "$mode" in *[!0-7]*|'') return 1 ;; esac
     [ $(((mode / 10) % 10 & 2)) -eq 0 ] && [ $((mode % 10 & 2)) -eq 0 ]
+}
+
+safe_upgrade_directory() {
+    [ -d "$1" ] && [ ! -L "$1" ] || return 1
+    owner="$($TOYBOX_BIN stat -c '%u' "$1" 2>/dev/null)" || return 1
+    [ "$owner" = 0 ] || return 1
+    mode="$($TOYBOX_BIN stat -c '%a' "$1" 2>/dev/null)" || return 1
+    case "$mode" in *[!0-7]*|'') return 1 ;; esac
+    [ $(((mode / 10) % 10 & 2)) -eq 0 ] && [ $((mode % 10 & 2)) -eq 0 ]
+}
+
+old_daemon_process_absent() {
+    pids="$($TOYBOX_BIN pidof ucloned 2>/dev/null)"
+    result=$?
+    [ "$result" -eq 1 ] && [ -z "$pids" ]
+}
+
+installed_runtime_inactive_for_recovery() {
+    if [ ! -e "$INSTALLED_MODULE" ] && [ ! -L "$INSTALLED_MODULE" ]; then
+        return 0
+    fi
+    safe_upgrade_directory "$INSTALLED_MODULE" &&
+        safe_upgrade_file "$INSTALLED_MODULE/disable"
+}
+
+orphaned_recovery_reinstall_ready() {
+    installed_runtime_inactive_for_recovery && old_daemon_process_absent
 }
 
 safe_upgrade_tools() {
@@ -139,14 +168,21 @@ paired_upgrade_ready() {
 }
 
 if management_metadata_present || active_gate_present; then
-    ui_print 'UClone Slots: existing managed Apps detected; freezing the old Runtime for paired upgrade.'
-    if ! paired_upgrade_ready; then
-        ui_print "UClone Slots: $UPGRADE_REFUSAL."
-        ui_print 'Switch every managed App to Base, wait for completion, then retry. Existing slots are preserved.'
-        abort 'UClone Slots paired upgrade refused'
+    if orphaned_recovery_reinstall_ready; then
+        ORPHANED_RECOVERY_REINSTALL=1
+        ui_print 'UClone Slots: no active installed Runtime is available and no ucloned process is live.'
+        ui_print 'UClone Slots: preserving all existing management state for recovery reinstall.'
+        ui_print 'Recovery reinstall keeps the staged module disabled and does not prove Base, retired, or complete.'
+    else
+        ui_print 'UClone Slots: existing managed Apps detected; freezing the old Runtime for paired upgrade.'
+        if ! paired_upgrade_ready; then
+            ui_print "UClone Slots: $UPGRADE_REFUSAL."
+            ui_print 'Switch every managed App to Base, wait for completion, then retry. Existing slots are preserved.'
+            abort 'UClone Slots paired upgrade refused'
+        fi
+        ui_print "UClone Slots: verified $UPGRADE_APP_COUNT managed App(s) on native Base with the old Runtime stopped."
+        ui_print 'UClone Slots: preserving registrations and slots.'
     fi
-    ui_print "UClone Slots: verified $UPGRADE_APP_COUNT managed App(s) on native Base with the old Runtime stopped."
-    ui_print 'UClone Slots: preserving registrations and slots.'
 fi
 
 set_perm_recursive "$MODPATH" 0 0 0700 0600
@@ -180,4 +216,12 @@ if [ "$UPGRADE_PROOF_HELD" -eq 1 ]; then
     trap - 0 HUP INT TERM
     ui_print 'UClone Slots: old Runtime remains safely stopped until reboot activates the paired update.'
     ui_print 'To cancel before reboot, run the staged root-owned prepare-upgrade.sh --cancel, then remove the staged module update.'
+fi
+
+if [ "$ORPHANED_RECOVERY_REINSTALL" -eq 1 ]; then
+    safe_upgrade_file "$MODPATH/disable" ||
+        abort 'UClone Slots recovery reinstall lost its staged disable marker'
+    old_daemon_process_absent ||
+        abort 'UClone Slots recovery reinstall observed a new daemon and remains disabled'
+    ui_print 'UClone Slots: recovery Runtime installed disabled; no active-slot claim was changed.'
 fi
