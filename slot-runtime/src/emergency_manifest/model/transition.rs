@@ -1,6 +1,8 @@
 use super::super::{ContainmentObligation, EmergencyManifestError, PackageContainment};
 use super::EmergencyManifestV1;
 
+mod new_boot;
+
 impl EmergencyManifestV1 {
     /// Validates a same-boot generation and every package obligation transition.
     pub fn validate_transition_from(&self, previous: &Self) -> Result<(), EmergencyManifestError> {
@@ -21,9 +23,16 @@ impl EmergencyManifestV1 {
             });
         }
         self.validate()?;
+        self.validate_same_boot_package_transitions(previous)
+    }
+
+    fn validate_same_boot_package_transitions(
+        &self,
+        previous: &Self,
+    ) -> Result<(), EmergencyManifestError> {
         for previous_entry in previous.packages() {
             match self.entry_for(previous_entry.package()) {
-                Some(next) => validate_entry_transition(previous_entry, next)?,
+                Some(next) => validate_same_boot_entry_transition(previous_entry, next)?,
                 None => {
                     return Err(EmergencyManifestError::IllegalTransition {
                         package: previous_entry.package().to_string(),
@@ -41,7 +50,10 @@ impl EmergencyManifestV1 {
         Ok(())
     }
 
-    fn entry_for(&self, package: &crate::domain::PackageName) -> Option<&PackageContainment> {
+    pub(super) fn entry_for(
+        &self,
+        package: &crate::domain::PackageName,
+    ) -> Option<&PackageContainment> {
         self.packages()
             .binary_search_by(|entry| entry.package().cmp(package))
             .ok()
@@ -49,7 +61,7 @@ impl EmergencyManifestV1 {
     }
 }
 
-fn validate_new_entry(entry: &PackageContainment) -> Result<(), EmergencyManifestError> {
+pub(super) fn validate_new_entry(entry: &PackageContainment) -> Result<(), EmergencyManifestError> {
     if entry.enrollment_epoch() != 1 {
         return Err(EmergencyManifestError::EnrollmentEpoch {
             package: entry.package().to_string(),
@@ -73,36 +85,56 @@ fn validate_new_entry(entry: &PackageContainment) -> Result<(), EmergencyManifes
     }
 }
 
-fn validate_entry_transition(
+fn validate_same_boot_entry_transition(
     previous: &PackageContainment,
     next: &PackageContainment,
 ) -> Result<(), EmergencyManifestError> {
-    let next_epoch = match (previous.obligation(), next.obligation()) {
-        (
-            ContainmentObligation::BaseRetired | ContainmentObligation::NotManaged,
-            ContainmentObligation::Held | ContainmentObligation::HeldRecovery,
-        ) => previous
+    let terminal = matches!(
+        previous.obligation(),
+        ContainmentObligation::BaseRetired | ContainmentObligation::NotManaged
+    );
+    let reenrollment = matches!(
+        next.obligation(),
+        ContainmentObligation::Held | ContainmentObligation::HeldRecovery
+    );
+    if terminal && reenrollment {
+        let next_epoch = previous
             .enrollment_epoch()
             .checked_add(1)
-            .ok_or(EmergencyManifestError::BoundExceeded("enrollment epoch"))?,
-        _ => previous.enrollment_epoch(),
-    };
-    if next.enrollment_epoch() != next_epoch {
+            .ok_or(EmergencyManifestError::BoundExceeded("enrollment epoch"))?;
+        if next.enrollment_epoch() != next_epoch {
+            return Err(EmergencyManifestError::EnrollmentEpoch {
+                package: next.package().to_string(),
+                expected: next_epoch,
+                actual: next.enrollment_epoch(),
+            });
+        }
+        return Ok(());
+    }
+    if terminal && next.enrollment_epoch() != previous.enrollment_epoch() {
+        let reenrollment_epoch = previous
+            .enrollment_epoch()
+            .checked_add(1)
+            .ok_or(EmergencyManifestError::BoundExceeded("enrollment epoch"))?;
+        if next.enrollment_epoch() == reenrollment_epoch {
+            return Err(EmergencyManifestError::illegal(
+                next.package().as_str(),
+                previous.obligation(),
+                next.obligation(),
+            ));
+        }
+    }
+    if next.enrollment_epoch() != previous.enrollment_epoch() {
         return Err(EmergencyManifestError::EnrollmentEpoch {
             package: next.package().to_string(),
-            expected: next_epoch,
+            expected: previous.enrollment_epoch(),
             actual: next.enrollment_epoch(),
         });
     }
-    if previous.obligation() == ContainmentObligation::BaseRetired
-        && matches!(
-            next.obligation(),
-            ContainmentObligation::Held | ContainmentObligation::HeldRecovery
-        )
+    if previous
+        .obligation()
+        .can_transition_same_boot_to(next.obligation())
     {
-        return Ok(());
-    }
-    if previous.obligation().can_transition_to(next.obligation()) {
         Ok(())
     } else {
         Err(EmergencyManifestError::illegal(

@@ -85,17 +85,16 @@ impl EmergencyManifestStore {
         if let Some(previous) = self.load()? {
             if previous.boot_id() == manifest.boot_id() {
                 manifest.validate_transition_from(&previous)?;
-            } else if manifest.generation() != 1 {
-                return Err(EmergencyManifestError::StaleGeneration {
-                    expected: 1,
-                    actual: manifest.generation(),
-                });
+            } else {
+                manifest.validate_new_boot_from(&previous)?;
             }
         } else if manifest.generation() != 1 {
             return Err(EmergencyManifestError::StaleGeneration {
                 expected: 1,
                 actual: manifest.generation(),
             });
+        } else {
+            manifest.validate_new_boot_root()?;
         }
         let bytes = serde_json::to_vec(manifest)?;
         storage::write_atomic(&self.path, &self.root, &bytes, self.owner_uid)?;

@@ -1,15 +1,15 @@
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
 use super::types::derive_overall;
 use super::{
-    ContainmentObligation, EmergencyManifestError, OverallDisposition, PackageContainment,
-    SCHEMA_VERSION,
+    ContainmentObligation, DiscoveryIntegrity, EmergencyManifestError, OverallDisposition,
+    PackageContainment, RuntimeOwnerProof, SCHEMA_VERSION,
 };
 use crate::domain::{BootId, PackageName};
 
 mod transition;
+mod validation;
+mod wire;
 
-const MAX_PACKAGES: usize = 512;
+pub(super) const MAX_PACKAGES: usize = 512;
 
 /// Versioned, boot-scoped emergency containment manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,25 +17,8 @@ pub struct EmergencyManifestV1 {
     schema_version: u32,
     boot_id: BootId,
     generation: u64,
-    overall_disposition: OverallDisposition,
-    packages: Vec<PackageContainment>,
-}
-
-#[derive(Debug, Serialize)]
-struct ManifestRecord<'a> {
-    schema_version: u32,
-    boot_id: &'a BootId,
-    generation: u64,
-    overall_disposition: OverallDisposition,
-    packages: &'a [PackageContainment],
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct OwnedManifestRecord {
-    schema_version: u32,
-    boot_id: BootId,
-    generation: u64,
+    discovery_integrity: DiscoveryIntegrity,
+    runtime_owner_proof: Option<RuntimeOwnerProof>,
     overall_disposition: OverallDisposition,
     packages: Vec<PackageContainment>,
 }
@@ -45,6 +28,23 @@ impl EmergencyManifestV1 {
     pub fn new(
         boot_id: BootId,
         generation: u64,
+        packages: Vec<PackageContainment>,
+    ) -> Result<Self, EmergencyManifestError> {
+        Self::with_context(
+            boot_id,
+            generation,
+            DiscoveryIntegrity::Complete,
+            None,
+            packages,
+        )
+    }
+
+    /// Builds a manifest from explicit discovery integrity and Runtime ownership evidence.
+    pub fn with_context(
+        boot_id: BootId,
+        generation: u64,
+        discovery_integrity: DiscoveryIntegrity,
+        runtime_owner_proof: Option<RuntimeOwnerProof>,
         mut packages: Vec<PackageContainment>,
     ) -> Result<Self, EmergencyManifestError> {
         if generation == 0 {
@@ -74,14 +74,18 @@ impl EmergencyManifestV1 {
                 "enrollment epoch must be non-zero".to_owned(),
             ));
         }
-        let overall_disposition = derive_overall(&packages);
-        Ok(Self {
+        let overall_disposition = derive_overall(discovery_integrity, &packages);
+        let manifest = Self {
             schema_version: SCHEMA_VERSION,
             boot_id,
             generation,
+            discovery_integrity,
+            runtime_owner_proof,
             overall_disposition,
             packages,
-        })
+        };
+        manifest.validate()?;
+        Ok(manifest)
     }
 
     /// Returns the schema version of this manifest.
@@ -97,6 +101,16 @@ impl EmergencyManifestV1 {
     /// Returns the one-based manifest generation.
     pub const fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Returns whether package discovery was complete and trustworthy.
+    pub const fn discovery_integrity(&self) -> DiscoveryIntegrity {
+        self.discovery_integrity
+    }
+
+    /// Returns the exact Runtime incarnation that consumers must revalidate live.
+    pub const fn runtime_owner_proof(&self) -> Option<&RuntimeOwnerProof> {
+        self.runtime_owner_proof.as_ref()
     }
 
     /// Returns the disposition derived from all package obligations.
@@ -116,87 +130,5 @@ impl EmergencyManifestV1 {
             .ok()
             .and_then(|index| self.packages.get(index))
             .map(PackageContainment::obligation)
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), EmergencyManifestError> {
-        if self.schema_version != SCHEMA_VERSION || self.generation == 0 {
-            return Err(EmergencyManifestError::InvalidManifest(
-                "unsupported schema or zero generation".to_owned(),
-            ));
-        }
-        if self.packages.len() > MAX_PACKAGES {
-            return Err(EmergencyManifestError::BoundExceeded("package entries"));
-        }
-        for pair in self.packages.windows(2) {
-            let [previous, next] = pair else {
-                return Err(EmergencyManifestError::Corrupt(
-                    "invalid package ordering window".to_owned(),
-                ));
-            };
-            if previous.package() >= next.package() {
-                return Err(EmergencyManifestError::InvalidManifest(
-                    "packages must be unique and sorted".to_owned(),
-                ));
-            }
-        }
-        if self
-            .packages
-            .iter()
-            .any(|entry| entry.enrollment_epoch() == 0)
-        {
-            return Err(EmergencyManifestError::InvalidManifest(
-                "enrollment epoch must be non-zero".to_owned(),
-            ));
-        }
-        if derive_overall(&self.packages) != self.overall_disposition {
-            return Err(EmergencyManifestError::InvalidManifest(
-                "overall disposition does not match package obligations".to_owned(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-impl Serialize for EmergencyManifestV1 {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        ManifestRecord {
-            schema_version: self.schema_version,
-            boot_id: &self.boot_id,
-            generation: self.generation,
-            overall_disposition: self.overall_disposition,
-            packages: &self.packages,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for EmergencyManifestV1 {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let record = OwnedManifestRecord::deserialize(deserializer)?;
-        let packages = record.packages.clone();
-        let manifest = Self::new(record.boot_id, record.generation, record.packages)
-            .map_err(serde::de::Error::custom)?;
-        if record.schema_version != SCHEMA_VERSION {
-            return Err(serde::de::Error::custom(
-                "unsupported emergency manifest schema",
-            ));
-        }
-        if manifest.overall_disposition != record.overall_disposition {
-            return Err(serde::de::Error::custom(
-                "overall disposition does not match package obligations",
-            ));
-        }
-        if manifest.packages != packages {
-            return Err(serde::de::Error::custom(
-                "packages must be sorted by package name",
-            ));
-        }
-        Ok(manifest)
     }
 }

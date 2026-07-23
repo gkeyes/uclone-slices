@@ -3,7 +3,17 @@ use serde::{Deserialize, Serialize};
 use crate::domain::PackageName;
 
 /// Version of the boot-time emergency manifest wire record.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
+
+/// Trustworthiness of the package-discovery evidence used to build one manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryIntegrity {
+    /// Discovery completed and every attributable package fact was represented.
+    Complete,
+    /// Discovery was incomplete, corrupt, or could not attribute every safety fact.
+    Untrusted,
+}
 
 /// Containment obligation for one package during boot convergence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -13,6 +23,10 @@ pub enum ContainmentObligation {
     Held,
     /// Keep the package held and require recovery before release.
     HeldRecovery,
+    /// Let the emergency watcher defer only while a live typed Runtime owner proof matches.
+    ///
+    /// This state does not prove that the package is enabled or that starting it is safe.
+    RuntimeOwned,
     /// The package has been retired to native Base.
     BaseRetired,
     /// The package is outside the managed set and needs no containment.
@@ -25,25 +39,47 @@ impl ContainmentObligation {
         match self {
             Self::Held => "held",
             Self::HeldRecovery => "held_recovery",
+            Self::RuntimeOwned => "runtime_owned",
             Self::BaseRetired => "base_retired",
             Self::NotManaged => "not_managed",
         }
     }
 
-    /// Returns whether an obligation may follow this proven obligation.
-    pub const fn can_transition_to(self, next: Self) -> bool {
+    /// Returns whether an obligation may follow during the same boot and enrollment epoch.
+    pub const fn can_transition_same_boot_to(self, next: Self) -> bool {
         match self {
-            Self::Held => matches!(next, Self::Held | Self::HeldRecovery | Self::BaseRetired),
-            Self::HeldRecovery => matches!(next, Self::HeldRecovery | Self::BaseRetired),
-            Self::BaseRetired => matches!(next, Self::BaseRetired),
-            Self::NotManaged => {
-                matches!(next, Self::NotManaged | Self::Held | Self::HeldRecovery)
+            Self::Held => matches!(
+                next,
+                Self::Held | Self::HeldRecovery | Self::RuntimeOwned | Self::BaseRetired
+            ),
+            Self::HeldRecovery => matches!(
+                next,
+                Self::HeldRecovery | Self::RuntimeOwned | Self::BaseRetired
+            ),
+            Self::RuntimeOwned => {
+                matches!(next, Self::RuntimeOwned | Self::Held | Self::HeldRecovery)
             }
+            Self::BaseRetired => matches!(next, Self::BaseRetired),
+            Self::NotManaged => matches!(next, Self::NotManaged),
+        }
+    }
+
+    /// Returns whether an obligation may seed the next boot without new side effects.
+    pub const fn can_transition_new_boot_to(self, next: Self) -> bool {
+        match self {
+            Self::Held => matches!(next, Self::Held | Self::HeldRecovery),
+            Self::HeldRecovery => matches!(next, Self::HeldRecovery),
+            Self::RuntimeOwned => matches!(next, Self::Held | Self::HeldRecovery),
+            Self::BaseRetired => matches!(next, Self::BaseRetired),
+            Self::NotManaged => matches!(next, Self::NotManaged),
         }
     }
 }
 
 /// Aggregate boot disposition derived strictly from package obligations.
+///
+/// Mixed packages are ordered fail-closed as `HeldRecovery`, `Held`, `RuntimeOwned`,
+/// `BaseRetired`, then `NotManaged`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OverallDisposition {
@@ -51,10 +87,26 @@ pub enum OverallDisposition {
     Held,
     /// At least one package is held and requires recovery.
     HeldRecovery,
+    /// At least one package is conditionally delegated to a proven live Runtime owner.
+    ///
+    /// Consumers must still validate that typed owner proof before deferring containment.
+    RuntimeOwned,
     /// Every managed package has reached native Base.
     BaseRetired,
     /// No package is managed by the runtime.
     NotManaged,
+}
+
+impl OverallDisposition {
+    const fn priority(self) -> u8 {
+        match self {
+            Self::NotManaged => 0,
+            Self::BaseRetired => 1,
+            Self::RuntimeOwned => 2,
+            Self::Held => 3,
+            Self::HeldRecovery => 4,
+        }
+    }
 }
 
 /// One sorted package-to-containment obligation entry.
@@ -101,26 +153,25 @@ impl PackageContainment {
     }
 }
 
-pub(super) fn derive_overall(packages: &[PackageContainment]) -> OverallDisposition {
-    let mut result = OverallDisposition::NotManaged;
+pub(super) fn derive_overall(
+    discovery_integrity: DiscoveryIntegrity,
+    packages: &[PackageContainment],
+) -> OverallDisposition {
+    let mut result = match discovery_integrity {
+        DiscoveryIntegrity::Complete => OverallDisposition::NotManaged,
+        DiscoveryIntegrity::Untrusted => OverallDisposition::HeldRecovery,
+    };
     for package in packages {
-        result = match package.obligation {
+        let candidate = match package.obligation {
             ContainmentObligation::HeldRecovery => OverallDisposition::HeldRecovery,
-            ContainmentObligation::Held if result != OverallDisposition::HeldRecovery => {
-                OverallDisposition::Held
-            }
-            ContainmentObligation::Held => result,
-            ContainmentObligation::BaseRetired
-                if matches!(
-                    result,
-                    OverallDisposition::NotManaged | OverallDisposition::BaseRetired
-                ) =>
-            {
-                OverallDisposition::BaseRetired
-            }
-            ContainmentObligation::BaseRetired => result,
-            ContainmentObligation::NotManaged => result,
+            ContainmentObligation::Held => OverallDisposition::Held,
+            ContainmentObligation::RuntimeOwned => OverallDisposition::RuntimeOwned,
+            ContainmentObligation::BaseRetired => OverallDisposition::BaseRetired,
+            ContainmentObligation::NotManaged => OverallDisposition::NotManaged,
         };
+        if candidate.priority() > result.priority() {
+            result = candidate;
+        }
     }
     result
 }

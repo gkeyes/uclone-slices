@@ -3,14 +3,19 @@
 mod error;
 mod lock;
 mod model;
+mod owner;
 mod storage;
 mod store;
 mod types;
 
 pub use error::EmergencyManifestError;
 pub use model::EmergencyManifestV1;
+pub use owner::{RuntimeOwnerProof, RuntimeOwnerRole};
 pub use store::{EmergencyManifestStore, MANIFEST_FILE_NAME};
-pub use types::{ContainmentObligation, OverallDisposition, PackageContainment, SCHEMA_VERSION};
+pub use types::{
+    ContainmentObligation, DiscoveryIntegrity, OverallDisposition, PackageContainment,
+    SCHEMA_VERSION,
+};
 
 pub(super) const fn no_follow_flag() -> i32 {
     #[cfg(target_os = "macos")]
