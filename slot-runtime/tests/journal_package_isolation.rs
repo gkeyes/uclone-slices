@@ -35,7 +35,10 @@ fn attributable_corruption_is_visible_only_to_its_package() {
     let key_b = PackageKey::new(package_b.clone(), UserId::PRIMARY);
     let healthy = store.list_for_package(&key_b).unwrap();
     assert_eq!(healthy.len(), 1);
-    assert_eq!(healthy[0].spec().package_name(), &package_b);
+    assert_eq!(
+        healthy.first().map(|journal| journal.spec().package_name()),
+        Some(&package_b)
+    );
     assert!(store.list_for_package(&key_a).is_err());
 
     let scan = store.package_names().unwrap();

@@ -23,8 +23,9 @@ fn read_request_frame(stream: &mut UnixStream) -> Vec<u8> {
     loop {
         let mut byte = [0_u8; 1];
         stream.read_exact(&mut byte).unwrap();
-        received.push(byte[0]);
-        if byte[0] == b'\n' {
+        let [value] = byte;
+        received.push(value);
+        if value == b'\n' {
             return received;
         }
     }
