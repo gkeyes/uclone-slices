@@ -12,12 +12,14 @@ use crate::protocol::{ErrorCode, ProtocolError, Request, RequestId, Response, Un
 
 mod command;
 mod direct;
+mod emergency_status;
 mod execute;
 mod rpc;
 mod timeout;
 mod upgrade_readiness;
 
 pub use command::{CliCommand, SeedArgument};
+pub use emergency_status::EmergencyStatusError;
 pub use execute::{execute, execute_request};
 pub use upgrade_readiness::UpgradeReadinessError;
 
@@ -58,6 +60,9 @@ pub enum CliError {
     /// The installed Runtime could not prove every managed package safe for upgrade.
     #[error("upgrade readiness rejected: {0}")]
     UpgradeReadiness(#[from] UpgradeReadinessError),
+    /// The direct emergency status proof could not be established.
+    #[error("emergency status rejected: {0}")]
+    EmergencyStatus(#[from] EmergencyStatusError),
 }
 
 /// A request/response transport boundary that can be replaced in tests.
@@ -118,6 +123,9 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
     let mut diagnostics = stderr.lock();
     if matches!(cli.command, CliCommand::Rpc) {
         return rpc::run(io::stdin().lock(), &mut output, &mut diagnostics);
+    }
+    if let CliCommand::EmergencyStatus { cursor, limit } = &cli.command {
+        return emergency_status::run(*cursor, *limit, &mut output, &mut diagnostics);
     }
     if matches!(cli.command, CliCommand::UpgradeReadiness) {
         return upgrade_readiness::run(&mut output, &mut diagnostics);

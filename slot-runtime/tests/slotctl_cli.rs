@@ -53,6 +53,15 @@ fn success_response(request: &Request) -> Response {
 fn parser_exposes_only_the_typed_command_surface() {
     let cases = [
         vec!["slotctl", "rpc"],
+        vec!["slotctl", "emergency-status"],
+        vec![
+            "slotctl",
+            "emergency-status",
+            "--cursor",
+            "1",
+            "--limit",
+            "16",
+        ],
         vec!["slotctl", "probe"],
         vec!["slotctl", "inspect", SAMPLE_PACKAGE],
         vec!["slotctl", "apps"],
@@ -89,6 +98,7 @@ fn parser_exposes_only_the_typed_command_surface() {
     }
     let help = Cli::command().render_help().to_string();
     assert!(help.contains("probe"));
+    assert!(help.contains("emergency-status"));
     assert!(help.contains("rescue"));
     assert!(!help.contains("runtime-root"));
     assert!(!help.contains("shell"));
@@ -101,6 +111,24 @@ fn rpc_has_no_shell_or_path_arguments_and_is_not_locally_synthesized() {
     assert!(Cli::try_parse_from(["slotctl", "rpc", "/data"]).is_err());
     let rpc = Cli::try_parse_from(["slotctl", "rpc"]).unwrap();
     assert!(rpc.command.request().is_err());
+}
+
+#[test]
+fn emergency_status_is_direct_bounded_and_never_builds_a_daemon_request() {
+    let status = Cli::try_parse_from([
+        "slotctl",
+        "emergency-status",
+        "--cursor",
+        "512",
+        "--limit",
+        "32",
+    ])
+    .unwrap();
+    assert!(status.command.request().is_err());
+    assert!(Cli::try_parse_from(["slotctl", "emergency-status", "--cursor", "513"]).is_err());
+    assert!(Cli::try_parse_from(["slotctl", "emergency-status", "--limit", "0"]).is_err());
+    assert!(Cli::try_parse_from(["slotctl", "emergency-status", "--limit", "33"]).is_err());
+    assert!(Cli::try_parse_from(["slotctl", "emergency-status", "/data"]).is_err());
 }
 
 #[test]

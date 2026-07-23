@@ -29,6 +29,15 @@ impl From<SeedArgument> for SlotSeedMode {
 pub enum CliCommand {
     /// Read exactly one strict protocol frame from standard input.
     Rpc,
+    /// Read the fixed emergency containment manifest without contacting the daemon.
+    EmergencyStatus {
+        /// Zero-based package cursor, bounded by the manifest package limit.
+        #[arg(long, default_value_t = 0, value_parser = parse_emergency_cursor)]
+        cursor: u16,
+        /// Maximum package entries returned in one bounded frame.
+        #[arg(long, default_value_t = 32, value_parser = parse_emergency_limit)]
+        limit: u8,
+    },
     /// Probe runtime and device capabilities.
     Probe,
     /// Inspect one installed user-zero package before enrollment.
@@ -124,7 +133,7 @@ impl CliCommand {
     /// Converts validated CLI fields into one strict protocol request.
     pub fn request(&self) -> Result<Request, CliError> {
         let command = match self {
-            Self::Rpc | Self::UpgradeReadiness => {
+            Self::Rpc | Self::EmergencyStatus { .. } | Self::UpgradeReadiness => {
                 return Err(CliError::InvalidArgument(
                     "direct CLI checks do not build ordinary protocol requests".to_owned(),
                 ));
@@ -214,4 +223,26 @@ fn parse_slot(raw: &str) -> Result<SlotId, CliError> {
 
 fn parse_name(raw: &str) -> Result<SlotDisplayName, CliError> {
     SlotDisplayName::parse(raw).map_err(|error| CliError::InvalidArgument(error.to_string()))
+}
+
+fn parse_emergency_cursor(raw: &str) -> Result<u16, String> {
+    let cursor = raw
+        .parse::<u16>()
+        .map_err(|_| "cursor must be an integer from 0 through 512".to_owned())?;
+    if cursor <= 512 {
+        Ok(cursor)
+    } else {
+        Err("cursor must be an integer from 0 through 512".to_owned())
+    }
+}
+
+fn parse_emergency_limit(raw: &str) -> Result<u8, String> {
+    let limit = raw
+        .parse::<u8>()
+        .map_err(|_| "limit must be an integer from 1 through 32".to_owned())?;
+    if (1..=32).contains(&limit) {
+        Ok(limit)
+    } else {
+        Err("limit must be an integer from 1 through 32".to_owned())
+    }
 }

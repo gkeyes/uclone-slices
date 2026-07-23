@@ -20,6 +20,7 @@ pub(super) const fn for_command(command: &CliCommand) -> Duration {
         | CliCommand::Reconcile { .. }
         | CliCommand::Retire { .. } => MUTATION_TIMEOUT,
         CliCommand::Rpc
+        | CliCommand::EmergencyStatus { .. }
         | CliCommand::UpgradeReadiness
         | CliCommand::Probe
         | CliCommand::Inspect { .. }
