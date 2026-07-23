@@ -9,6 +9,7 @@ FD_ROOT=/proc/self/fd
 FD_EXEC_INTERPRETER=
 case "$0" in */*) SCRIPT_ROOT=${0%/*} ;; *) SCRIPT_ROOT=. ;; esac
 FREEZE_HELPER=$SCRIPT_ROOT/upgrade-freeze.sh
+STAGED_SLOTCTL=$SCRIPT_ROOT/bin/slotctl
 PROOF_ROOT=$RUNTIME_ROOT/upgrade
 PROOF_FILE=$PROOF_ROOT/base-proof
 BOOT_ID_FILE=/proc/sys/kernel/random/boot_id
@@ -129,15 +130,10 @@ control_digest() {
     return "$result"
 }
 managed_base_count() {
-    frame="$($TOYBOX_BIN timeout -s 9 30 "$TOYBOX_BIN" nsenter -t 1 -m -- "$SYSTEM_SHELL" "$SCRIPT_ROOT/prepare-upgrade.sh" --pid1-slotctl apps 2>/dev/null)" || return 1
-    [ "$(printf '%s\n' "$frame" | "$TOYBOX_BIN" wc -l | "$TOYBOX_BIN" tr -d '[:space:]')" = 1 ] || return 1
-    printf '%s\n' "$frame" | "$TOYBOX_BIN" grep -E -x '\{"schema_version":1,"request_id":"[A-Za-z0-9_.-]+","status":"ok","payload":\{"kind":"managed_apps","data":\{"apps":\[.*\]\}\}\}' >/dev/null 2>&1 || return 1
-    rows="$(printf '%s\n' "$frame" | "$TOYBOX_BIN" sed -n 's|^{"schema_version":1,"request_id":"[A-Za-z0-9_.-]*","status":"ok","payload":{"kind":"managed_apps","data":{"apps":\[\(.*\)\]}}}$|\1|p')" || return 1
-    [ -z "$rows" ] && { printf '%s\n' 0; return 0; }
-    printf '%s\n' "$rows" | "$TOYBOX_BIN" grep -E -x '\{"package":"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+","active_slot":"[a-z][a-z0-9_-]*","lifecycle":"normal"\}(,\{"package":"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+","active_slot":"[a-z][a-z0-9_-]*","lifecycle":"normal"\})*' >/dev/null 2>&1 || return 1
-    [ -z "$(printf '%s\n' "$rows" | "$TOYBOX_BIN" grep -o '"active_slot":"[^\"]*"' 2>/dev/null | "$TOYBOX_BIN" grep -F -v '"active_slot":"base"' 2>/dev/null)" ] || return 1
-    count="$(printf '%s\n' "$rows" | "$TOYBOX_BIN" grep -o '"package":"[^\"]*"' 2>/dev/null | "$TOYBOX_BIN" wc -l | "$TOYBOX_BIN" tr -d '[:space:]')"
-    [ "$count" -ge 1 ] && [ "$count" -le 64 ] || return 1
+    count="$($TOYBOX_BIN timeout -s 9 30 "$TOYBOX_BIN" nsenter -t 1 -m -- "$SYSTEM_SHELL" "$SCRIPT_ROOT/prepare-upgrade.sh" --pid1-upgrade-readiness 2>/dev/null)" || return 1
+    [ "$(printf '%s\n' "$count" | "$TOYBOX_BIN" wc -l | "$TOYBOX_BIN" tr -d '[:space:]')" = 1 ] || return 1
+    case "$count" in *[!0-9]*|'') return 1 ;; esac
+    [ "${#count}" -le 2 ] && [ "$count" -ge 0 ] && [ "$count" -le 64 ] || return 1
     printf '%s\n' "$count"
 }
 boot_values() {
@@ -215,8 +211,9 @@ prepare_proof() {
     prepare_proof_root || fail 'cannot prepare the root-only proof directory'
     clear_prior_boot_proof || fail 'a same-boot or corrupt upgrade proof already exists; verify or cancel it first'
     digest_before="$(control_digest)" || fail 'control-plane metadata is unsafe or unreadable'
-    count="$(managed_base_count)" || fail 'managed Apps are not all proven Base and normal'
     identity="$(freeze --inspect)" || fail 'the old Runtime daemon identity is unavailable'
+    count="$(managed_base_count)" || fail 'managed Apps are not all proven Base and normal'
+    [ "$(freeze --inspect)" = "$identity" ] || fail 'the old Runtime daemon identity changed during Base verification'
     IFS='|' read -r daemon_pid daemon_start daemon_image extra <<EOF
 $identity
 EOF
@@ -233,12 +230,12 @@ EOF
 [ "$($TOYBOX_BIN id -u 2>/dev/null)" = 0 ] || fail 'root is required'
 safe_toybox || fail 'trusted toybox is unavailable'
 safe_script_root && safe_root_script "$FREEZE_HELPER" || fail 'daemon freeze helper path is unavailable or unsafe'
-if [ "${1:-}" = --pid1-slotctl ]; then
+if [ "${1:-}" = --pid1-upgrade-readiness ]; then
     shift
-    [ "$#" -eq 1 ] && [ "$1" = apps ] || fail 'invalid installed Runtime request'
+    [ "$#" -eq 0 ] || fail 'invalid installed Runtime request'
     pid1_mount_namespace || fail 'installed Runtime is not visible in the PID1 mount namespace'
-    exec_trusted_binary "$INSTALLED_MODULE/bin/slotctl" "$@" ||
-        fail 'installed Runtime client identity changed before execution'
+    exec_trusted_binary "$STAGED_SLOTCTL" upgrade-readiness ||
+        fail 'staged Runtime client identity changed before execution'
 fi
 case "${1:---prepare}" in
     --prepare) prepare_proof ;;

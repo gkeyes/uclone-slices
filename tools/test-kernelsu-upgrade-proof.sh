@@ -125,32 +125,34 @@ EOF
 make_slotctl() {
     slot=$1
     lifecycle=$2
-    cat >"$INSTALLED/bin/slotctl" <<EOF
+    cat >"$SCRATCH/bin/slotctl" <<EOF
 #!/bin/sh
-[ "\${1:-}" = apps ] || exit 2
-printf '%s\n' apps >>"\$SLOTCTL_TRACE"
-printf '%s\\n' '{"schema_version":1,"request_id":"slotctl-test-1","status":"ok","payload":{"kind":"managed_apps","data":{"apps":[{"package":"com.asksky.fitness","active_slot":"$slot","lifecycle":"$lifecycle"}]}}}'
+[ "\${1:-}" = upgrade-readiness ] && [ "\$#" -eq 1 ] || exit 2
+printf '%s\n' upgrade-readiness >>"\$SLOTCTL_TRACE"
+[ "$slot" = base ] && [ "$lifecycle" = normal ] || exit 1
+printf '%s\n' 1
 EOF
-    chmod 0700 "$INSTALLED/bin/slotctl"
+    chmod 0700 "$SCRATCH/bin/slotctl"
 }
 
 make_empty_slotctl() {
-    cat >"$INSTALLED/bin/slotctl" <<'EOF'
+    cat >"$SCRATCH/bin/slotctl" <<'EOF'
 #!/bin/sh
-[ "${1:-}" = apps ] || exit 2
-printf '%s\n' apps >>"$SLOTCTL_TRACE"
-printf '%s\n' '{"schema_version":1,"request_id":"slotctl-test-1","status":"ok","payload":{"kind":"managed_apps","data":{"apps":[]}}}'
+[ "${1:-}" = upgrade-readiness ] && [ "$#" -eq 1 ] || exit 2
+printf '%s\n' upgrade-readiness >>"$SLOTCTL_TRACE"
+printf '%s\n' 0
 EOF
-    chmod 0700 "$INSTALLED/bin/slotctl"
+    chmod 0700 "$SCRATCH/bin/slotctl"
 }
 
 make_simplified_slotctl() {
-    cat >"$INSTALLED/bin/slotctl" <<'EOF'
+    cat >"$SCRATCH/bin/slotctl" <<'EOF'
 #!/bin/sh
-[ "${1:-}" = apps ] || exit 2
-printf '%s\n' '{"status":"ok","payload":{"kind":"managed_apps","data":{"apps":[]}}}'
+[ "${1:-}" = upgrade-readiness ] && [ "$#" -eq 1 ] || exit 2
+printf '%s\n' '0'
+printf '%s\n' 'unexpected'
 EOF
-    chmod 0700 "$INSTALLED/bin/slotctl"
+    chmod 0700 "$SCRATCH/bin/slotctl"
 }
 
 RUNTIME=$SCRATCH/runtime
@@ -161,7 +163,7 @@ UPTIME=$SCRATCH/uptime
 TOYBOX=$SCRATCH/toybox
 PROOF=$SCRATCH/prepare-upgrade.sh
 FREEZE=$SCRATCH/upgrade-freeze.sh
-mkdir -p "$INSTALLED/bin" "$PROC/$DAEMON_PID"
+mkdir -p "$INSTALLED/bin" "$SCRATCH/bin" "$PROC/$DAEMON_PID"
 for root in enrollment compatibility-policy catalog registry package-state slot-metadata enrollment-attempts rescue-journal journal state; do
     mkdir -p "$RUNTIME/$root"
     chmod 0700 "$RUNTIME/$root"
@@ -272,6 +274,10 @@ make_slotctl preview normal
 expect_failure "$PROOF" --prepare
 [ "$(awk '{print $3}' "$PROC/$DAEMON_PID/stat")" = S ] || fail 'non-Base refusal stopped the daemon'
 
+make_slotctl base recovery_required
+expect_failure "$PROOF" --prepare
+[ "$(awk '{print $3}' "$PROC/$DAEMON_PID/stat")" = S ] || fail 'non-normal refusal stopped the daemon'
+
 make_empty_slotctl
 "$PROOF" --prepare | grep -F 'upgrade-proof-ready apps=0' >/dev/null
 [ "$($PROOF --verify)" = 0 ] || fail 'canonical empty managed-app report did not verify as count zero'
@@ -295,7 +301,7 @@ expect_failure "$PROOF" --prepare
 expect_failure "$FREEZE" --inspect
 unset NAMESPACE_MISMATCH
 [ "$(wc -l <"$SCRATCH/slotctl-trace" | tr -d '[:space:]')" = "$slotctl_before" ] ||
-    fail 'namespace mismatch executed installed slotctl'
+    fail 'namespace mismatch executed staged slotctl'
 [ "$(awk '{print $3}' "$PROC/$DAEMON_PID/stat")" = S ] || fail 'namespace mismatch reached or froze the old daemon'
 
 export MISMATCH_SLOTCTL_NODE=1

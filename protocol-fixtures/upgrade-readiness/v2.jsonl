@@ -1,0 +1,3 @@
+{"schema_version":2,"request_id":"upgrade-probe-v1","status":"error","error_code":"invalid_request"}
+{"schema_version":2,"request_id":"upgrade-probe-v2","status":"ok","payload":{"kind":"probe_report","data":{"ready":true,"user_unlocked":true,"ce_de_supported":true,"recovery_only":false,"runtime_version":"0.3.0-preview.0","build_id":"installed-build"}}}
+{"schema_version":2,"request_id":"upgrade-apps","status":"ok","payload":{"kind":"managed_apps","data":{"apps":[{"package":"com.example.app","active_slot":"base","lifecycle":"normal"},{"package":"org.example.other","active_slot":"base","lifecycle":"normal"}]}}}

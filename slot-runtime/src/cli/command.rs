@@ -38,6 +38,8 @@ pub enum CliCommand {
     },
     /// List all durable managed applications.
     Apps,
+    /// Prove every managed package is normal on native Base for a paired upgrade.
+    UpgradeReadiness,
     /// Enroll one installed package's immutable Base.
     Enroll {
         /// Installed package name selected by the APK.
@@ -122,9 +124,9 @@ impl CliCommand {
     /// Converts validated CLI fields into one strict protocol request.
     pub fn request(&self) -> Result<Request, CliError> {
         let command = match self {
-            Self::Rpc => {
+            Self::Rpc | Self::UpgradeReadiness => {
                 return Err(CliError::InvalidArgument(
-                    "rpc requests must be read from standard input".to_owned(),
+                    "direct CLI checks do not build ordinary protocol requests".to_owned(),
                 ));
             }
             Self::Probe => Command::Probe,

@@ -1,0 +1,2 @@
+{"schema_version":1,"request_id":"upgrade-probe-v1","status":"ok","payload":{"kind":"probe_report","data":{"ready":true,"user_unlocked":true,"ce_de_supported":true}}}
+{"schema_version":1,"request_id":"upgrade-apps","status":"ok","payload":{"kind":"managed_apps","data":{"apps":[{"package":"com.example.app","active_slot":"base","lifecycle":"normal"}]}}}

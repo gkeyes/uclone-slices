@@ -15,9 +15,11 @@ mod direct;
 mod execute;
 mod rpc;
 mod timeout;
+mod upgrade_readiness;
 
 pub use command::{CliCommand, SeedArgument};
 pub use execute::{execute, execute_request};
+pub use upgrade_readiness::UpgradeReadinessError;
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -53,6 +55,9 @@ pub enum CliError {
     /// The system clock could not produce a request timestamp.
     #[error("system clock is before the Unix epoch")]
     Clock,
+    /// The installed Runtime could not prove every managed package safe for upgrade.
+    #[error("upgrade readiness rejected: {0}")]
+    UpgradeReadiness(#[from] UpgradeReadinessError),
 }
 
 /// A request/response transport boundary that can be replaced in tests.
@@ -113,6 +118,9 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
     let mut diagnostics = stderr.lock();
     if matches!(cli.command, CliCommand::Rpc) {
         return rpc::run(io::stdin().lock(), &mut output, &mut diagnostics);
+    }
+    if matches!(cli.command, CliCommand::UpgradeReadiness) {
+        return upgrade_readiness::run(&mut output, &mut diagnostics);
     }
     let request = match cli.command.request() {
         Ok(request) => request,
