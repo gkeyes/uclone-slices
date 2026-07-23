@@ -11,7 +11,7 @@ const CE_DIGEST: &str = "1111111111111111111111111111111111111111111111111111111
 const DE_DIGEST: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
 #[derive(Debug)]
-pub(super) struct TrackingMaterializer {
+pub(in crate::production::tests) struct TrackingMaterializer {
     fail_publish: bool,
     fail_cleanup: bool,
     artifacts: Vec<(SlotId, ArtifactState)>,
@@ -20,7 +20,7 @@ pub(super) struct TrackingMaterializer {
 }
 
 impl TrackingMaterializer {
-    pub(super) const fn healthy() -> Self {
+    pub(in crate::production::tests) const fn healthy() -> Self {
         Self {
             fail_publish: false,
             fail_cleanup: false,
@@ -30,14 +30,14 @@ impl TrackingMaterializer {
         }
     }
 
-    pub(super) fn publication_failure() -> Self {
+    pub(in crate::production::tests) fn publication_failure() -> Self {
         Self {
             fail_publish: true,
             ..Self::healthy()
         }
     }
 
-    pub(super) fn cleanup_failure(slot: SlotId) -> Self {
+    pub(in crate::production::tests) fn cleanup_failure(slot: SlotId) -> Self {
         Self {
             fail_cleanup: true,
             artifacts: vec![(slot, ArtifactState::ReadyOnly)],
@@ -45,7 +45,7 @@ impl TrackingMaterializer {
         }
     }
 
-    pub(super) fn ready_slots(slots: &[SlotId]) -> Self {
+    pub(in crate::production::tests) fn ready_slots(slots: &[SlotId]) -> Self {
         Self {
             artifacts: slots
                 .iter()
@@ -56,11 +56,11 @@ impl TrackingMaterializer {
         }
     }
 
-    pub(super) fn cleaned(&self) -> &[SlotId] {
+    pub(in crate::production::tests) fn cleaned(&self) -> &[SlotId] {
         &self.cleaned
     }
 
-    pub(super) fn state(&self, slot: &SlotId) -> ArtifactState {
+    pub(in crate::production::tests) fn state(&self, slot: &SlotId) -> ArtifactState {
         self.artifacts
             .iter()
             .find(|(candidate, _)| candidate == slot)

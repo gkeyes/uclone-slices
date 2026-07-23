@@ -1,23 +1,9 @@
-use crate::domain::{PackageName, SlotView};
-use crate::protocol::{
-    Ack, AckOperation, ReconcileOutcome as ProtocolOutcome, ResponsePayload, SwitchResult,
-};
+use crate::domain::SlotView;
+use crate::protocol::{Ack, AckOperation, ReconcileOutcome as ProtocolOutcome, ResponsePayload};
 use crate::reconcile::ReconcileOutcome;
 use crate::rescue::RescueExecution;
 
 use super::{ServiceError, SwitchExecution};
-
-pub(super) fn switched(
-    package: &PackageName,
-    expected: &SlotView,
-    execution: SwitchExecution,
-) -> Result<ResponsePayload, ServiceError> {
-    let proved = proved_switch(expected, execution)?;
-    Ok(ResponsePayload::SwitchResult(SwitchResult::new(
-        package.clone(),
-        proved.slot_id().clone(),
-    )))
-}
 
 pub(super) fn proved_switch(
     expected: &SlotView,

@@ -23,6 +23,7 @@ fn late_store_failure_reacquires_a_retired_gate_before_state_marking() {
     let package = PackageName::parse("com.example.late").unwrap();
     let managed = publish(&stores, package.clone());
     let revisions = root
+        .path()
         .join("package-state/packages")
         .join(package.as_str())
         .join("revisions");
@@ -72,6 +73,7 @@ fn late_attempt_failure_contains_one_package_and_healthy_peer_can_reconcile() {
     let managed_a = publish(&stores, package_a.clone());
     let managed_b = publish(&stores, package_b.clone());
     let corrupt_attempt = root
+        .path()
         .join("enrollment-attempts/attempts")
         .join(package_a.as_str());
     fs::write(&corrupt_attempt, b"corrupt-attempt").unwrap();

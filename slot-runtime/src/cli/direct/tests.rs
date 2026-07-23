@@ -115,7 +115,7 @@ fn weak_package_artifact_does_not_authorize_with_global_journal_corruption() {
 
 #[test]
 fn fake_management_artifacts_never_authorize_direct_rescue() {
-    for (index, relative) in [
+    for (index, (case_name, relative)) in [
         ("dir", "enrollment/packages/com.example.fake"),
         (
             "enrollment",
@@ -154,7 +154,7 @@ fn fake_management_artifacts_never_authorize_direct_rescue() {
         assert_eq!(
             authorize_direct_target(&mut platform, &rescue(package)),
             Err(ErrorCode::NotFound),
-            "{relative} must not authorize",
+            "{case_name} must not authorize",
         );
     }
 }
