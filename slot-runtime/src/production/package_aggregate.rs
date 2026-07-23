@@ -1,9 +1,10 @@
 use crate::android::PackageProbe;
 use crate::domain::{
     DurablePackageFacts, EvidenceScope, GateFacts, InvariantViolation, LivePackageFacts,
-    ManagedPackage, PackageAggregate, PackageFacts, PackageKey,
+    ManagedPackage, PackageAggregate, PackageFacts, PackageKey, ReadyPackageEvidence,
 };
 use crate::lifecycle::{GuardDecision, LifecycleState, PackageLifecycleGuard, RecoveryReason};
+use crate::service::ServiceError;
 
 use super::state::{
     active_slot_metadata_ready, active_view, catalog_views, has_unfinished,
@@ -16,8 +17,8 @@ pub(super) fn resolve<Q: PackageProbe>(
     probe: &mut Q,
     key: &PackageKey,
     scope: EvidenceScope,
-) -> PackageAggregate {
-    PackageAggregate::resolve(load_facts(stores, probe, key, scope))
+) -> Result<PackageAggregate, ServiceError> {
+    load_facts(stores, probe, key, scope).map(PackageAggregate::resolve)
 }
 
 fn load_facts<Q: PackageProbe>(
@@ -25,31 +26,38 @@ fn load_facts<Q: PackageProbe>(
     probe: &mut Q,
     key: &PackageKey,
     scope: EvidenceScope,
-) -> PackageFacts {
-    let Ok(attempt) = stores.attempts.load(key) else {
-        return incomplete(scope, InvariantViolation::StoreUnreadable);
-    };
-    let Ok(enrollment) = stores.enrollment.load(key.package_name()) else {
-        return incomplete(scope, InvariantViolation::StoreUnreadable);
-    };
-    let Ok(catalog) = stores.catalog.list(key) else {
-        return incomplete(scope, InvariantViolation::StoreUnreadable);
-    };
-    let Ok(state) = stores.package_state.latest(key) else {
-        return incomplete(scope, InvariantViolation::StoreUnreadable);
-    };
-    let Ok(registry) = stores.registry.latest(key.package_name()) else {
-        return incomplete(scope, InvariantViolation::StoreUnreadable);
-    };
-    let Ok(journal) = stores.journal.list_for_package(key) else {
-        return incomplete(scope, InvariantViolation::StoreUnreadable);
-    };
-    let Ok(policy) = stores.compatibility_policy.load(key.package_name()) else {
-        return incomplete(scope, InvariantViolation::StoreUnreadable);
-    };
+) -> Result<PackageFacts, ServiceError> {
+    let attempt = stores
+        .attempts
+        .load(key)
+        .map_err(|_| ServiceError::RecoveryRequired)?;
+    let enrollment = stores
+        .enrollment
+        .load(key.package_name())
+        .map_err(|_| ServiceError::RecoveryRequired)?;
+    let catalog = stores
+        .catalog
+        .list(key)
+        .map_err(|_| ServiceError::RecoveryRequired)?;
+    let state = stores
+        .package_state
+        .latest(key)
+        .map_err(|_| ServiceError::RecoveryRequired)?;
+    let registry = stores
+        .registry
+        .latest(key.package_name())
+        .map_err(|_| ServiceError::RecoveryRequired)?;
+    let journal = stores
+        .journal
+        .list_for_package(key)
+        .map_err(|_| ServiceError::RecoveryRequired)?;
+    let policy = stores
+        .compatibility_policy
+        .load(key.package_name())
+        .map_err(|_| ServiceError::RecoveryRequired)?;
 
     if attempt.is_some() {
-        return facts(scope, DurablePackageFacts::EnrollmentAttempt);
+        return Ok(facts(scope, DurablePackageFacts::EnrollmentAttempt));
     }
     let Some(enrolled) = enrollment else {
         let clean = catalog.is_empty()
@@ -57,35 +65,41 @@ fn load_facts<Q: PackageProbe>(
             && registry.is_none()
             && policy.is_none()
             && super::state::journal_for(&journal, key).next().is_none();
-        return facts(
+        return Ok(facts(
             scope,
             if clean {
                 DurablePackageFacts::Absent
             } else {
                 DurablePackageFacts::Orphaned
             },
-        );
+        ));
     };
     let Some(state) = state else {
-        return incomplete(scope, InvariantViolation::MissingPackageState);
+        return Ok(incomplete(scope, InvariantViolation::MissingPackageState));
     };
     if state.package_key() != *key {
-        return incomplete(scope, InvariantViolation::PackageStateMismatch);
+        return Ok(incomplete(scope, InvariantViolation::PackageStateMismatch));
     }
     if has_unfinished(&journal, key) {
-        return incomplete(scope, InvariantViolation::UnfinishedTransaction);
+        return Ok(incomplete(scope, InvariantViolation::UnfinishedTransaction));
     }
     let Some((base, slots)) = catalog_views(&catalog, key, &enrolled) else {
-        return incomplete(scope, InvariantViolation::CatalogMismatch);
+        return Ok(incomplete(scope, InvariantViolation::CatalogMismatch));
     };
     let Some(active) = active_view(&enrolled, registry.as_ref(), base, &slots) else {
-        return incomplete(scope, InvariantViolation::ActiveViewUnproven);
+        return Ok(incomplete(scope, InvariantViolation::ActiveViewUnproven));
     };
     if !active_slot_metadata_ready(stores, &enrolled, &active) {
-        return incomplete(scope, InvariantViolation::ActiveSlotMetadataUnready);
+        return Ok(incomplete(
+            scope,
+            InvariantViolation::ActiveSlotMetadataUnready,
+        ));
     }
     if !registry_matches_journal(registry.as_ref(), &journal, key) {
-        return incomplete(scope, InvariantViolation::RegistryJournalMismatch);
+        return Ok(incomplete(
+            scope,
+            InvariantViolation::RegistryJournalMismatch,
+        ));
     }
 
     let durable = DurablePackageFacts::Enrolled {
@@ -93,35 +107,33 @@ fn load_facts<Q: PackageProbe>(
         active_slot: active.slot_id().clone(),
     };
     if state.lifecycle_state() != LifecycleState::Normal {
-        return facts(scope, durable);
+        return Ok(facts(scope, durable));
     }
-    let Ok(managed) = ManagedPackage::new(
+    let managed = ManagedPackage::new(
         key.clone(),
         enrolled.identity().clone(),
         enrolled.base_inodes(),
         active,
         state.lifecycle_state(),
-    ) else {
-        return incomplete(scope, InvariantViolation::ManagedPackageInvalid);
-    };
-    let Ok(observation) = probe.observe_package(key.package_name(), key.user_id()) else {
-        return PackageFacts::new(
-            scope,
-            durable,
-            LivePackageFacts::RecoveryRequired(InvariantViolation::LiveObservationUnavailable),
-            GateFacts::NotObserved,
-        );
-    };
+    )
+    .map_err(|_| ServiceError::RecoveryRequired)?;
+    let observation = probe
+        .observe_package(key.package_name(), key.user_id())
+        .map_err(|_| ServiceError::RecoveryRequired)?;
     let support = observation.compatibility().support_level();
     if support == crate::domain::PackageSupportLevel::Blocked {
-        return with_live_quarantine(scope, durable, InvariantViolation::PackageSupportBlocked);
+        return Ok(with_live_quarantine(
+            scope,
+            durable,
+            InvariantViolation::PackageSupportBlocked,
+        ));
     }
     if !policy.is_some_and(|value| value.accepts(observation.identity(), support)) {
-        return with_live_quarantine(
+        return Ok(with_live_quarantine(
             scope,
             durable,
             InvariantViolation::CompatibilityPolicyMismatch,
-        );
+        ));
     }
     let live = match PackageLifecycleGuard::assess(&managed, &observation) {
         GuardDecision::Quarantine => {
@@ -138,17 +150,23 @@ fn load_facts<Q: PackageProbe>(
         | GuardDecision::AllowUpdateVerification => LivePackageFacts::Healthy,
     };
     if live != LivePackageFacts::Healthy {
-        return PackageFacts::new(scope, durable, live, GateFacts::NotObserved);
+        return Ok(PackageFacts::new(
+            scope,
+            durable,
+            live,
+            GateFacts::NotObserved,
+        ));
     }
-    let gate = if probe
+    let gate = probe
         .gate_snapshot(key.package_name(), key.user_id())
-        .is_ok()
-    {
-        GateFacts::Observed
-    } else {
-        GateFacts::Unavailable
-    };
-    PackageFacts::new(scope, durable, live, gate)
+        .map_err(|_| ServiceError::RecoveryRequired)?;
+    Ok(PackageFacts::with_ready_evidence(
+        scope,
+        durable,
+        live,
+        GateFacts::Observed,
+        ReadyPackageEvidence::new(managed, slots, gate),
+    ))
 }
 
 fn facts(scope: EvidenceScope, durable: DurablePackageFacts) -> PackageFacts {

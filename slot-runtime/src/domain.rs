@@ -10,7 +10,8 @@ mod transaction_token;
 
 pub use aggregate::{
     AggregateState, AllowedAction, DurablePackageFacts, EvidenceScope, GateFacts,
-    InvariantViolation, LivePackageFacts, PackageAggregate, PackageFacts, SafetyDisposition,
+    InvariantViolation, LivePackageFacts, PackageAggregate, PackageFacts, ReadyPackageEvidence,
+    SafetyDisposition,
 };
 pub use error::DomainError;
 pub use gate::{GateSnapshot, PackageEnabledState};

@@ -10,6 +10,8 @@ use crate::domain::{
 pub(super) struct MatrixProbe {
     observation: Result<PackageObservation, ProbeError>,
     gate: Result<GateSnapshot, ProbeError>,
+    observation_calls: usize,
+    gate_calls: usize,
 }
 
 impl MatrixProbe {
@@ -23,6 +25,8 @@ impl MatrixProbe {
                 false,
             )),
             gate: Ok(gate),
+            observation_calls: 0,
+            gate_calls: 0,
         }
     }
 
@@ -39,6 +43,8 @@ impl MatrixProbe {
                 crate::domain::PackageEnabledState::Default,
                 false,
             )),
+            observation_calls: 0,
+            gate_calls: 0,
         }
     }
 
@@ -49,6 +55,8 @@ impl MatrixProbe {
                 crate::domain::PackageEnabledState::Default,
                 false,
             )),
+            observation_calls: 0,
+            gate_calls: 0,
         }
     }
 
@@ -59,6 +67,8 @@ impl MatrixProbe {
                 crate::domain::PackageEnabledState::Default,
                 false,
             )),
+            observation_calls: 0,
+            gate_calls: 0,
         }
     }
 
@@ -72,7 +82,17 @@ impl MatrixProbe {
                 false,
             )),
             gate: Err(ProbeError::Unavailable),
+            observation_calls: 0,
+            gate_calls: 0,
         }
+    }
+
+    pub(super) const fn observation_calls(&self) -> usize {
+        self.observation_calls
+    }
+
+    pub(super) const fn gate_calls(&self) -> usize {
+        self.gate_calls
     }
 }
 
@@ -101,10 +121,12 @@ impl PackageProbe for MatrixProbe {
         _: &PackageName,
         _: UserId,
     ) -> Result<PackageObservation, ProbeError> {
+        self.observation_calls += 1;
         self.observation.clone()
     }
 
     fn gate_snapshot(&mut self, _: &PackageName, _: UserId) -> Result<GateSnapshot, ProbeError> {
+        self.gate_calls += 1;
         self.gate
     }
 

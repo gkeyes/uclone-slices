@@ -1,8 +1,10 @@
 use crate::android::PackageProbe;
 use crate::catalog::CatalogEntry;
-use crate::domain::{ManagedPackage, PackageKey, SlotId, SlotView};
+use crate::domain::{
+    AggregateState, EvidenceScope, ManagedPackage, PackageEnabledState, PackageKey, SlotId,
+    SlotView,
+};
 use crate::journal::{JournalEvent, JournalStep, Transaction, TransactionView};
-use crate::lifecycle::{GuardDecision, PackageLifecycleGuard};
 use crate::registry::PackageRevision;
 use crate::service::{ObservedGateState, PackageSnapshot, PackageState, ServiceError};
 use crate::slot_metadata::SlotRecordState;
@@ -14,113 +16,27 @@ pub(super) fn load<Q: PackageProbe>(
     probe: &mut Q,
     key: &PackageKey,
 ) -> Result<PackageState, ServiceError> {
-    let attempt = stores
-        .attempts
-        .load(key)
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let enrollment = stores
-        .enrollment
-        .load(key.package_name())
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let catalog = stores
-        .catalog
-        .list(key)
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let state = stores
-        .package_state
-        .latest(key)
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let registry = stores
-        .registry
-        .latest(key.package_name())
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let journal = stores
-        .journal
-        .list_for_package(key)
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let policy = stores
-        .compatibility_policy
-        .load(key.package_name())
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-
-    if attempt.is_some() {
-        return Ok(PackageState::RecoveryRequired);
-    }
-    let Some(enrolled) = enrollment else {
-        return if catalog.is_empty()
-            && state.is_none()
-            && registry.is_none()
-            && policy.is_none()
-            && journal_for(&journal, key).next().is_none()
-        {
-            Ok(PackageState::Absent)
-        } else {
-            Ok(PackageState::RecoveryRequired)
-        };
-    };
-    let Some(state) = state else {
-        return Ok(PackageState::RecoveryRequired);
-    };
-    if state.package_key() != *key || has_unfinished(&journal, key) {
-        return Ok(PackageState::RecoveryRequired);
-    }
-    let Some((base, slots)) = catalog_views(&catalog, key, &enrolled) else {
-        return Ok(PackageState::RecoveryRequired);
-    };
-    let Some(active) = active_view(&enrolled, registry.as_ref(), base, &slots) else {
-        return Ok(PackageState::RecoveryRequired);
-    };
-    if !active_slot_metadata_ready(stores, &enrolled, &active) {
-        return Ok(PackageState::RecoveryRequired);
-    }
-    if !registry_matches_journal(registry.as_ref(), &journal, key) {
-        return Ok(PackageState::RecoveryRequired);
-    }
-    if state.lifecycle_state() != crate::lifecycle::LifecycleState::Normal {
-        return Ok(match state.lifecycle_state() {
-            crate::lifecycle::LifecycleState::Quarantined => PackageState::Quarantined,
-            _ => PackageState::RecoveryRequired,
-        });
-    }
-    let managed = ManagedPackage::new(
-        key.clone(),
-        enrolled.identity().clone(),
-        enrolled.base_inodes(),
-        active,
-        state.lifecycle_state(),
-    )
-    .map_err(|_| ServiceError::RecoveryRequired)?;
-    let observation = probe
-        .observe_package(key.package_name(), key.user_id())
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let support_level = observation.compatibility().support_level();
-    if support_level == crate::domain::PackageSupportLevel::Blocked {
-        return Ok(PackageState::Quarantined);
-    }
-    if !policy.is_some_and(|value| value.accepts(observation.identity(), support_level)) {
-        return Ok(PackageState::Quarantined);
-    }
-    match PackageLifecycleGuard::assess(&managed, &observation) {
-        GuardDecision::Quarantine => return Ok(PackageState::Quarantined),
-        GuardDecision::RecoveryRequired(_) | GuardDecision::RequireSafeUpdateWindow => {
-            return Ok(PackageState::RecoveryRequired);
+    let aggregate = super::package_aggregate::resolve(stores, probe, key, EvidenceScope::Unlocked)?;
+    match aggregate.state() {
+        AggregateState::Absent => Ok(PackageState::Absent),
+        AggregateState::RecoveryRequired => Ok(PackageState::RecoveryRequired),
+        AggregateState::Quarantined => Ok(PackageState::Quarantined),
+        AggregateState::Ready => {
+            let evidence = aggregate
+                .into_ready_evidence()
+                .ok_or(ServiceError::RecoveryRequired)?;
+            let (managed, slots, gate) = evidence.into_parts();
+            let enabled = matches!(
+                gate.enabled_state(),
+                PackageEnabledState::Default | PackageEnabledState::Enabled
+            );
+            Ok(PackageState::Ready(Box::new(PackageSnapshot::new(
+                managed,
+                slots,
+                ObservedGateState::new(enabled, gate.suspended()),
+            ))))
         }
-        GuardDecision::AllowBase
-        | GuardDecision::AllowSlot
-        | GuardDecision::AllowUpdateVerification => {}
     }
-    let gate = probe
-        .gate_snapshot(key.package_name(), key.user_id())
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let enabled = matches!(
-        gate.enabled_state(),
-        crate::domain::PackageEnabledState::Default | crate::domain::PackageEnabledState::Enabled
-    );
-    Ok(PackageState::Ready(Box::new(PackageSnapshot::new(
-        managed,
-        slots,
-        ObservedGateState::new(enabled, gate.suspended()),
-    ))))
 }
 
 pub(super) fn active_slot_metadata_ready(

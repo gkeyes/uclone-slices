@@ -1,9 +1,10 @@
 use crate::lifecycle::LifecycleState;
 
+use super::super::SlotId;
 use super::{
-    AggregateState, AllowedAction, DurablePackageFacts, EvidenceScope, GateFacts,
-    InvariantViolation, LivePackageFacts, PackageAggregate, PackageFacts, SafetyDisposition,
-    SlotId,
+    AggregateKind, AllowedAction, DurablePackageFacts, EvidenceScope, GateFacts,
+    InvariantViolation, LivePackageFacts, PackageAggregate, PackageFacts, ReadyPackageEvidence,
+    SafetyDisposition,
 };
 
 pub(super) fn resolve(facts: PackageFacts) -> PackageAggregate {
@@ -19,7 +20,14 @@ pub(super) fn resolve(facts: PackageFacts) -> PackageAggregate {
         DurablePackageFacts::Enrolled {
             lifecycle,
             active_slot,
-        } => resolve_enrolled(facts.scope, lifecycle, active_slot, facts.live, facts.gate),
+        } => resolve_enrolled(
+            facts.scope,
+            lifecycle,
+            active_slot,
+            facts.live,
+            facts.gate,
+            facts.ready_evidence,
+        ),
     }
 }
 
@@ -29,6 +37,7 @@ fn resolve_enrolled(
     active_slot: SlotId,
     live: LivePackageFacts,
     gate: GateFacts,
+    ready_evidence: Option<ReadyPackageEvidence>,
 ) -> PackageAggregate {
     if lifecycle == LifecycleState::Quarantined {
         return quarantined(InvariantViolation::IdentityChanged);
@@ -42,7 +51,15 @@ fn resolve_enrolled(
         LivePackageFacts::NotObserved => {
             recovery(scope, InvariantViolation::LiveObservationUnavailable)
         }
-        LivePackageFacts::Healthy if gate == GateFacts::Observed => ready(scope, active_slot),
+        LivePackageFacts::Healthy if gate == GateFacts::Observed => {
+            let Some(evidence) = ready_evidence else {
+                return recovery(scope, InvariantViolation::ReadyEvidenceUnavailable);
+            };
+            if evidence.managed().active_slot() != &active_slot {
+                return recovery(scope, InvariantViolation::ActiveViewUnproven);
+            }
+            ready(scope, evidence)
+        }
         LivePackageFacts::Healthy => {
             recovery(scope, InvariantViolation::GateObservationUnavailable)
         }
@@ -51,8 +68,7 @@ fn resolve_enrolled(
 
 fn absent(scope: EvidenceScope) -> PackageAggregate {
     PackageAggregate {
-        state: AggregateState::Absent,
-        active_slot: None,
+        kind: AggregateKind::Absent,
         safety: SafetyDisposition::NoContainmentRequired,
         allowed_actions: match scope {
             EvidenceScope::Unlocked => vec![AllowedAction::Inspect, AllowedAction::Enroll],
@@ -64,7 +80,7 @@ fn absent(scope: EvidenceScope) -> PackageAggregate {
     }
 }
 
-fn ready(scope: EvidenceScope, active_slot: SlotId) -> PackageAggregate {
+fn ready(scope: EvidenceScope, evidence: ReadyPackageEvidence) -> PackageAggregate {
     let allowed_actions = match scope {
         EvidenceScope::Unlocked => vec![
             AllowedAction::Inspect,
@@ -81,8 +97,7 @@ fn ready(scope: EvidenceScope, active_slot: SlotId) -> PackageAggregate {
         ],
     };
     PackageAggregate {
-        state: AggregateState::Ready,
-        active_slot: Some(active_slot),
+        kind: AggregateKind::Ready(evidence),
         safety: match scope {
             EvidenceScope::Unlocked => SafetyDisposition::PreserveObservedGate,
             EvidenceScope::EarlyBootLocked | EvidenceScope::RecoveryOnly => {
@@ -96,8 +111,7 @@ fn ready(scope: EvidenceScope, active_slot: SlotId) -> PackageAggregate {
 
 fn recovery(scope: EvidenceScope, violation: InvariantViolation) -> PackageAggregate {
     PackageAggregate {
-        state: AggregateState::RecoveryRequired,
-        active_slot: None,
+        kind: AggregateKind::RecoveryRequired,
         safety: SafetyDisposition::HoldGate,
         allowed_actions: match scope {
             EvidenceScope::EarlyBootLocked => {
@@ -115,8 +129,7 @@ fn recovery(scope: EvidenceScope, violation: InvariantViolation) -> PackageAggre
 
 fn quarantined(violation: InvariantViolation) -> PackageAggregate {
     PackageAggregate {
-        state: AggregateState::Quarantined,
-        active_slot: None,
+        kind: AggregateKind::Quarantined,
         safety: SafetyDisposition::Quarantine,
         allowed_actions: vec![AllowedAction::Inspect, AllowedAction::RescueToBase],
         violation: Some(violation),

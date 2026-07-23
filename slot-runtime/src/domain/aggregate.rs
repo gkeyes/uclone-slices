@@ -1,92 +1,15 @@
-use crate::lifecycle::LifecycleState;
-
-use super::SlotId;
-
+mod facts;
 mod resolver;
 
 #[cfg(test)]
 mod tests;
 
-/// Amount of platform evidence available while resolving one package.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvidenceScope {
-    /// User zero is unlocked and CE, DE, package, view, and gate facts may be observed.
-    Unlocked,
-    /// Early boot may inspect durable DE-safe evidence but must not depend on CE.
-    EarlyBootLocked,
-    /// The daemon exposes only bounded reconciliation and rescue operations.
-    RecoveryOnly,
-}
+use super::SlotId;
 
-/// Durable facts loaded before consulting Android live state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DurablePackageFacts {
-    /// No enrollment or other package management evidence exists.
-    Absent,
-    /// An enrollment attempt still fences package publication.
-    EnrollmentAttempt,
-    /// Management evidence exists without a complete enrollment.
-    Orphaned,
-    /// A durable invariant could not be proved.
-    Incomplete(InvariantViolation),
-    /// Enrollment, catalog, Journal, Registry, metadata, and lifecycle evidence agree.
-    Enrolled {
-        /// Persisted package lifecycle.
-        lifecycle: LifecycleState,
-        /// Durable active-slot conclusion.
-        active_slot: SlotId,
-    },
-}
-
-/// Coherent live-package conclusion derived from one Android observation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LivePackageFacts {
-    /// Live evidence was not required for the durable conclusion.
-    NotObserved,
-    /// Identity, package anchors, and visible view agree with the durable contract.
-    Healthy,
-    /// Live evidence requires fail-closed reconciliation.
-    RecoveryRequired(InvariantViolation),
-    /// Installed identity or package class must remain isolated.
-    Quarantined(InvariantViolation),
-}
-
-/// Exact Android execution-gate observation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GateFacts {
-    /// Gate evidence was not required for the preceding conclusion.
-    NotObserved,
-    /// Enabled and suspended state were read successfully.
-    Observed,
-    /// Exact gate state could not be read.
-    Unavailable,
-}
-
-/// Pure facts consumed by the package aggregate resolver.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageFacts {
-    scope: EvidenceScope,
-    durable: DurablePackageFacts,
-    live: LivePackageFacts,
-    gate: GateFacts,
-}
-
-impl PackageFacts {
-    /// Groups already-validated durable, live, and gate facts.
-    pub const fn new(
-        scope: EvidenceScope,
-        durable: DurablePackageFacts,
-        live: LivePackageFacts,
-        gate: GateFacts,
-    ) -> Self {
-        Self {
-            scope,
-            durable,
-            live,
-            gate,
-        }
-    }
-}
+pub use facts::{
+    DurablePackageFacts, EvidenceScope, GateFacts, LivePackageFacts, PackageFacts,
+    ReadyPackageEvidence,
+};
 
 /// Stable package state produced by the pure resolver.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,13 +101,22 @@ pub enum InvariantViolation {
     UpdateWindowRequired,
     /// Exact enabled and suspended state could not be read.
     GateObservationUnavailable,
+    /// A Ready decision did not retain its exact package, slot, and gate evidence.
+    ReadyEvidenceUnavailable,
 }
 
-/// Pure package conclusion used to shadow the current production loader.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AggregateKind {
+    Absent,
+    Ready(ReadyPackageEvidence),
+    RecoveryRequired,
+    Quarantined,
+}
+
+/// Pure package conclusion used by the production package-state loader.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageAggregate {
-    state: AggregateState,
-    active_slot: Option<SlotId>,
+    kind: AggregateKind,
     safety: SafetyDisposition,
     allowed_actions: Vec<AllowedAction>,
     violation: Option<InvariantViolation>,
@@ -198,12 +130,42 @@ impl PackageAggregate {
 
     /// Returns the package state conclusion.
     pub const fn state(&self) -> AggregateState {
-        self.state
+        match &self.kind {
+            AggregateKind::Absent => AggregateState::Absent,
+            AggregateKind::Ready(_) => AggregateState::Ready,
+            AggregateKind::RecoveryRequired => AggregateState::RecoveryRequired,
+            AggregateKind::Quarantined => AggregateState::Quarantined,
+        }
     }
 
     /// Returns the proved active slot when Ready.
     pub const fn active_slot(&self) -> Option<&SlotId> {
-        self.active_slot.as_ref()
+        match &self.kind {
+            AggregateKind::Ready(evidence) => Some(evidence.managed().active_slot()),
+            AggregateKind::Absent
+            | AggregateKind::RecoveryRequired
+            | AggregateKind::Quarantined => None,
+        }
+    }
+
+    /// Returns the complete Ready evidence, or none for every non-Ready conclusion.
+    pub const fn ready_evidence(&self) -> Option<&ReadyPackageEvidence> {
+        match &self.kind {
+            AggregateKind::Ready(evidence) => Some(evidence),
+            AggregateKind::Absent
+            | AggregateKind::RecoveryRequired
+            | AggregateKind::Quarantined => None,
+        }
+    }
+
+    /// Consumes the aggregate and returns complete Ready evidence only for Ready.
+    pub fn into_ready_evidence(self) -> Option<ReadyPackageEvidence> {
+        match self.kind {
+            AggregateKind::Ready(evidence) => Some(evidence),
+            AggregateKind::Absent
+            | AggregateKind::RecoveryRequired
+            | AggregateKind::Quarantined => None,
+        }
     }
 
     /// Returns the required containment posture.
