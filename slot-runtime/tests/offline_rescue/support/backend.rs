@@ -64,6 +64,10 @@ impl FakeRescueBackend {
     pub(crate) const fn reject_retire_gate_lease(&mut self) {
         self.reject_retire_gate_lease = true;
     }
+
+    pub(crate) const fn allow_retire_gate_lease(&mut self) {
+        self.reject_retire_gate_lease = false;
+    }
     pub(crate) const fn gate_current(&self) -> GateSnapshot {
         self.gate_current
     }

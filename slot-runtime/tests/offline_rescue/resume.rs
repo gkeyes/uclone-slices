@@ -133,3 +133,30 @@ fn failed_gate_lease_retirement_keeps_lease_and_requires_recovery() {
     assert!(backend.lease_present());
     assert!(backend.gate_held());
 }
+
+#[test]
+fn repeated_retirement_failures_do_not_exhaust_rescue_steps() {
+    let fixture = Fixture::new();
+    let mut backend = fixture.backend();
+    backend.reject_retire_gate_lease();
+    let mut platform = fixture.platform(backend, FakeMetadata::default(), CrashOnce::never());
+
+    for _ in 0..100 {
+        assert_eq!(
+            platform.rescue_to_base(&Fixture::key()),
+            RescueExecution::RecoveryRequired
+        );
+    }
+    let (mut backend, metadata, _) = platform.into_dependencies();
+    let transaction = fixture.journal().load().unwrap().unwrap();
+    assert_eq!(transaction.phase(), RescuePhase::Completed);
+    assert_eq!(transaction.steps().len(), 8);
+
+    backend.allow_retire_gate_lease();
+    let mut resumed = fixture.platform(backend, metadata, CrashOnce::never());
+    assert_eq!(
+        resumed.rescue_to_base(&Fixture::key()),
+        RescueExecution::CompletedBase
+    );
+    assert_eq!(fixture.journal().load().unwrap().unwrap().steps().len(), 8);
+}

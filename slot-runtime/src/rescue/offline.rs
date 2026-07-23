@@ -1,5 +1,5 @@
 use super::anchors::{LiveDecision, RescueAnchors};
-use super::coordinator::RescueCoordinator;
+use super::coordinator::{RescueCoordinator, StderrRescueDiagnostics};
 use super::offline_roots::{
     RescueRoots, management_artifacts_present, ordinary_journal_mentions_package, supported,
     typed_target_evidence,
@@ -18,6 +18,7 @@ pub struct OfflineRescuePlatform<B, T, F = NoRescueFault> {
     backend: B,
     metadata: T,
     faults: F,
+    diagnostics: StderrRescueDiagnostics,
     roots: RescueRoots,
     recovery_targets: BTreeSet<PackageName>,
 }
@@ -28,6 +29,7 @@ impl<B, T> OfflineRescuePlatform<B, T, NoRescueFault> {
             backend,
             metadata,
             faults: NoRescueFault,
+            diagnostics: StderrRescueDiagnostics,
             roots: RescueRoots::fixed(),
             recovery_targets: BTreeSet::new(),
         }
@@ -47,6 +49,7 @@ impl<B, T, F> OfflineRescuePlatform<B, T, F> {
             backend,
             metadata,
             faults,
+            diagnostics: StderrRescueDiagnostics,
             roots: RescueRoots::with_roots(enrollment_root, catalog_root, journal_root),
             recovery_targets: BTreeSet::new(),
         }
@@ -127,8 +130,13 @@ where
                 Err(_) => return self.contain(key, RescueExecution::RecoveryRequired),
             },
         };
-        RescueCoordinator::new(&mut self.backend, &journal, &mut self.faults)
-            .resume(anchors.base(), &spec)
+        RescueCoordinator::new(
+            &mut self.backend,
+            &journal,
+            &mut self.faults,
+            &mut self.diagnostics,
+        )
+        .resume(anchors.base(), &spec)
     }
     #[doc = "Holds the package gate before ordinary stores open when management artifacts exist."]
     pub fn hold_startup_gate(

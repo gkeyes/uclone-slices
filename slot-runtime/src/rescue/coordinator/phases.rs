@@ -1,12 +1,13 @@
 use crate::reconcile::{NativeBaseRecoveryBackend, RecoveryBackend};
 
-use super::{RescueCoordinator, platform_error};
+use super::{RescueCoordinator, RescueDiagnosticSink, platform_error};
 use crate::rescue::{RescueError, RescueEvent, RescueFaultInjector, RescuePhase, RescueSpec};
 
-impl<B, F> RescueCoordinator<'_, B, F>
+impl<B, F, D> RescueCoordinator<'_, B, F, D>
 where
     B: RecoveryBackend + NativeBaseRecoveryBackend,
     F: RescueFaultInjector,
+    D: RescueDiagnosticSink,
 {
     pub(super) fn gate(
         &mut self,

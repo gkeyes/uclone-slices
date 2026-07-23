@@ -1,7 +1,9 @@
 use crate::reconcile::{NativeBaseRecoveryBackend, RecoveryBackend};
+use std::io::Write as _;
 
 use super::{
-    RescueError, RescueEvent, RescueExecution, RescueJournalStore, RescuePhase, RescueSpec,
+    RescueError, RescueEvent, RescueExecution, RescueId, RescueJournalStore, RescuePhase,
+    RescueSpec,
 };
 
 mod phases;
@@ -17,6 +19,25 @@ pub trait RescueFaultInjector: core::fmt::Debug {
     }
 }
 
+pub(super) trait RescueDiagnosticSink: core::fmt::Debug {
+    fn record_failure(&mut self, rescue_id: &RescueId, phase: RescuePhase, code: &'static str);
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(super) struct StderrRescueDiagnostics;
+
+impl RescueDiagnosticSink for StderrRescueDiagnostics {
+    fn record_failure(&mut self, rescue_id: &RescueId, phase: RescuePhase, code: &'static str) {
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(
+            stderr,
+            "ucloned rescue diagnostic: id={} phase={} code={code}",
+            rescue_id,
+            phase.name(),
+        );
+    }
+}
+
 #[doc = "Production rescue fault injector that never interrupts execution."]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoRescueFault;
@@ -27,26 +48,30 @@ impl RescueFaultInjector for NoRescueFault {
     }
 }
 
-pub(super) struct RescueCoordinator<'a, B, F> {
+pub(super) struct RescueCoordinator<'a, B, F, D> {
     backend: &'a mut B,
     journal: &'a RescueJournalStore,
     faults: &'a mut F,
+    diagnostics: &'a mut D,
 }
 
-impl<'a, B, F> RescueCoordinator<'a, B, F>
+impl<'a, B, F, D> RescueCoordinator<'a, B, F, D>
 where
     B: RecoveryBackend + NativeBaseRecoveryBackend,
     F: RescueFaultInjector,
+    D: RescueDiagnosticSink,
 {
     pub(super) const fn new(
         backend: &'a mut B,
         journal: &'a RescueJournalStore,
         faults: &'a mut F,
+        diagnostics: &'a mut D,
     ) -> Self {
         Self {
             backend,
             journal,
             faults,
+            diagnostics,
         }
     }
 
@@ -108,13 +133,15 @@ where
         self.faults.after_phase(phase)
     }
 
-    fn record_failure(&self, spec: &RescueSpec) {
-        let _record = self.journal.append(
-            spec.rescue_id(),
-            RescueEvent::Failure {
-                code: "recovery_required".to_owned(),
-            },
-        );
+    fn record_failure(&mut self, spec: &RescueSpec) {
+        let phase = self
+            .journal
+            .load()
+            .ok()
+            .flatten()
+            .map_or(RescuePhase::Prepared, |transaction| transaction.phase());
+        self.diagnostics
+            .record_failure(spec.rescue_id(), phase, "recovery_required");
     }
 
     fn contain(&mut self, base: &crate::domain::ManagedPackage) -> bool {
