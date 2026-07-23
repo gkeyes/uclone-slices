@@ -110,7 +110,7 @@ run_case() {
     activation_interrupt=${11}
     commit_interrupt=${12}
     installed_state=${13:-enabled}
-    old_daemon_result=${14:-absent}
+    old_daemon_result=${14:-trusted}
     expected_ui=${15:-}
     case_root=$SCRATCH/$name
     runtime=$case_root/runtime
@@ -193,13 +193,27 @@ run_case() {
         diff -u "$case_root/expected-trace" "$case_root/trace" >&2 || true
         fail "$name used the upgrade-proof lifecycle incorrectly"
     }
-    if [ "$expected_frozen" = yes ]; then
-        [ -e "$state/ready" ] && [ -e "$state/staged" ] || fail "$name resumed the old Runtime after a successful staged install"
-        [ ! -e "$staging/disable" ] || fail "$name left an active paired upgrade disabled"
-    else
-        [ ! -e "$state/ready" ] && [ ! -e "$state/staged" ] || fail "$name left the old Runtime frozen after installer failure"
-        [ -f "$staging/disable" ] || fail "$name changed the staged activation state on failure or fresh install"
-    fi
+    case "$expected_frozen" in
+        yes)
+            [ -e "$state/ready" ] && [ -e "$state/staged" ] ||
+                fail "$name resumed the old Runtime after a successful staged install"
+            [ ! -e "$staging/disable" ] ||
+                fail "$name left an active paired upgrade disabled"
+            ;;
+        recovery)
+            [ ! -e "$state/ready" ] && [ ! -e "$state/staged" ] ||
+                fail "$name created a paired-upgrade proof during offline recovery"
+            [ ! -e "$staging/disable" ] ||
+                fail "$name did not schedule the recovery Runtime for next boot"
+            ;;
+        no)
+            [ ! -e "$state/ready" ] && [ ! -e "$state/staged" ] ||
+                fail "$name left the old Runtime frozen after installer failure"
+            [ -f "$staging/disable" ] ||
+                fail "$name changed the staged activation state on failure or fresh install"
+            ;;
+        *) fail "unknown expected frozen state $expected_frozen" ;;
+    esac
     if [ -n "$expected_ui" ]; then
         grep -F "$expected_ui" "$case_root/ui" >/dev/null ||
             fail "$name did not explain the fail-closed recovery reinstall"
@@ -213,6 +227,8 @@ run_case() {
                 ;;
         esac
         case "$installed_state" in
+            enabled) [ -d "$installed" ] && [ ! -e "$installed/disable" ] ||
+                fail "$name changed the active installed-module marker state" ;;
             disabled) [ -f "$installed/disable" ] ||
                 fail "$name changed the installed disable marker" ;;
             missing) [ ! -e "$installed" ] && [ ! -L "$installed" ] ||
@@ -226,31 +242,35 @@ run_case retired_history pass retired no pass pass '' no 0 no no no
 run_case live_prepare pass yes no pass pass $'--verify\n--prepare\n--verify\n--stage\n' yes 1 no no no
 run_case existing_proof pass yes yes pass pass $'--verify\n--stage\n' yes 1 no no no
 run_case prepare_refused reject yes no freeze_fail pass $'--verify\n--prepare\n--cancel\n' no 1 no no no
-run_case active_gate reject active no freeze_fail pass $'--verify\n--prepare\n--cancel\n' no 1 no no no
+run_case active_gate_live_daemon reject active no freeze_fail pass \
+    $'--verify\n--prepare\n--cancel\n' no 1 no no no enabled trusted
 run_case stage_failed reject yes no pass reject $'--verify\n--prepare\n--verify\n--stage\n--cancel\n' no 1 no no no
 run_case signal_after_freeze interrupted yes no pass pass $'--verify\n--prepare\n--verify\n--cancel\n' no 1 yes no no
 run_case cancel_after_stage interrupted yes no pass pass $'--verify\n--prepare\n--verify\n--stage\n--cancel\n' no 1 no yes no
 run_case signal_during_commit pass yes no pass pass $'--verify\n--prepare\n--verify\n--stage\n' yes 1 no no yes
-run_case orphaned_disabled_recovery pass retired_managed no freeze_fail pass '' no 1 no no no \
+run_case orphaned_disabled_recovery pass retired_managed no freeze_fail pass '' recovery 1 no no no \
     disabled absent \
-    'Recovery reinstall keeps the staged module disabled and does not prove Base, retired, or complete.'
-run_case active_gate_disabled_recovery pass active no freeze_fail pass '' no 1 no no no \
+    'Recovery reinstall activates on next boot and does not prove Base, retired, or complete.'
+run_case active_gate_disabled_recovery pass active no freeze_fail pass '' recovery 1 no no no \
     disabled absent \
-    'Recovery reinstall keeps the staged module disabled and does not prove Base, retired, or complete.'
+    'Recovery reinstall activates on next boot and does not prove Base, retired, or complete.'
+run_case active_gate_ksu_removed_disable_recovery pass active no freeze_fail pass '' \
+    recovery 1 no no no enabled absent \
+    'Recovery reinstall activates on next boot and does not prove Base, retired, or complete.'
 run_case disabled_live_daemon pass yes no pass pass $'--verify\n--prepare\n--verify\n--stage\n' \
     yes 1 no no no disabled trusted
 run_case disabled_daemon_probe_error reject yes no freeze_fail pass \
     $'--verify\n--prepare\n--cancel\n' no 1 no no no disabled error
 run_case missing_module_recovery pass retired_managed no freeze_fail pass '' \
-    no 1 no no no missing absent \
-    'Recovery reinstall keeps the staged module disabled and does not prove Base, retired, or complete.'
+    recovery 1 no no no missing absent \
+    'Recovery reinstall activates on next boot and does not prove Base, retired, or complete.'
 run_case missing_module_live_daemon reject yes no freeze_fail pass \
     $'--verify\n--prepare\n--cancel\n' no 1 no no no missing trusted
 
 ignore_line=$(grep -n "trap '' 0 HUP INT TERM" "$SOURCE" | tail -1 | cut -d: -f1)
-restore_line=$(grep -n 'trap - 0 HUP INT TERM' "$SOURCE" | tail -1 | cut -d: -f1)
-proof_clear_line=$(grep -n 'UPGRADE_PROOF_HELD=0' "$SOURCE" | tail -1 | cut -d: -f1)
-staging_clear_line=$(grep -n 'UPGRADE_STAGING_ACTIVATED=0' "$SOURCE" | tail -1 | cut -d: -f1)
+restore_line=$(awk -v start="$ignore_line" 'NR > start && /trap - 0 HUP INT TERM/ { print NR; exit }' "$SOURCE")
+proof_clear_line=$(awk -v start="$ignore_line" 'NR > start && /UPGRADE_PROOF_HELD=0/ { print NR; exit }' "$SOURCE")
+staging_clear_line=$(awk -v start="$ignore_line" 'NR > start && /UPGRADE_STAGING_ACTIVATED=0/ { print NR; exit }' "$SOURCE")
 [ "$ignore_line" -lt "$proof_clear_line" ] && [ "$ignore_line" -lt "$staging_clear_line" ] &&
     [ "$restore_line" -gt "$proof_clear_line" ] && [ "$restore_line" -gt "$staging_clear_line" ] ||
     fail 'successful handoff ownership transition is outside the ignored-signal critical section'

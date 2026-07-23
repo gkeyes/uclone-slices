@@ -89,8 +89,7 @@ installed_runtime_inactive_for_recovery() {
     if [ ! -e "$INSTALLED_MODULE" ] && [ ! -L "$INSTALLED_MODULE" ]; then
         return 0
     fi
-    safe_upgrade_directory "$INSTALLED_MODULE" &&
-        safe_upgrade_file "$INSTALLED_MODULE/disable"
+    safe_upgrade_directory "$INSTALLED_MODULE"
 }
 
 orphaned_recovery_reinstall_ready() {
@@ -172,7 +171,7 @@ if management_metadata_present || active_gate_present; then
         ORPHANED_RECOVERY_REINSTALL=1
         ui_print 'UClone Slots: no active installed Runtime is available and no ucloned process is live.'
         ui_print 'UClone Slots: preserving all existing management state for recovery reinstall.'
-        ui_print 'Recovery reinstall keeps the staged module disabled and does not prove Base, retired, or complete.'
+        ui_print 'Recovery reinstall activates on next boot and does not prove Base, retired, or complete.'
     else
         ui_print 'UClone Slots: existing managed Apps detected; freezing the old Runtime for paired upgrade.'
         if ! paired_upgrade_ready; then
@@ -221,7 +220,8 @@ fi
 if [ "$ORPHANED_RECOVERY_REINSTALL" -eq 1 ]; then
     safe_upgrade_file "$MODPATH/disable" ||
         abort 'UClone Slots recovery reinstall lost its staged disable marker'
-    old_daemon_process_absent ||
-        abort 'UClone Slots recovery reinstall observed a new daemon and remains disabled'
-    ui_print 'UClone Slots: recovery Runtime installed disabled; no active-slot claim was changed.'
+    activate_staged_update ||
+        abort 'UClone Slots recovery reinstall could not schedule the new Runtime for next boot'
+    UPGRADE_STAGING_ACTIVATED=0
+    ui_print 'UClone Slots: recovery Runtime scheduled for next boot; no active-slot claim was changed.'
 fi
