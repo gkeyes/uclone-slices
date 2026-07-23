@@ -16,6 +16,7 @@ import androidx.compose.ui.window.Dialog
 import com.uclone.slots.preview.*
 import com.uclone.slots.preview.model.Destination
 import com.uclone.slots.preview.model.RuntimeMode
+import com.uclone.slots.preview.model.VerificationState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -86,13 +87,13 @@ fun SlotsManagerApp(viewModel: SlotsViewModel) {
                 is Destination.Detail -> DetailScreen(
                     packageName = destination.packageName,
                     label = label,
-                    status = viewModel.selectedStatus,
-                    slots = viewModel.selectedSlots,
+                    verificationState = viewModel.verificationState,
                     recoveryOnly = viewModel.runtimeMode == RuntimeMode.RecoveryOnly,
                     enabled = canUseOrdinarySlotActions(
                         viewModel.runtimeHealth,
                         viewModel.runtimeBusy,
-                        viewModel.selectedStatus?.requiresRecovery == false,
+                        viewModel.verificationState is VerificationState.Verified &&
+                            viewModel.selectedStatus?.requiresRecovery == false,
                     ),
                     reconcileEnabled = canUseReconcile(
                         viewModel.runtimeHealth,

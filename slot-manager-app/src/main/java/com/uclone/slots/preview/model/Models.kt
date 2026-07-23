@@ -62,6 +62,25 @@ data class PackageRuntimeStatus(
         get() = lifecycle != PackageLifecycle.Normal
 }
 
+data class VerifiedPackageSnapshot(
+    val status: PackageRuntimeStatus,
+    val slots: List<SlotSpace>,
+)
+
+enum class VerificationSource {
+    Snapshot,
+    PostMutation,
+}
+
+sealed interface VerificationState {
+    data object Unverified : VerificationState
+
+    data class Verified(
+        val snapshot: VerifiedPackageSnapshot,
+        val source: VerificationSource,
+    ) : VerificationState
+}
+
 enum class PackageSupport {
     Supported,
     DirectBootConditional,

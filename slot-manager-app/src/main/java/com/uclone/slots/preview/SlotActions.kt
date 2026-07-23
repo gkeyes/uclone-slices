@@ -23,7 +23,7 @@ fun SlotsViewModel.createSlot(packageName: String, name: String, blank: Boolean)
                 }
                 if (confirmAndRefresh(packageName, switched.slotId)) {
                     record("已创建空间：$trimmed")
-                    finishConfirmedLaunch(packageName, switched.slotId)
+                    finishConfirmedLaunch(packageName, switched.slotId, result)
                 }
             }
             else -> handleFailure(result, packageName)
@@ -42,7 +42,7 @@ fun SlotsViewModel.switchAndOpen(packageName: String, slotId: String) =
                     )
                 }
                 if (!confirmAndRefresh(packageName, slotId)) return@launchOperation
-                finishConfirmedLaunch(packageName, slotId)
+                finishConfirmedLaunch(packageName, slotId, result)
             }
             else -> handleFailure(result, packageName)
         }
@@ -81,10 +81,7 @@ fun SlotsViewModel.rescue(packageName: String) = launchOperation("安全退回 B
         is RuntimeResult.Success -> if (result.isAck("rescue_to_base")) {
             apps.forgetManaged(packageName)
             managedApps = managedApps.withoutPackage(packageName)
-            if (selectedStatus?.packageName == packageName) {
-                selectedStatus = null
-                selectedSlots = emptyList()
-            }
+            revokePackageVerification()
             record("已安全退回 Base")
             navigate(Destination.Apps)
             refreshRuntime()
@@ -93,7 +90,16 @@ fun SlotsViewModel.rescue(packageName: String) = launchOperation("安全退回 B
     }
 }
 
-private suspend fun SlotsViewModel.finishConfirmedLaunch(packageName: String, slotId: String) {
+private suspend fun SlotsViewModel.finishConfirmedLaunch(
+    packageName: String,
+    slotId: String,
+    switchResult: RuntimeResult,
+) {
+    if (!canLaunchAfterSwitch(switchResult, verificationState, packageName, slotId)) {
+        revokePackageVerification()
+        message = "切换结果或数据视图尚未验证，不会启动目标 App"
+        return
+    }
     updateOperationPhase("启动已确认的数据空间")
     when (val result = runtime.launchCurrent(packageName, slotId)) {
         is RuntimeResult.Success -> {
@@ -113,8 +119,7 @@ private suspend fun SlotsViewModel.finishConfirmedLaunch(packageName: String, sl
 
 fun SlotsViewModel.selectRescueTarget(app: InstalledApp) {
     managedApps = managedApps.withRecoveryTarget(app)
-    selectedStatus = null
-    selectedSlots = emptyList()
+    revokePackageVerification()
     destination = Destination.Detail(app.packageName)
 }
 

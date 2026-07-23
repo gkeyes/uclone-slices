@@ -34,6 +34,8 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         internal set
     var selectedSlots by mutableStateOf<List<SlotSpace>>(emptyList())
         internal set
+    var verificationState by mutableStateOf<VerificationState>(VerificationState.Unverified)
+        internal set
     var operation by mutableStateOf<OperationState?>(null)
         private set
     var runtimeBusy by mutableStateOf(false)
@@ -80,8 +82,7 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
             runtimeHealth == RuntimeHealth.DaemonOffline ||
             runtimeHealth == RuntimeHealth.PairMismatch
         ) {
-            selectedStatus = null
-            selectedSlots = emptyList()
+            revokePackageVerification()
             return
         }
         launchOperation("读取数据空间") { loadPackage(packageName) }
@@ -132,12 +133,11 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         if (snapshot == null || snapshot.status.activeSlot != slotId ||
             snapshot.status.requiresRecovery
         ) {
+            revokePackageVerification()
             unknown(packageName)
             return false
         }
-        selectedStatus = snapshot.status
-        selectedSlots = snapshot.slots
-        markPackageLifecycle(packageName, snapshot.status.lifecycle)
+        applyVerifiedSnapshot(snapshot, VerificationSource.PostMutation)
         record("已切换到 ${selectedSlots.firstOrNull { it.id == slotId }?.displayName ?: slotId}")
         return true
     }
@@ -146,22 +146,18 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
     }
     private suspend fun loadPackage(packageName: String, recoverUnknown: Boolean = true): Boolean {
         if (runtimeMode == RuntimeMode.RecoveryOnly) {
-            selectedStatus = null
-            selectedSlots = emptyList()
+            revokePackageVerification()
             return true
         }
         if (selectedStatus?.packageName != packageName) {
-            selectedStatus = null
-            selectedSlots = emptyList()
+            revokePackageVerification()
         }
         val snapshot = queryPackageForMode(runtimeMode, packageName, runtime::readPackageSnapshot)
         if (snapshot == null) {
             if (recoverUnknown) unknown(packageName)
             return false
         }
-        selectedStatus = snapshot.status
-        selectedSlots = snapshot.slots
-        markPackageLifecycle(packageName, snapshot.status.lifecycle)
+        applyVerifiedSnapshot(snapshot, VerificationSource.Snapshot)
         return true
     }
     private suspend fun openDetailInternal(packageName: String) {
@@ -214,6 +210,7 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         when (result) {
             is RuntimeResult.Rejected -> {
                 if (result.code in setOf("recovery_required", "quarantined")) {
+                    revokePackageVerification()
                     markPackageLifecycle(
                         packageName,
                         if (result.code == "quarantined") PackageLifecycle.Quarantined
@@ -232,13 +229,16 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     private suspend fun unknown(packageName: String) {
+        revokePackageVerification()
         operation = operation?.copy(phase = "结果未知，正在重新确认", resultUnknown = true)
         val reconciled = runtime.reconcile(packageName)
         val loaded = reconciled is RuntimeResult.Success &&
             loadPackage(packageName, recoverUnknown = false)
+        verificationState = verificationAfterUnknown(reconciled, verificationState)
         message = if (loaded && selectedStatus?.requiresRecovery == false) {
             "客户端未取得原操作结果，已重新读取安全状态；不会自动启动 App"
         } else {
+            revokePackageVerification()
             markPackageLifecycle(packageName, PackageLifecycle.RecoveryRequired)
             "无法证明最终数据视图，也无法确认 App 当前是否已禁用；不会自动启动"
         }

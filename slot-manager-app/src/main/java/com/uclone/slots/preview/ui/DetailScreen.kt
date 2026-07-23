@@ -17,12 +17,12 @@ import androidx.compose.ui.unit.dp
 import com.uclone.slots.preview.model.PackageRuntimeStatus
 import com.uclone.slots.preview.model.PackageLifecycle
 import com.uclone.slots.preview.model.SlotSpace
+import com.uclone.slots.preview.model.VerificationState
 @Composable
 fun DetailScreen(
     packageName: String,
     label: String,
-    status: PackageRuntimeStatus?,
-    slots: List<SlotSpace>,
+    verificationState: VerificationState,
     recoveryOnly: Boolean,
     enabled: Boolean,
     reconcileEnabled: Boolean,
@@ -36,17 +36,20 @@ fun DetailScreen(
 ) {
     var createDialog by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<SlotSpace?>(null) }
-    val baseActive = status?.activeSlot == "base"
+    val verified = verificationState as? VerificationState.Verified
+    val visibleStatus = verified?.snapshot?.status
+    val visibleSlots = verified?.snapshot?.slots.orEmpty()
+    val baseActive = visibleStatus?.activeSlot == "base"
     LazyColumn(
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item { AppHeader(packageName, label, status) }
-        if (status == null || status.requiresRecovery) {
+        item { AppHeader(packageName, label, visibleStatus) }
+        if (visibleStatus == null || visibleStatus.requiresRecovery) {
             item {
                 RecoveryCard(
-                    runtimeOffline = status == null,
-                    containmentProved = status?.enabled == false,
+                    runtimeOffline = visibleStatus == null,
+                    containmentProved = verified?.snapshot?.status?.enabled == false,
                     recoveryOnly = recoveryOnly,
                     reconcileEnabled = reconcileEnabled,
                     rescueEnabled = rescueEnabled,
@@ -70,7 +73,7 @@ fun DetailScreen(
                     }
                 }
             }
-            items(slots, key = { it.id }) { slot ->
+            items(visibleSlots, key = { it.id }) { slot ->
                 SlotCard(
                     slot = slot,
                     enabled = enabled,
@@ -134,7 +137,7 @@ private fun AppHeader(packageName: String, label: String, status: PackageRuntime
             Spacer(Modifier.width(8.dp))
             Text(
                 when {
-                    status == null -> "正在读取 Runtime 状态"
+                    status == null -> "当前状态未验证"
                     status.requiresRecovery -> "安全状态需要恢复"
                     status.activeSlot == "base" -> "当前：Base 原生数据"
                     else -> "当前：扩展数据空间"
@@ -205,10 +208,8 @@ private fun SlotCard(
 
 internal fun canSwitchAndOpen(enabled: Boolean, slot: SlotSpace): Boolean =
     enabled && slot.state == "ready"
-
 internal fun canCreateSpace(enabled: Boolean, baseActive: Boolean): Boolean =
     enabled && baseActive
-
 internal fun canDeleteSlot(enabled: Boolean, baseActive: Boolean, slot: SlotSpace): Boolean =
     enabled && baseActive && !slot.isBase && !slot.active
 
