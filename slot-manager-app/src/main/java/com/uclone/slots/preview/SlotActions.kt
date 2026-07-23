@@ -94,7 +94,7 @@ fun SlotsViewModel.rescue(packageName: String) = launchOperation("安全退回 B
 }
 
 private suspend fun SlotsViewModel.finishConfirmedLaunch(packageName: String, slotId: String) {
-    operation = operation?.copy(phase = "启动已确认的数据空间")
+    updateOperationPhase("启动已确认的数据空间")
     when (val result = runtime.launchCurrent(packageName, slotId)) {
         is RuntimeResult.Success -> {
             val launched = result.payload as? RuntimePayload.Launch

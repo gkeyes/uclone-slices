@@ -141,6 +141,9 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         record("已切换到 ${selectedSlots.firstOrNull { it.id == slotId }?.displayName ?: slotId}")
         return true
     }
+    internal fun updateOperationPhase(phase: String) {
+        operation = operation?.copy(phase = phase)
+    }
     private suspend fun loadPackage(packageName: String, recoverUnknown: Boolean = true): Boolean {
         if (runtimeMode == RuntimeMode.RecoveryOnly) {
             selectedStatus = null
