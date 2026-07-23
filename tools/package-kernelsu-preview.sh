@@ -204,12 +204,12 @@ customize.sh
 disable
 emergency-containment.sh
 journal-packages.sh
-rescue-retired-packages.sh
 module.prop
 post-fs-data.sh
 post-fs-setup.sh
 prepare-upgrade.sh
 profile-loader.sh
+rescue-retired-packages.sh
 rescue.sh
 runtime/slot-bridge.apk
 runtime/slot-fsprobe
