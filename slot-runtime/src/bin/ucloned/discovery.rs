@@ -8,7 +8,7 @@ use uclone_slot_runtime::enrollment::EnrollmentStore;
 use uclone_slot_runtime::journal::JournalStore;
 use uclone_slot_runtime::layout::RuntimeLayout;
 
-pub(super) fn startup_keys() -> (Vec<PackageKey>, bool) {
+pub fn startup_keys() -> (Vec<PackageKey>, bool) {
     let mut packages = BTreeMap::<String, PackageName>::new();
     let mut corrupt = false;
     for root in management_package_roots() {
@@ -52,7 +52,7 @@ pub(super) fn startup_keys() -> (Vec<PackageKey>, bool) {
     )
 }
 
-pub(super) fn management_package_roots() -> Vec<PathBuf> {
+pub fn management_package_roots() -> Vec<PathBuf> {
     vec![
         RuntimeLayout::enrollment_root().join("packages"),
         RuntimeLayout::compatibility_policy_root().join("packages"),
@@ -66,7 +66,7 @@ pub(super) fn management_package_roots() -> Vec<PathBuf> {
     ]
 }
 
-pub(super) fn scan_package_root(root: &Path, packages: &mut BTreeMap<String, PackageName>) -> bool {
+pub fn scan_package_root(root: &Path, packages: &mut BTreeMap<String, PackageName>) -> bool {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
@@ -96,7 +96,7 @@ fn insert_package(packages: &mut BTreeMap<String, PackageName>, package: Package
     packages.insert(package.as_str().to_owned(), package);
 }
 
-pub(super) fn reconciliation_keys(
+pub fn reconciliation_keys(
     ordinary: &[PackageKey],
     recovery: &BTreeSet<PackageName>,
 ) -> Vec<PackageKey> {
