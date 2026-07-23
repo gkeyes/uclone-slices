@@ -19,10 +19,12 @@ use uclone_slot_runtime::rescue::{
 const SIGNATURE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const ENROLLMENT_DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const BASE_DIGEST: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+const PACKAGE: &str = "com.uclone.slotprobe";
 
 pub(super) fn store(root: &TempDir) -> RescueJournalStore {
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    RescueJournalStore::new(root.path()).unwrap()
+    let package = PackageName::parse(PACKAGE).unwrap();
+    RescueJournalStore::for_package(root.path(), &package).unwrap()
 }
 
 pub(super) fn spec() -> RescueSpec {
@@ -74,10 +76,7 @@ pub(super) fn append_until_verified(store: &RescueJournalStore, spec: &RescueSpe
 fn build_spec(identity: AppIdentity, gate: GateSnapshot) -> RescueSpec {
     RescueSpec::new(
         RescueId::parse("rescue-00000001").unwrap(),
-        PackageKey::new(
-            PackageName::parse("com.uclone.slotprobe").unwrap(),
-            UserId::PRIMARY,
-        ),
+        PackageKey::new(PackageName::parse(PACKAGE).unwrap(), UserId::PRIMARY),
         identity,
         DataInodes::new(101, 202).unwrap(),
         gate,
