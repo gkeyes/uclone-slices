@@ -17,11 +17,12 @@ KernelSU Runtime
   ├── slotctl：受限管理及救援客户端
   └── 启动钩子：门禁、重启恢复和故障收敛
 
-可选 Launcher / LSPosed 入口
-  └── 只负责快捷选择，不执行 Root 或数据操作
+路线图：可选 Launcher / LSPosed 入口（当前尚未接入 Preview）
+  └── 未来只负责快捷选择，不执行 Root 或数据操作
 ```
 
-KernelSU Runtime 是 Slots 的必要组件；LSPosed 不是必要组件。
+KernelSU Runtime 是 Slots 的必要组件；LSPosed 不是必要组件。仓库现有的
+`launcher-module/` 当前只连接 Legacy UClone Restore，不提供 Preview 数据槽入口。
 
 ## 已验证的技术基础
 
@@ -66,14 +67,21 @@ KernelSU Runtime 是 Slots 的必要组件；LSPosed 不是必要组件。
 | `slot-bridge/` | PackageManager 身份与状态 Bridge |
 | `slot-fsprobe/` | 原生文件系统、inode 与挂载视图探针 |
 | `slot-kernelsu/` | KernelSU Runtime 模块与独立救援脚本 |
-| `slot-probe/` | 专用 CE/DE、多进程回归测试 App |
-| `slot-preview-controller/` | 固定目标诊断控制器，保留用于回归 |
+| `slot-probe/` | 诊断：专用 CE/DE、多进程回归测试 App |
+| `slot-preview-controller/` | 诊断：固定目标控制器，保留用于回归 |
 | `docs/` | 技术设计、设备证据与安全边界 |
-| `app/`, `launcher-module/` | 上游 UClone Restore 与可选快捷入口基线 |
+| `app/`, `launcher-module/` | Legacy UClone Restore 及其 Launcher/LSPosed 入口 |
+
+完整边界见 [产品与模块边界](docs/architecture/PRODUCT_BOUNDARIES.md)。
 
 ## 构建与验证
 
 本仓库包含 Android、Rust、C 与 KernelSU Shell 组件。发布产物必须从同一提交构建，并通过各组件测试、严格 Clippy、Android lint、ELF/签名检查以及 KernelSU ZIP 内容审计。
+
+Preview 配对发布只包含 `slot-manager-app/` 与由 `slot-runtime/`、
+`slot-bridge/`、`slot-fsprobe/`、`slot-kernelsu/` 组成的 Runtime。
+诊断模块和 Legacy `app/`、`launcher-module/` 使用独立构建目标，不进入
+Preview APK/ZIP。
 
 发布构建只由仓库的 GitHub Actions 固定环境执行。本地只做源码格式、Shell/YAML
 语法和路径策略等静态检查，不把本机缓存或工具链结果作为发布证据。CI 固定执行：

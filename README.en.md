@@ -17,11 +17,13 @@ KernelSU Runtime
   ├── slotctl: constrained management and rescue client
   └── boot hooks: containment, recovery, and reconciliation
 
-Optional Launcher / LSPosed entry
-  └── shortcut routing only; no root or data operations
+Roadmap: optional Launcher / LSPosed entry (not connected to Preview today)
+  └── future shortcut routing only; no root or data operations
 ```
 
-The KernelSU Runtime is required. LSPosed is optional.
+The KernelSU Runtime is required. LSPosed is not required. The existing
+`launcher-module/` currently targets Legacy UClone Restore and does not provide
+a Preview slot entry.
 
 ## Validated foundation
 
@@ -60,14 +62,22 @@ Managed-app updates, clear-data, uninstall/reinstall, and OTA flows require life
 | `slot-bridge/` | PackageManager identity and state bridge |
 | `slot-fsprobe/` | Native filesystem, inode, and mount-view probe |
 | `slot-kernelsu/` | KernelSU runtime module and independent rescue scripts |
-| `slot-probe/` | Dedicated CE/DE and multi-process regression app |
-| `slot-preview-controller/` | Fixed-target diagnostic controller retained for regression |
+| `slot-probe/` | Diagnostics: dedicated CE/DE and multi-process regression app |
+| `slot-preview-controller/` | Diagnostics: fixed-target controller retained for regression |
 | `docs/` | design notes, device evidence, and safety boundaries |
-| `app/`, `launcher-module/` | upstream UClone Restore and optional shortcut baseline |
+| `app/`, `launcher-module/` | Legacy UClone Restore and its Launcher/LSPosed entry |
+
+See [Product and module boundaries](docs/architecture/PRODUCT_BOUNDARIES.md) for
+the current separation and roadmap.
 
 ## Build and validation
 
 This repository combines Android, Rust, C, and KernelSU shell components. Release artifacts must come from one source commit and pass component tests, strict Clippy, Android lint, ELF/signing checks, and KernelSU ZIP content review.
+
+The paired Preview release contains `slot-manager-app/` plus the Runtime built
+from `slot-runtime/`, `slot-bridge/`, `slot-fsprobe/`, and `slot-kernelsu/`.
+Diagnostic modules and the Legacy `app/` and `launcher-module/` use separate
+build targets and are not included in the Preview APK/ZIP.
 
 Release builds run only in the repository's pinned GitHub Actions environment.
 Local work is limited to static source, shell/YAML syntax, formatting, and path
