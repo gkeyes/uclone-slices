@@ -201,7 +201,10 @@ fn checkpoint_corruption_and_epoch_chain_breaks_fail_closed() {
     let checkpoint = slot_root(&root).join("epochs/0000000000000001/checkpoint.json");
     let mut value: serde_json::Value =
         serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
-    value["previous_record_count"] = serde_json::json!(99);
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("previous_record_count".to_owned(), serde_json::json!(99));
     fs::write(&checkpoint, serde_json::to_vec(&value).unwrap()).unwrap();
 
     assert!(store.latest(&package, &slot).is_err());

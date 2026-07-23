@@ -21,6 +21,14 @@ pub(super) struct VerifiedEpoch {
     pub(super) commit_sha256: String,
 }
 
+struct EpochPublication {
+    number: u64,
+    previous_epoch: Option<u64>,
+    previous_count: usize,
+    canonical: SlotMetadata,
+    previous_commit_sha: Option<String>,
+}
+
 impl VerifiedStream {
     pub(super) const fn latest(&self) -> &SlotMetadata {
         &self.latest
@@ -60,23 +68,27 @@ pub(super) fn publish_update(
         None => publish_epoch(
             slot_path,
             owner_uid,
-            1,
-            None,
-            stream.legacy_count,
-            stream.latest.clone(),
-            None,
+            EpochPublication {
+                number: 1,
+                previous_epoch: None,
+                previous_count: stream.legacy_count,
+                canonical: stream.latest.clone(),
+                previous_commit_sha: None,
+            },
         )?,
         Some(current) if current.revision_count >= MAX_EPOCH_REVISIONS => publish_epoch(
             slot_path,
             owner_uid,
-            current
-                .number
-                .checked_add(1)
-                .ok_or_else(|| corrupt("slot metadata epoch overflow"))?,
-            Some(current.number),
-            current.revision_count,
-            stream.latest.clone(),
-            Some(current.commit_sha256.clone()),
+            EpochPublication {
+                number: current
+                    .number
+                    .checked_add(1)
+                    .ok_or_else(|| corrupt("slot metadata epoch overflow"))?,
+                previous_epoch: Some(current.number),
+                previous_count: current.revision_count,
+                canonical: stream.latest.clone(),
+                previous_commit_sha: Some(current.commit_sha256.clone()),
+            },
         )?,
         Some(current) => current.number,
     };
@@ -93,18 +105,23 @@ pub(super) fn publish_update(
 fn publish_epoch(
     slot_path: &Path,
     owner_uid: u32,
-    epoch: u64,
-    previous_epoch: Option<u64>,
-    previous_count: usize,
-    canonical: SlotMetadata,
-    previous_commit_sha: Option<String>,
+    publication: EpochPublication,
 ) -> Result<u64, SlotMetadataError> {
     let epochs = slot_path.join("epochs");
     storage::ensure_synced_directory(&epochs, slot_path, owner_uid)?;
-    let checkpoint = EpochCheckpoint::new(epoch, previous_epoch, previous_count, canonical)?;
-    let commit = EpochCommit::new(epoch, checkpoint.sha256().to_owned(), previous_commit_sha)?;
-    storage::publish_epoch_directory(&epochs, epoch, &checkpoint, &commit, owner_uid)?;
-    Ok(epoch)
+    let checkpoint = EpochCheckpoint::new(
+        publication.number,
+        publication.previous_epoch,
+        publication.previous_count,
+        publication.canonical,
+    )?;
+    let commit = EpochCommit::new(
+        publication.number,
+        checkpoint.sha256().to_owned(),
+        publication.previous_commit_sha,
+    )?;
+    storage::publish_epoch_directory(&epochs, publication.number, &checkpoint, &commit, owner_uid)?;
+    Ok(publication.number)
 }
 
 fn publish_revision(
@@ -159,7 +176,18 @@ mod tests {
         let slot_path = metadata_root.join("packages/com.example.atomic/slots/slot-atomic");
         let owner_uid = fs::symlink_metadata(&metadata_root).unwrap().uid();
 
-        publish_epoch(&slot_path, owner_uid, 1, None, 1, canonical.clone(), None).unwrap();
+        publish_epoch(
+            &slot_path,
+            owner_uid,
+            EpochPublication {
+                number: 1,
+                previous_epoch: None,
+                previous_count: 1,
+                canonical: canonical.clone(),
+                previous_commit_sha: None,
+            },
+        )
+        .unwrap();
 
         assert_eq!(store.latest(&package, &slot).unwrap(), Some(canonical));
         let epoch = slot_path.join("epochs/0000000000000001");

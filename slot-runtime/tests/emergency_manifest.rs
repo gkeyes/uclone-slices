@@ -40,6 +40,43 @@ fn runtime_owner(boot_id: &str) -> RuntimeOwnerProof {
     )
 }
 
+fn invalid_runtime_owner_proofs() -> [RuntimeOwnerProof; 4] {
+    [
+        RuntimeOwnerProof::new(
+            boot("boot-00000001"),
+            0,
+            81_000,
+            RuntimeOwnerRole::Ucloned,
+            73,
+            9_001,
+        ),
+        RuntimeOwnerProof::new(
+            boot("boot-00000001"),
+            4242,
+            0,
+            RuntimeOwnerRole::Ucloned,
+            73,
+            9_001,
+        ),
+        RuntimeOwnerProof::new(
+            boot("boot-00000001"),
+            4242,
+            81_000,
+            RuntimeOwnerRole::Ucloned,
+            0,
+            9_001,
+        ),
+        RuntimeOwnerProof::new(
+            boot("boot-00000001"),
+            4242,
+            81_000,
+            RuntimeOwnerRole::Ucloned,
+            73,
+            0,
+        ),
+    ]
+}
+
 fn manifest_with_integrity(
     boot_id: &str,
     generation: u64,
@@ -97,11 +134,11 @@ fn same_boot_containment_transition_matrix_is_complete() {
         [false, false, false, false, true],
     ];
 
-    for (previous_index, previous) in obligations.into_iter().enumerate() {
-        for (next_index, next) in obligations.into_iter().enumerate() {
+    for (previous, row) in obligations.into_iter().zip(expected) {
+        for (next, allowed) in obligations.into_iter().zip(row) {
             assert_eq!(
                 previous.can_transition_same_boot_to(next),
-                expected[previous_index][next_index],
+                allowed,
                 "unexpected same-epoch transition {} -> {}",
                 previous.as_str(),
                 next.as_str()
@@ -123,11 +160,11 @@ fn new_boot_containment_transition_matrix_is_stricter() {
         [false, false, false, false, true],
     ];
 
-    for (previous_index, previous) in obligations.into_iter().enumerate() {
-        for (next_index, next) in obligations.into_iter().enumerate() {
+    for (previous, row) in obligations.into_iter().zip(expected) {
+        for (next, allowed) in obligations.into_iter().zip(row) {
             assert_eq!(
                 previous.can_transition_new_boot_to(next),
-                expected[previous_index][next_index],
+                allowed,
                 "unexpected new-boot transition {} -> {}",
                 previous.as_str(),
                 next.as_str()
@@ -242,40 +279,7 @@ fn runtime_owned_requires_an_exact_owner_proof_and_rejects_stale_proofs() {
     .unwrap_err();
     assert!(stale_boot.to_string().contains("boot"));
 
-    for invalid in [
-        RuntimeOwnerProof::new(
-            boot("boot-00000001"),
-            0,
-            81_000,
-            RuntimeOwnerRole::Ucloned,
-            73,
-            9_001,
-        ),
-        RuntimeOwnerProof::new(
-            boot("boot-00000001"),
-            4242,
-            0,
-            RuntimeOwnerRole::Ucloned,
-            73,
-            9_001,
-        ),
-        RuntimeOwnerProof::new(
-            boot("boot-00000001"),
-            4242,
-            81_000,
-            RuntimeOwnerRole::Ucloned,
-            0,
-            9_001,
-        ),
-        RuntimeOwnerProof::new(
-            boot("boot-00000001"),
-            4242,
-            81_000,
-            RuntimeOwnerRole::Ucloned,
-            73,
-            0,
-        ),
-    ] {
+    for invalid in invalid_runtime_owner_proofs() {
         assert!(
             EmergencyManifestV1::with_context(
                 boot("boot-00000001"),
@@ -950,7 +954,7 @@ fn ignores_partial_temp_and_fails_closed_on_corrupt_committed_record() {
     let temporary = root.path().join(".manifest.json.tmp-orphan");
     fs::write(&temporary, b"partial").unwrap();
     fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600)).unwrap();
-    assert_eq!(store.load().unwrap(), Some(manifest.clone()));
+    assert_eq!(store.load().unwrap(), Some(manifest));
 
     fs::write(store.manifest_path(), b"{\"partial\":true}").unwrap();
     let error = store.load().unwrap_err();
@@ -1022,9 +1026,12 @@ fn serializes_two_same_generation_writers_with_one_winner() {
     barrier.wait();
     let left_result = left_thread.join().unwrap();
     let right_result = right_thread.join().unwrap();
-    assert_eq!(left_result.is_ok() as u8 + right_result.is_ok() as u8, 1);
+    assert_eq!(
+        u8::from(left_result.is_ok()) + u8::from(right_result.is_ok()),
+        1
+    );
     assert!(matches!(
-        left_result.err().or(right_result.err()),
+        left_result.err().or_else(|| right_result.err()),
         Some(EmergencyManifestError::StaleGeneration { .. })
     ));
     assert_eq!(store.load().unwrap(), Some(candidate));

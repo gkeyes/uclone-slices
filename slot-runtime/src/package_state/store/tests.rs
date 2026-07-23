@@ -85,7 +85,7 @@ fn private_migration_is_append_only_and_byte_exact() {
     );
 
     let reopened = PackageStateStore::new(root.path()).unwrap();
-    assert_eq!(reopened.latest(&package).unwrap(), Some(migrated.clone()));
+    assert_eq!(reopened.latest(&package).unwrap(), Some(migrated));
 
     let recovery = reopened
         .transition(
@@ -143,44 +143,9 @@ fn private_migration_refuses_every_v1_non_normal_head() {
         (V1_UPDATE_WINDOW_OPEN, LifecycleState::UpdateWindowOpen, 3),
         (V1_UPDATE_VERIFYING, LifecycleState::UpdateVerifying, 4),
     ];
-    for (fixture_bytes, expected_state, generation) in legacy_update_heads {
-        let (_root, state, package) = raw_v1_store();
-        let fixtures = [
-            V1_UPDATE_PREPARING,
-            V1_UPDATE_WINDOW_OPEN,
-            V1_UPDATE_VERIFYING,
-        ];
-        for (index, bytes) in fixtures.iter().enumerate().take((*generation - 1) as usize) {
-            write_raw_revision(
-                &state,
-                package.package_name(),
-                index as u64 + 2,
-                fixture(*bytes),
-            );
-        }
-        assert_eq!(
-            fs::read(state.revision_path(package.package_name(), *generation)).unwrap(),
-            fixture(*fixture_bytes)
-        );
-        let head = state.latest(&package).unwrap().unwrap();
-        assert_eq!(head.lifecycle_state(), *expected_state);
-        let error = state
-            .migrate_v1_normal_to_v2(&package, head.generation(), head.sha256(), artifact())
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            PackageStateError::MigrationRefused {
-                schema_version: 1,
-                state
-            } if state == *expected_state
-        ));
-        assert!(
-            !state
-                .revision_path(package.package_name(), head.generation() + 1)
-                .exists()
-        );
+    for &(fixture_bytes, expected_state, generation) in legacy_update_heads {
+        assert_v1_update_head_refuses_migration(fixture_bytes, expected_state, generation);
     }
-
     let cases: &[(&str, &[(LifecycleState, PackageStateReason)])] = &[
         (
             "drifted",
@@ -217,17 +182,15 @@ fn private_migration_refuses_every_v1_non_normal_head() {
             )],
         ),
     ];
-
-    for (name, transitions) in cases {
+    for &(name, transitions) in cases {
         let (_root, state) = store();
         let package = key(&format!("com.uclone.legacy.{name}"));
         let mut head = state.initialize(&package).unwrap();
-        for (next, reason) in *transitions {
+        for &(next, reason) in transitions {
             head = state
-                .transition(&package, head.lifecycle_state(), *next, *reason)
+                .transition(&package, head.lifecycle_state(), next, reason)
                 .unwrap();
         }
-
         let error = state
             .migrate_v1_normal_to_v2(&package, head.generation(), head.sha256(), artifact())
             .unwrap_err();
@@ -244,4 +207,43 @@ fn private_migration_refuses_every_v1_non_normal_head() {
                 .exists()
         );
     }
+}
+fn assert_v1_update_head_refuses_migration(
+    fixture_bytes: &'static [u8],
+    expected_state: LifecycleState,
+    generation: u64,
+) {
+    let (_root, state, package) = raw_v1_store();
+    let fixtures = [
+        V1_UPDATE_PREPARING,
+        V1_UPDATE_WINDOW_OPEN,
+        V1_UPDATE_VERIFYING,
+    ];
+    let package_name = package.package_name();
+    let preceding = usize::try_from(generation - 1).unwrap();
+    for (index, bytes) in fixtures.iter().enumerate().take(preceding) {
+        let revision_generation = u64::try_from(index).unwrap() + 2;
+        write_raw_revision(&state, package_name, revision_generation, fixture(bytes));
+    }
+    assert_eq!(
+        fs::read(state.revision_path(package_name, generation)).unwrap(),
+        fixture(fixture_bytes)
+    );
+    let head = state.latest(&package).unwrap().unwrap();
+    assert_eq!(head.lifecycle_state(), expected_state);
+    let error = state
+        .migrate_v1_normal_to_v2(&package, head.generation(), head.sha256(), artifact())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        PackageStateError::MigrationRefused {
+            schema_version: 1,
+            state
+        } if state == expected_state
+    ));
+    assert!(
+        !state
+            .revision_path(package.package_name(), head.generation() + 1)
+            .exists()
+    );
 }

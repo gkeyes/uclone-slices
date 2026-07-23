@@ -23,7 +23,7 @@ pub(super) fn resolve(facts: PackageFacts) -> PackageAggregate {
         } => resolve_enrolled(
             facts.scope,
             lifecycle,
-            active_slot,
+            &active_slot,
             facts.live,
             facts.gate,
             facts.ready_evidence,
@@ -34,7 +34,7 @@ pub(super) fn resolve(facts: PackageFacts) -> PackageAggregate {
 fn resolve_enrolled(
     scope: EvidenceScope,
     lifecycle: LifecycleState,
-    active_slot: SlotId,
+    active_slot: &SlotId,
     live: LivePackageFacts,
     gate: GateFacts,
     ready_evidence: Option<ReadyPackageEvidence>,
@@ -55,7 +55,7 @@ fn resolve_enrolled(
             let Some(evidence) = ready_evidence else {
                 return recovery(scope, InvariantViolation::ReadyEvidenceUnavailable);
             };
-            if evidence.managed().active_slot() != &active_slot {
+            if evidence.managed().active_slot() != active_slot {
                 return recovery(scope, InvariantViolation::ActiveViewUnproven);
             }
             ready(scope, evidence)

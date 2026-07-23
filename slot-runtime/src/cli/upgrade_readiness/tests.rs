@@ -1,6 +1,5 @@
 #![allow(
     clippy::expect_used,
-    clippy::indexing_slicing,
     reason = "compatibility fixtures fail at their exact malformed frame"
 )]
 
@@ -19,8 +18,20 @@ fn accepts_v1_golden_frames_and_sends_only_v1_read_requests() {
     let count = check_with(|| exchange.connect()).expect("v1 readiness");
     assert_eq!(count, 1);
     let requests = exchange.finish();
-    assert_request(&requests[0], 1, V1_PROBE_ID, "probe", None);
-    assert_request(&requests[1], 1, APPS_ID, "list_managed_apps", None);
+    assert_request(
+        requests.first().expect("probe request"),
+        1,
+        V1_PROBE_ID,
+        "probe",
+        None,
+    );
+    assert_request(
+        requests.get(1).expect("apps request"),
+        1,
+        APPS_ID,
+        "list_managed_apps",
+        None,
+    );
 }
 
 #[test]
@@ -29,10 +40,22 @@ fn accepts_v2_golden_frames_and_reuses_the_deployed_build_identity() {
     let count = check_with(|| exchange.connect()).expect("v2 readiness");
     assert_eq!(count, 2);
     let requests = exchange.finish();
-    assert_request(&requests[0], 1, V1_PROBE_ID, "probe", None);
-    assert_request(&requests[1], 2, V2_PROBE_ID, "probe", None);
     assert_request(
-        &requests[2],
+        requests.first().expect("v1 probe request"),
+        1,
+        V1_PROBE_ID,
+        "probe",
+        None,
+    );
+    assert_request(
+        requests.get(1).expect("v2 probe request"),
+        2,
+        V2_PROBE_ID,
+        "probe",
+        None,
+    );
+    assert_request(
+        requests.get(2).expect("v2 apps request"),
         2,
         APPS_ID,
         "list_managed_apps",
@@ -45,24 +68,24 @@ fn rejects_unknown_schema_non_base_non_normal_and_active_runtime_errors() {
     let unknown = [
         r#"{"schema_version":3,"request_id":"upgrade-probe-v1","status":"error","error_code":"invalid_request"}"#,
     ];
-    assert_rejected(&unknown, UpgradeReadinessError::UnsupportedSchema);
+    assert_rejected(&unknown, &UpgradeReadinessError::UnsupportedSchema);
 
     let non_base = v1_with_apps(
         r#"[{"package":"com.example.app","active_slot":"work","lifecycle":"normal"}]"#,
     );
-    assert_rejected(&non_base, UpgradeReadinessError::NonBase);
+    assert_rejected(&non_base, &UpgradeReadinessError::NonBase);
 
     let non_normal = v1_with_apps(
         r#"[{"package":"com.example.app","active_slot":"base","lifecycle":"recovery_required"}]"#,
     );
-    assert_rejected(&non_normal, UpgradeReadinessError::NonNormal);
+    assert_rejected(&non_normal, &UpgradeReadinessError::NonNormal);
 
     let daemon_error = [
         v1_probe().to_owned(),
         r#"{"schema_version":1,"request_id":"upgrade-apps","status":"error","error_code":"busy"}"#
             .to_owned(),
     ];
-    assert_rejected(&daemon_error, UpgradeReadinessError::Rejected);
+    assert_rejected(&daemon_error, &UpgradeReadinessError::Rejected);
 }
 
 #[test]
@@ -72,14 +95,14 @@ fn rejects_identity_change_and_malformed_or_oversized_reports() {
         r#"{"schema_version":1,"request_id":"another-request","status":"ok","payload":{"kind":"managed_apps","data":{"apps":[]}}}"#
             .to_owned(),
     ];
-    assert_rejected(&mismatched, UpgradeReadinessError::InvalidFrame);
+    assert_rejected(&mismatched, &UpgradeReadinessError::InvalidFrame);
 
     let extra_field = [
         v1_probe().to_owned(),
         r#"{"schema_version":1,"request_id":"upgrade-apps","status":"ok","payload":{"kind":"managed_apps","data":{"apps":[],"unsafe":true}}}"#
             .to_owned(),
     ];
-    assert_rejected(&extra_field, UpgradeReadinessError::InvalidFrame);
+    assert_rejected(&extra_field, &UpgradeReadinessError::InvalidFrame);
 
     let apps = (0..=MAX_MANAGED_APPS)
         .map(|index| {
@@ -91,11 +114,11 @@ fn rejects_identity_change_and_malformed_or_oversized_reports() {
         .join(",");
     assert_rejected(
         &v1_with_apps(&format!("[{apps}]")),
-        UpgradeReadinessError::TooManyApps,
+        &UpgradeReadinessError::TooManyApps,
     );
 }
 
-fn v1_probe() -> &'static str {
+const fn v1_probe() -> &'static str {
     r#"{"schema_version":1,"request_id":"upgrade-probe-v1","status":"ok","payload":{"kind":"probe_report","data":{"ready":true,"user_unlocked":true,"ce_de_supported":true}}}"#
 }
 
@@ -108,12 +131,12 @@ fn v1_with_apps(apps: &str) -> Vec<String> {
     ]
 }
 
-fn assert_rejected(lines: &[impl AsRef<str>], expected: UpgradeReadinessError) {
+fn assert_rejected(lines: &[impl AsRef<str>], expected: &UpgradeReadinessError) {
     let mut exchange = FixtureExchange::from_lines(lines.iter().map(AsRef::as_ref));
     let error = check_with(|| exchange.connect()).expect_err("must reject");
     assert_eq!(
         std::mem::discriminant(&error),
-        std::mem::discriminant(&expected)
+        std::mem::discriminant(expected)
     );
 }
 
@@ -126,10 +149,14 @@ fn assert_request(
 ) {
     let value: serde_json::Value =
         serde_json::from_slice(frame.strip_suffix(b"\n").expect("newline")).expect("request json");
-    assert_eq!(value["schema_version"], schema);
-    assert_eq!(value["request_id"], request_id);
-    assert_eq!(value["command"], command);
+    assert_eq!(field(&value, "/schema_version"), schema);
+    assert_eq!(field(&value, "/request_id"), request_id);
+    assert_eq!(field(&value, "/command"), command);
     assert_eq!(value.get("build_id").and_then(|v| v.as_str()), build_id);
+}
+
+fn field<'a>(value: &'a serde_json::Value, path: &str) -> &'a serde_json::Value {
+    value.pointer(path).expect("request field")
 }
 
 struct FixtureExchange {
@@ -157,10 +184,10 @@ impl FixtureExchange {
             .ok_or_else(|| io::Error::other("missing fixture stream"))
     }
 
-    fn finish(mut self) -> Vec<Vec<u8>> {
+    fn finish(self) -> Vec<Vec<u8>> {
         self.servers
-            .iter_mut()
-            .map(|stream| {
+            .into_iter()
+            .map(|mut stream| {
                 let mut frame = Vec::new();
                 stream.read_to_end(&mut frame).expect("request frame");
                 frame

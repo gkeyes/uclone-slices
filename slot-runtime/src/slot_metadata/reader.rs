@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::domain::{PackageName, SlotId};
 
@@ -9,6 +9,16 @@ use super::{SlotMetadata, SlotMetadataError, storage};
 
 const MAX_LEGACY_REVISIONS: usize = 64;
 const MAX_EPOCH_REVISIONS: usize = 48;
+
+#[derive(Clone, Copy)]
+struct RevisionRead<'a> {
+    owner_uid: u32,
+    package: &'a PackageName,
+    slot: &'a SlotId,
+    checkpoint: Option<&'a SlotMetadata>,
+    limit: usize,
+    allow_empty: bool,
+}
 
 pub(super) fn load(
     slot_path: &Path,
@@ -28,12 +38,14 @@ pub(super) fn load(
     validate_names(slot_path, &["revisions", "epochs"])?;
     let legacy = load_revisions(
         &revisions,
-        owner_uid,
-        package,
-        slot,
-        None,
-        MAX_LEGACY_REVISIONS,
-        false,
+        RevisionRead {
+            owner_uid,
+            package,
+            slot,
+            checkpoint: None,
+            limit: MAX_LEGACY_REVISIONS,
+            allow_empty: false,
+        },
     )?;
     let legacy_count = legacy.len();
     let latest = legacy
@@ -41,27 +53,27 @@ pub(super) fn load(
         .cloned()
         .ok_or_else(|| corrupt("empty legacy slot metadata stream"))?;
     let epochs = slot_path.join("epochs");
-    match exists(&epochs)? {
-        false => Ok(Some(VerifiedStream {
+    if exists(&epochs)? {
+        load_epochs(owner_uid, package, slot, &epochs, latest, legacy_count).map(Some)
+    } else {
+        Ok(Some(VerifiedStream {
             latest,
             legacy_count,
             current_epoch: None,
-        })),
-        true => load_epochs(owner_uid, package, slot, epochs, latest, legacy_count).map(Some),
+        }))
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn load_epochs(
     owner_uid: u32,
     package: &PackageName,
     slot: &SlotId,
-    epochs: PathBuf,
+    epochs: &Path,
     mut latest: SlotMetadata,
     legacy_count: usize,
 ) -> Result<VerifiedStream, SlotMetadataError> {
-    storage::validate_directory(&epochs, owner_uid)?;
-    let epoch_entries = storage::numbered_directories(&epochs)?;
+    storage::validate_directory(epochs, owner_uid)?;
+    let epoch_entries = storage::numbered_directories(epochs)?;
     if epoch_entries.is_empty() {
         return Err(corrupt("ambiguous slot metadata epoch head"));
     }
@@ -90,12 +102,14 @@ fn load_epochs(
         )?;
         let revisions = load_revisions(
             &epoch_path.join("revisions"),
-            owner_uid,
-            package,
-            slot,
-            Some(checkpoint.canonical_record()),
-            MAX_EPOCH_REVISIONS,
-            true,
+            RevisionRead {
+                owner_uid,
+                package,
+                slot,
+                checkpoint: Some(checkpoint.canonical_record()),
+                limit: MAX_EPOCH_REVISIONS,
+                allow_empty: true,
+            },
         )?;
         if let Some(value) = revisions.last() {
             latest = value.clone();
@@ -118,23 +132,19 @@ fn load_epochs(
 
 fn load_revisions(
     path: &Path,
-    owner_uid: u32,
-    package: &PackageName,
-    slot: &SlotId,
-    checkpoint: Option<&SlotMetadata>,
-    limit: usize,
-    allow_empty: bool,
+    read: RevisionRead<'_>,
 ) -> Result<Vec<SlotMetadata>, SlotMetadataError> {
-    storage::validate_directory(path, owner_uid)?;
+    storage::validate_directory(path, read.owner_uid)?;
     let files = storage::revision_files(path)?;
-    if files.len() > limit || (!allow_empty && files.is_empty()) {
+    if files.len() > read.limit || (!read.allow_empty && files.is_empty()) {
         return Err(corrupt("invalid slot metadata revision count"));
     }
-    let mut previous = checkpoint.cloned();
+    let mut previous = read.checkpoint.cloned();
     let mut values = Vec::with_capacity(files.len());
     for path in files {
-        let value: SlotMetadata = storage::read_json(&path, owner_uid, "slot metadata revision")?;
-        if value.package() != package || value.slot() != slot {
+        let value: SlotMetadata =
+            storage::read_json(&path, read.owner_uid, "slot metadata revision")?;
+        if value.package() != read.package || value.slot() != read.slot {
             return Err(corrupt("slot metadata path identity mismatch"));
         }
         value.verify(previous.as_ref())?;

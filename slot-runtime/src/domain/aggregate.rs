@@ -46,7 +46,7 @@ pub enum AllowedAction {
 /// Required containment posture for one aggregate conclusion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SafetyDisposition {
-    /// No managed package exists, so no Slots gate is required.
+    /// No managed package exists, so no `Slots` gate is required.
     NoContainmentRequired,
     /// Exact gate facts were observed and normal use may preserve them.
     PreserveObservedGate,
@@ -69,39 +69,39 @@ pub enum InvariantViolation {
     MissingPackageState,
     /// Package lifecycle evidence names another package key.
     PackageStateMismatch,
-    /// A package transaction has not reached Completed.
+    /// A package transaction has not reached `Completed`.
     UnfinishedTransaction,
-    /// Catalog entries do not prove the enrolled Base and extension views.
+    /// `Catalog` entries do not prove the enrolled `Base` and extension views.
     CatalogMismatch,
-    /// Registry evidence cannot prove the active catalog view.
+    /// `Registry` evidence cannot prove the active catalog view.
     ActiveViewUnproven,
-    /// Active extension metadata is missing or not Ready.
+    /// Active extension metadata is missing or not `Ready`.
     ActiveSlotMetadataUnready,
-    /// Registry commit evidence does not match a completed Journal transaction.
+    /// Registry commit evidence does not match a completed `Journal` transaction.
     RegistryJournalMismatch,
     /// A persisted non-normal lifecycle has no accepted use-case proof.
     PersistedLifecycleState,
     /// The enrolled package contract could not be reconstructed.
     ManagedPackageInvalid,
-    /// Android live package evidence could not be read.
+    /// `Android` live package evidence could not be read.
     LiveObservationUnavailable,
     /// The package support class is blocked.
     PackageSupportBlocked,
     /// Compatibility acceptance does not cover the observed identity.
     CompatibilityPolicyMismatch,
-    /// UID or signing identity no longer owns the enrolled slots.
+    /// `UID` or signing identity no longer owns the enrolled slots.
     IdentityChanged,
-    /// PackageManager Base anchors changed.
+    /// `PackageManager` Base anchors changed.
     PackageManagerInodeDrift,
-    /// Canonical or App-process view differs from the committed slot.
+    /// Canonical or `App`-process view differs from the committed slot.
     VisibleViewDrift,
-    /// APK replacement occurred outside a proved update window.
+    /// `APK` replacement occurred outside a proved update window.
     UnexpectedPackageReplacement,
     /// A managed update requires an explicit safe window.
     UpdateWindowRequired,
-    /// Exact enabled and suspended state could not be read.
+    /// Exact enabled and suspended `Gate` state could not be read.
     GateObservationUnavailable,
-    /// A Ready decision did not retain its exact package, slot, and gate evidence.
+    /// A `Ready` decision did not retain its exact package, slot, and gate evidence.
     ReadyEvidenceUnavailable,
 }
 
@@ -123,7 +123,7 @@ pub struct PackageAggregate {
 }
 
 impl PackageAggregate {
-    /// Resolves one package without filesystem, Android, Shell, or protocol access.
+    /// Resolves one package without filesystem, `Android`, `Shell`, or protocol access.
     pub fn resolve(facts: PackageFacts) -> Self {
         resolver::resolve(facts)
     }
@@ -138,7 +138,7 @@ impl PackageAggregate {
         }
     }
 
-    /// Returns the proved active slot when Ready.
+    /// Returns the proved active slot when `Ready`.
     pub const fn active_slot(&self) -> Option<&SlotId> {
         match &self.kind {
             AggregateKind::Ready(evidence) => Some(evidence.managed().active_slot()),
@@ -148,7 +148,7 @@ impl PackageAggregate {
         }
     }
 
-    /// Returns the complete Ready evidence, or none for every non-Ready conclusion.
+    /// Returns the complete `Ready` evidence, or none for every non-`Ready` conclusion.
     pub const fn ready_evidence(&self) -> Option<&ReadyPackageEvidence> {
         match &self.kind {
             AggregateKind::Ready(evidence) => Some(evidence),
@@ -158,7 +158,7 @@ impl PackageAggregate {
         }
     }
 
-    /// Consumes the aggregate and returns complete Ready evidence only for Ready.
+    /// Consumes the aggregate and returns complete `Ready` evidence only for `Ready`.
     pub fn into_ready_evidence(self) -> Option<ReadyPackageEvidence> {
         match self.kind {
             AggregateKind::Ready(evidence) => Some(evidence),

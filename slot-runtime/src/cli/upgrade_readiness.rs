@@ -56,7 +56,8 @@ fn check_with<C>(mut connect: C) -> Result<usize, UpgradeReadinessError>
 where
     C: FnMut() -> io::Result<UnixStream>,
 {
-    let v1_probe = exchange(&mut connect, request(1, V1_PROBE_ID, "probe", None)?)?;
+    let v1_request = request(1, V1_PROBE_ID, "probe", None)?;
+    let v1_probe = exchange(&mut connect, &v1_request)?;
     match v1_probe.schema_version {
         1 => {
             validate_probe(&v1_probe, 1, V1_PROBE_ID)?;
@@ -64,7 +65,8 @@ where
         }
         2 => {
             validate_schema_rejection(&v1_probe, V1_PROBE_ID)?;
-            let v2_probe = exchange(&mut connect, request(2, V2_PROBE_ID, "probe", None)?)?;
+            let v2_request = request(2, V2_PROBE_ID, "probe", None)?;
+            let v2_probe = exchange(&mut connect, &v2_request)?;
             validate_probe(&v2_probe, 2, V2_PROBE_ID)?;
             let build_id = probe_build_id(&v2_probe)?;
             check_apps(&mut connect, 2, Some(build_id.as_str()))
@@ -81,10 +83,8 @@ fn check_apps<C>(
 where
     C: FnMut() -> io::Result<UnixStream>,
 {
-    let response = exchange(
-        connect,
-        request(schema, APPS_ID, "list_managed_apps", build_id)?,
-    )?;
+    let apps_request = request(schema, APPS_ID, "list_managed_apps", build_id)?;
+    let response = exchange(connect, &apps_request)?;
     if response.schema_version != schema || response.request_id != APPS_ID {
         return Err(UpgradeReadinessError::InvalidFrame);
     }

@@ -32,9 +32,8 @@ impl<P: ServicePlatform> RequestHandler for PreviewService<P> {
             self.dispatch(request.command(), &mut context)
         };
         match result {
-            Ok(payload) => match Response::ok(request.request_id().clone(), payload) {
-                Ok(response) => response,
-                Err(_) => {
+            Ok(payload) => {
+                Response::ok(request.request_id().clone(), payload).unwrap_or_else(|_| {
                     context.set_phase(OperationPhase::ProtocolEncode);
                     self.record_diagnostic(DiagnosticFailure::new(
                         context,
@@ -42,8 +41,8 @@ impl<P: ServicePlatform> RequestHandler for PreviewService<P> {
                         ServiceError::Internal,
                     ));
                     Response::error(request.request_id().clone(), ServiceError::Internal.code())
-                }
-            },
+                })
+            }
             Err(error) => {
                 self.record_diagnostic(DiagnosticFailure::from_service_error(context, error));
                 Response::error(request.request_id().clone(), error.code())
@@ -164,9 +163,10 @@ impl<P: ServicePlatform> PreviewService<P> {
     }
 
     fn record_diagnostic(&self, failure: DiagnosticFailure) {
-        if let Some(sink) = self.diagnostics.as_ref() {
-            sink.record_failure(failure);
-        }
+        let Some(sink) = self.diagnostics.as_ref() else {
+            return;
+        };
+        sink.record_failure(failure);
     }
 }
 

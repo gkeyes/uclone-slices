@@ -44,7 +44,7 @@ fn service_error_code_stays_wire_compatible_while_failure_records_two_axes() {
     assert_eq!(response.error_code(), Some(ErrorCode::NotFound));
     let failures = sink.failures();
     assert_eq!(failures.len(), 1);
-    let failure = &failures[0];
+    let failure = failures.first().unwrap();
     assert_eq!(failure.cause(), DiagnosticCause::Unknown);
     assert_eq!(failure.service_error(), ServiceError::NotFound);
     assert_eq!(failure.context().request_id().as_str(), "service-test");

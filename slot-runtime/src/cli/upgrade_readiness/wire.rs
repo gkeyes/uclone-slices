@@ -42,6 +42,10 @@ pub(super) enum CompatPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the compatibility payload mirrors the deployed probe schema"
+)]
 pub(super) struct CompatProbe {
     pub(super) ready: bool,
     pub(super) user_unlocked: bool,
@@ -87,7 +91,7 @@ pub(super) fn request(
 
 pub(super) fn exchange<C>(
     connect: &mut C,
-    request: Vec<u8>,
+    request: &[u8],
 ) -> Result<CompatResponse, UpgradeReadinessError>
 where
     C: FnMut() -> io::Result<UnixStream>,
@@ -98,7 +102,7 @@ where
         .and_then(|()| stream.set_write_timeout(Some(TIMEOUT)))
         .map_err(UpgradeReadinessError::Transport)?;
     stream
-        .write_all(&request)
+        .write_all(request)
         .map_err(UpgradeReadinessError::Transport)?;
     let frame = read_frame(&mut stream)?;
     serde_json::from_slice(
@@ -117,7 +121,6 @@ fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>, UpgradeReadinessError>
             .read(&mut byte)
             .map_err(UpgradeReadinessError::Transport)?
         {
-            0 => return Err(UpgradeReadinessError::InvalidFrame),
             1 => {
                 frame.push(byte[0]);
                 if frame.len() > MAX_FRAME_SIZE {
@@ -127,7 +130,7 @@ fn read_frame(stream: &mut UnixStream) -> Result<Vec<u8>, UpgradeReadinessError>
                     return Ok(frame);
                 }
             }
-            _ => return Err(UpgradeReadinessError::InvalidFrame),
+            0 | 2.. => return Err(UpgradeReadinessError::InvalidFrame),
         }
     }
 }

@@ -47,12 +47,12 @@ fn verify_link(
     if revision.digest()? != revision.sha256 {
         return Err(PackageStateError::Corrupt("digest mismatch".to_owned()));
     }
-    if let Some(previous) = previous {
-        if revision.package_name != previous.package_name || revision.user_id != previous.user_id {
-            return Err(PackageStateError::Corrupt(
-                "revision changes package stream identity".to_owned(),
-            ));
-        }
+    if let Some(previous) = previous
+        && (revision.package_name != previous.package_name || revision.user_id != previous.user_id)
+    {
+        return Err(PackageStateError::Corrupt(
+            "revision changes package stream identity".to_owned(),
+        ));
     }
     Ok(())
 }
