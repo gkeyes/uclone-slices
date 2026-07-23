@@ -38,7 +38,9 @@ pub(super) const fn map_fact_error(error: super::FactError) -> ProbeError {
 
 pub(super) const fn map_bridge_error(error: &BridgeError) -> ProbeError {
     match error.code() {
-        BridgeErrorCode::RunnerUnavailable | BridgeErrorCode::TimedOut => ProbeError::Unavailable,
+        BridgeErrorCode::RunnerUnavailable
+        | BridgeErrorCode::TimedOut
+        | BridgeErrorCode::BuildMismatch => ProbeError::Unavailable,
         _ => ProbeError::InvalidResponse,
     }
 }

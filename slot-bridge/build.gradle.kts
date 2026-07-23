@@ -8,6 +8,17 @@ val selectedTargetProfile = providers.gradleProperty("targetProfile")
 if (selectedTargetProfile !in setOf("slotprobe", "fitness", "generic")) {
     throw GradleException("targetProfile must be slotprobe, fitness, or generic")
 }
+val previewBuildId = providers.gradleProperty("previewBuildId")
+    .orElse(providers.environmentVariable("PREVIEW_BUILD_ID"))
+    .orElse("development")
+    .get()
+if (previewBuildId.length !in 1..160
+    || !Regex("[A-Za-z0-9._-]+").matches(previewBuildId)
+) {
+    throw GradleException(
+        "previewBuildId must be 1..160 characters from A-Z, a-z, 0-9, dot, underscore, or dash",
+    )
+}
 val repositoryRoot = rootDir.parentFile
 val targetProfileOutput = layout.buildDirectory
     .dir("generated/target-profile/$selectedTargetProfile")
@@ -39,6 +50,11 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "PREVIEW_BUILD_ID", "\"$previewBuildId\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -60,6 +76,9 @@ android {
 
     sourceSets.getByName("main").java.srcDir(
         generatedTargetProfile.resolve("java/bridge"),
+    )
+    sourceSets.getByName("test").resources.srcDir(
+        repositoryRoot.resolve("protocol-fixtures/bridge-v2"),
     )
 }
 

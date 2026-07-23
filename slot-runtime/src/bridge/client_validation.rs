@@ -77,5 +77,13 @@ pub(super) fn map_runner_error(error: &BridgeRunnerError) -> BridgeError {
             BridgeErrorCode::ResponseTooLarge,
             format!("fixed app_process response is {size} bytes"),
         ),
+        BridgeRunnerError::BuildMismatch => BridgeError::new(
+            BridgeErrorCode::BuildMismatch,
+            "fixed app_process bridge is not paired with this Runtime",
+        ),
+        BridgeRunnerError::InvalidHandshake => BridgeError::new(
+            BridgeErrorCode::InvalidResponse,
+            "fixed app_process bridge returned an invalid startup handshake",
+        ),
     }
 }

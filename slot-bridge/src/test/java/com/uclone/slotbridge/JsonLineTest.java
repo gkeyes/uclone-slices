@@ -4,6 +4,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import org.junit.Test;
 
@@ -80,6 +82,61 @@ public final class JsonLineTest {
                 .getBytes(StandardCharsets.UTF_8);
 
         assertTrue(encoded.length <= JsonLine.MAX_OUTPUT_BYTES);
+    }
+
+    @Test
+    public void emitsExactPairedV2CrossLanguageGolden()
+            throws BridgeFailure, IOException {
+        BridgeProtocol protocol = BridgeProtocol.pairedV2();
+        PackageSnapshot snapshot = new PackageSnapshot(
+                "com.example.fixture",
+                10123,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                7,
+                "fixture",
+                "/data/app/com.example.fixture/base.apk",
+                PackagePolicy.pathsFor("com.example.fixture"),
+                new PackageManagerInodes(111, 222),
+                EnabledState.DEFAULT,
+                false,
+                false,
+                false,
+                false,
+                false);
+
+        String encoded = JsonLine.packageSnapshot(snapshot, protocol);
+        String expected = readResource("/package-success.json")
+                .replace("__BUILD_ID__", BuildConfig.PREVIEW_BUILD_ID);
+
+        assertEquals(expected, encoded);
+    }
+
+    @Test
+    public void v2HandshakeAndErrorCarryEmbeddedBuildIdentity()
+            throws BridgeFailure {
+        BridgeProtocol protocol = BridgeProtocol.pairedV2();
+
+        assertEquals(
+                "{\"schemaVersion\":2,\"buildId\":\""
+                        + BuildConfig.PREVIEW_BUILD_ID
+                        + "\",\"requestId\":\"handshake\",\"ok\":true,"
+                        + "\"payload\":{\"type\":\"ack\"}}\n",
+                JsonLine.handshake(protocol));
+        assertEquals(
+                "{\"schemaVersion\":2,\"buildId\":\""
+                        + BuildConfig.PREVIEW_BUILD_ID
+                        + "\",\"requestId\":\"handshake\",\"ok\":false,"
+                        + "\"errorCode\":\"build_mismatch\"}\n",
+                JsonLine.error("handshake", ErrorCode.BUILD_MISMATCH, protocol));
+    }
+
+    private static String readResource(String name) throws IOException {
+        try (InputStream stream = JsonLineTest.class.getResourceAsStream(name)) {
+            if (stream == null) {
+                throw new IOException("missing test resource " + name);
+            }
+            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 
     private static PackageSnapshot fixture(String versionName) throws BridgeFailure {

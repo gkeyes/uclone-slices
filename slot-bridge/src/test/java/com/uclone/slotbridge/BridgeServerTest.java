@@ -14,6 +14,11 @@ public final class BridgeServerTest {
         assertFalse(BridgeServer.isServeRequest(new String[] {"serve", "extra"}));
         assertFalse(BridgeServer.isServeRequest(new String[] {}));
         assertFalse(BridgeServer.isServeRequest(null));
+        assertTrue(BridgeServer.isPairedServeRequest(
+                new String[] {"serve-v2", BuildConfig.PREVIEW_BUILD_ID}));
+        assertFalse(BridgeServer.isPairedServeRequest(new String[] {"serve-v2"}));
+        assertFalse(BridgeServer.isPairedServeRequest(
+                new String[] {"serve-v2", BuildConfig.PREVIEW_BUILD_ID, "extra"}));
     }
 
     @Test

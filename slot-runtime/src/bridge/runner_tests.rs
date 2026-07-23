@@ -4,6 +4,10 @@ use super::{
 };
 use crate::bridge::{ALLOWED_PACKAGE, BridgeCommand, PackageEnabledState};
 use crate::domain::{AppIdentity, DataInodes, PackageName};
+use crate::protocol::RUNTIME_BUILD_ID;
+use serde_json::json;
+
+use super::session::validate_startup_handshake;
 
 const CURRENT_BOOTCLASSPATH: &str =
     "/apex/com.android.art/javalib/core-oj.jar:/system/framework/framework.jar";
@@ -130,4 +134,42 @@ fn persistent_session_requests_keep_only_fixed_bridge_arguments() {
         )
         .into_bytes()
     );
+}
+
+#[test]
+fn paired_startup_handshake_requires_exact_runtime_build_identity() {
+    let valid = serde_json::to_vec(&json!({
+        "schemaVersion": 2,
+        "buildId": RUNTIME_BUILD_ID,
+        "requestId": "handshake",
+        "ok": true,
+        "payload": {"type": "ack"}
+    }))
+    .unwrap_or_default();
+    assert!(validate_startup_handshake(&valid).is_ok());
+
+    let mismatched = serde_json::to_vec(&json!({
+        "schemaVersion": 2,
+        "buildId": "different-build",
+        "requestId": "handshake",
+        "ok": true,
+        "payload": {"type": "ack"}
+    }))
+    .unwrap_or_default();
+    assert!(matches!(
+        validate_startup_handshake(&mismatched),
+        Err(super::BridgeRunnerError::BuildMismatch)
+    ));
+
+    let legacy = serde_json::to_vec(&json!({
+        "schemaVersion": 1,
+        "requestId": "handshake",
+        "ok": true,
+        "payload": {"type": "ack"}
+    }))
+    .unwrap_or_default();
+    assert!(matches!(
+        validate_startup_handshake(&legacy),
+        Err(super::BridgeRunnerError::BuildMismatch)
+    ));
 }

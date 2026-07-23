@@ -3,8 +3,11 @@ use crate::bridge::{BridgeError, BridgeErrorCode};
 
 use super::executor::ProcessFailure;
 
-pub(super) fn bridge(error: &BridgeError) -> CommandError {
-    if error.code() == BridgeErrorCode::RunnerUnavailable {
+pub(super) const fn bridge(error: &BridgeError) -> CommandError {
+    if matches!(
+        error.code(),
+        BridgeErrorCode::RunnerUnavailable | BridgeErrorCode::BuildMismatch
+    ) {
         CommandError::StartFailed
     } else {
         CommandError::Rejected
@@ -18,7 +21,9 @@ pub(super) const fn launch_bridge(error: &BridgeError) -> CommandError {
         BridgeErrorCode::PackageStateChanged | BridgeErrorCode::PendingSession => {
             CommandError::PackageStateChanged
         }
-        BridgeErrorCode::RunnerUnavailable => CommandError::StartFailed,
+        BridgeErrorCode::RunnerUnavailable | BridgeErrorCode::BuildMismatch => {
+            CommandError::StartFailed
+        }
         _ => CommandError::Rejected,
     }
 }
@@ -29,7 +34,9 @@ pub(super) const fn contract_bridge(error: &BridgeError) -> CommandError {
         BridgeErrorCode::PackageStateChanged | BridgeErrorCode::PendingSession => {
             CommandError::PackageStateChanged
         }
-        BridgeErrorCode::RunnerUnavailable => CommandError::StartFailed,
+        BridgeErrorCode::RunnerUnavailable | BridgeErrorCode::BuildMismatch => {
+            CommandError::StartFailed
+        }
         _ => CommandError::Rejected,
     }
 }

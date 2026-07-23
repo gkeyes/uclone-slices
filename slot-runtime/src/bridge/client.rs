@@ -180,6 +180,10 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
             ));
         }
         let response = BridgeResponse::from_bytes(&bytes)?;
+        response.require_compatible(
+            crate::protocol::RUNTIME_BUILD_ID,
+            command.allows_legacy_v1(),
+        )?;
         if response.request_id() != command.request_id() {
             return Err(BridgeError::new(
                 BridgeErrorCode::RequestMismatch,

@@ -1,12 +1,17 @@
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
-use super::{BRIDGE_SCHEMA_VERSION, BridgeError, BridgeErrorCode, BridgePayload, invalid_response};
+use super::{
+    BRIDGE_SCHEMA_VERSION, BridgeError, BridgeErrorCode, BridgePayload,
+    LEGACY_BRIDGE_SCHEMA_VERSION, invalid_response,
+};
 
 /// Strict bridge response envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BridgeResponse {
     schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    build_id: Option<String>,
     request_id: String,
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -19,6 +24,8 @@ pub struct BridgeResponse {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BridgeResponseWire {
     schema_version: u32,
+    #[serde(default)]
+    build_id: Option<String>,
     request_id: String,
     ok: bool,
     #[serde(default)]
@@ -39,6 +46,7 @@ impl BridgeResponse {
     pub fn ok(request_id: &str, payload: BridgePayload) -> Result<Self, BridgeError> {
         Self::from_wire(BridgeResponseWire {
             schema_version: BRIDGE_SCHEMA_VERSION,
+            build_id: Some(crate::protocol::RUNTIME_BUILD_ID.to_owned()),
             request_id: request_id.to_owned(),
             ok: true,
             payload: Some(payload),
@@ -50,6 +58,7 @@ impl BridgeResponse {
     pub fn error(request_id: &str, code: BridgeErrorCode) -> Result<Self, BridgeError> {
         Self::from_wire(BridgeResponseWire {
             schema_version: BRIDGE_SCHEMA_VERSION,
+            build_id: Some(crate::protocol::RUNTIME_BUILD_ID.to_owned()),
             request_id: request_id.to_owned(),
             ok: false,
             payload: None,
@@ -75,20 +84,20 @@ impl BridgeResponse {
     }
 
     fn from_wire(wire: BridgeResponseWire) -> Result<Self, BridgeError> {
-        if wire.schema_version != BRIDGE_SCHEMA_VERSION {
-            return Err(invalid_response("unsupported bridge schemaVersion"));
-        }
+        validate_envelope_version(wire.schema_version, wire.build_id.as_deref())?;
         super::validation::validate_request_id(&wire.request_id)?;
         match (wire.ok, wire.payload, wire.error_code) {
             (true, Some(payload), None) => Ok(Self {
-                schema_version: BRIDGE_SCHEMA_VERSION,
+                schema_version: wire.schema_version,
+                build_id: wire.build_id,
                 request_id: wire.request_id,
                 ok: true,
                 payload: Some(payload),
                 error_code: None,
             }),
             (false, None, Some(error_code)) => Ok(Self {
-                schema_version: BRIDGE_SCHEMA_VERSION,
+                schema_version: wire.schema_version,
+                build_id: wire.build_id,
                 request_id: wire.request_id,
                 ok: false,
                 payload: None,
@@ -103,6 +112,11 @@ impl BridgeResponse {
     /// Returns the schema version.
     pub const fn schema_version(&self) -> u32 {
         self.schema_version
+    }
+
+    /// Returns the paired bridge build identity for schema v2.
+    pub fn build_id(&self) -> Option<&str> {
+        self.build_id.as_deref()
     }
 
     /// Returns the echoed request id.
@@ -124,6 +138,49 @@ impl BridgeResponse {
     pub const fn error_code(&self) -> Option<BridgeErrorCode> {
         self.error_code
     }
+
+    pub(crate) fn require_compatible(
+        &self,
+        expected_build_id: &str,
+        allow_legacy_v1: bool,
+    ) -> Result<(), BridgeError> {
+        match (self.schema_version, self.build_id()) {
+            (LEGACY_BRIDGE_SCHEMA_VERSION, None) if allow_legacy_v1 => Ok(()),
+            (BRIDGE_SCHEMA_VERSION, Some(build_id)) if build_id == expected_build_id => Ok(()),
+            _ => Err(BridgeError::new(
+                BridgeErrorCode::BuildMismatch,
+                "Java bridge is not paired with this Runtime",
+            )),
+        }
+    }
+
+    pub(crate) fn require_paired_v2(&self, expected_build_id: &str) -> Result<(), BridgeError> {
+        self.require_compatible(expected_build_id, false)
+    }
+}
+
+fn validate_envelope_version(
+    schema_version: u32,
+    build_id: Option<&str>,
+) -> Result<(), BridgeError> {
+    match (schema_version, build_id) {
+        (LEGACY_BRIDGE_SCHEMA_VERSION, None) => Ok(()),
+        (BRIDGE_SCHEMA_VERSION, Some(value)) if valid_build_id(value) => Ok(()),
+        (BRIDGE_SCHEMA_VERSION, Some(_)) => Err(invalid_response("invalid bridge buildId")),
+        (BRIDGE_SCHEMA_VERSION, None) => Err(invalid_response("missing bridge buildId")),
+        (LEGACY_BRIDGE_SCHEMA_VERSION, Some(_)) => {
+            Err(invalid_response("legacy bridge must not carry buildId"))
+        }
+        _ => Err(invalid_response("unsupported bridge schemaVersion")),
+    }
+}
+
+fn valid_build_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 160
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 /// Decodes one strict bridge response frame.

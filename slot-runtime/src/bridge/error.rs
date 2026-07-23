@@ -34,6 +34,8 @@ pub enum BridgeErrorCode {
     PackageStateChanged,
     /// PackageManager reported a pending install session.
     PendingSession,
+    /// The Java bridge artifact does not match the Runtime build identity.
+    BuildMismatch,
     /// The bridge reported an otherwise unclassified failure.
     Internal,
 }
@@ -57,6 +59,7 @@ impl BridgeErrorCode {
             Self::IdentityChanged => "identity_changed",
             Self::PackageStateChanged => "package_state_changed",
             Self::PendingSession => "pending_session",
+            Self::BuildMismatch => "build_mismatch",
             Self::Internal => "internal",
         }
     }

@@ -142,6 +142,12 @@ pub enum BridgeRunnerError {
     #[doc = "The fixed child did not finish within the five-second deadline."]
     #[error("fixed app_process timed out after five seconds")]
     TimedOut,
+    #[doc = "The Java bridge artifact did not match the Runtime build identity."]
+    #[error("fixed app_process bridge build identity mismatch")]
+    BuildMismatch,
+    #[doc = "The Java bridge did not return a valid paired startup handshake."]
+    #[error("fixed app_process returned an invalid startup handshake")]
+    InvalidHandshake,
 }
 
 #[doc = "Injected typed command runner used by BridgeClient and tests."]

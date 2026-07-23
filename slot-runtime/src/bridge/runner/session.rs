@@ -5,7 +5,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use super::{BridgeCommand, BridgeRunnerError, MAX_OUTPUT_BYTES};
-use crate::bridge::BRIDGE_MAIN_CLASS;
+use crate::bridge::{BRIDGE_MAIN_CLASS, BridgePayload, BridgeResponse};
+use crate::protocol::RUNTIME_BUILD_ID;
 
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -27,7 +28,12 @@ pub(super) struct AppProcessSession {
 impl AppProcessSession {
     pub(super) fn spawn(mut command: Command) -> Result<Self, BridgeRunnerError> {
         let mut child = command
-            .args(["/system/bin", BRIDGE_MAIN_CLASS, "serve"])
+            .args([
+                "/system/bin",
+                BRIDGE_MAIN_CLASS,
+                "serve-v2",
+                RUNTIME_BUILD_ID,
+            ])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -40,6 +46,12 @@ impl AppProcessSession {
             stop_child(&mut child);
             BridgeRunnerError::Io(error)
         })?;
+        if let Err(error) = verify_startup_handshake(&responses) {
+            stop_child(&mut child);
+            drop(responses);
+            let _ = reader.join();
+            return Err(error);
+        }
         Ok(Self {
             child,
             stdin,
@@ -84,6 +96,39 @@ impl AppProcessSession {
             Err(error) => BridgeRunnerError::Io(error),
         }
     }
+}
+
+fn verify_startup_handshake(responses: &Receiver<SessionMessage>) -> Result<(), BridgeRunnerError> {
+    let bytes = match responses.recv_timeout(RESPONSE_TIMEOUT) {
+        Ok(SessionMessage::Output(output)) => output,
+        Ok(SessionMessage::OutputTooLarge(size)) => {
+            return Err(BridgeRunnerError::OutputTooLarge { size });
+        }
+        Ok(SessionMessage::Io(error)) => return Err(BridgeRunnerError::Io(error)),
+        Err(RecvTimeoutError::Timeout) => return Err(BridgeRunnerError::TimedOut),
+        Err(RecvTimeoutError::Disconnected) => {
+            return Err(BridgeRunnerError::InvalidHandshake);
+        }
+    };
+    validate_startup_handshake(&bytes)
+}
+
+pub(super) fn validate_startup_handshake(bytes: &[u8]) -> Result<(), BridgeRunnerError> {
+    let response =
+        BridgeResponse::from_bytes(bytes).map_err(|_| BridgeRunnerError::InvalidHandshake)?;
+    response
+        .require_paired_v2(RUNTIME_BUILD_ID)
+        .map_err(|error| match error.code() {
+            crate::bridge::BridgeErrorCode::BuildMismatch => BridgeRunnerError::BuildMismatch,
+            _ => BridgeRunnerError::InvalidHandshake,
+        })?;
+    if response.request_id() != "handshake"
+        || !response.is_ok()
+        || !matches!(response.payload(), Some(BridgePayload::Ack(_)))
+    {
+        return Err(BridgeRunnerError::InvalidHandshake);
+    }
+    Ok(())
 }
 
 impl Drop for AppProcessSession {

@@ -15,6 +15,7 @@ enum ErrorCode {
     IDENTITY_CHANGED("identity_changed"),
     PACKAGE_STATE_CHANGED("package_state_changed"),
     PENDING_SESSION("pending_session"),
+    BUILD_MISMATCH("build_mismatch"),
     INTERNAL("internal");
 
     private final String wireName;

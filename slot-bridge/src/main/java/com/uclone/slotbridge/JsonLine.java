@@ -8,7 +8,12 @@ final class JsonLine {
     private JsonLine() {}
 
     static String device(DeviceSnapshot snapshot) throws BridgeFailure {
-        StringBuilder output = successPrefix("device", "device");
+        return device(snapshot, BridgeProtocol.legacyV1());
+    }
+
+    static String device(DeviceSnapshot snapshot, BridgeProtocol protocol)
+            throws BridgeFailure {
+        StringBuilder output = successPrefix(protocol, "device", "device");
         output.append(",\"userId\":").append(TargetProfile.USER_ID).append(",\"unlocked\":")
                 .append(snapshot.unlocked())
                 .append(",\"apiLevel\":")
@@ -18,7 +23,12 @@ final class JsonLine {
     }
 
     static String packageSnapshot(PackageSnapshot snapshot) throws BridgeFailure {
-        StringBuilder output = successPrefix("package", "package");
+        return packageSnapshot(snapshot, BridgeProtocol.legacyV1());
+    }
+
+    static String packageSnapshot(PackageSnapshot snapshot, BridgeProtocol protocol)
+            throws BridgeFailure {
+        StringBuilder output = successPrefix(protocol, "package", "package");
         appendStringField(output, "packageName", snapshot.packageName());
         output.append(",\"userId\":")
                 .append(TargetProfile.USER_ID)
@@ -52,21 +62,36 @@ final class JsonLine {
     }
 
     static String gate(GateSnapshot snapshot) throws BridgeFailure {
-        StringBuilder output = successPrefix("gate", "gate");
+        return gate(snapshot, BridgeProtocol.legacyV1());
+    }
+
+    static String gate(GateSnapshot snapshot, BridgeProtocol protocol)
+            throws BridgeFailure {
+        StringBuilder output = successPrefix(protocol, "gate", "gate");
         appendStringField(output, "enabledState", snapshot.enabledState().wireName());
         output.append(",\"suspended\":").append(snapshot.suspended()).append("}}");
         return finish(output);
     }
 
     static String ack(String requestId) throws BridgeFailure {
-        StringBuilder output = successPrefix(requestId, "ack");
+        return ack(requestId, BridgeProtocol.legacyV1());
+    }
+
+    static String ack(String requestId, BridgeProtocol protocol) throws BridgeFailure {
+        StringBuilder output = successPrefix(protocol, requestId, "ack");
         output.append("}}");
         return finish(output);
     }
 
     static String error(String requestId, ErrorCode code) throws BridgeFailure {
+        return error(requestId, code, BridgeProtocol.legacyV1());
+    }
+
+    static String error(String requestId, ErrorCode code, BridgeProtocol protocol)
+            throws BridgeFailure {
         StringBuilder output = new StringBuilder(128);
-        output.append("{\"schemaVersion\":1,\"requestId\":");
+        appendEnvelopePrefix(output, protocol);
+        output.append(",\"requestId\":");
         appendQuoted(output, fixedRequestId(requestId));
         output.append(",\"ok\":false,\"errorCode\":");
         appendQuoted(output, code.wireName());
@@ -74,13 +99,33 @@ final class JsonLine {
         return finish(output);
     }
 
-    private static StringBuilder successPrefix(String requestId, String type) {
+    static String handshake(BridgeProtocol protocol) throws BridgeFailure {
+        if (!protocol.isPaired()) {
+            throw new BridgeFailure("handshake", ErrorCode.INVALID_REQUEST);
+        }
+        StringBuilder output = successPrefix(protocol, "handshake", "ack");
+        output.append("}}");
+        return finish(output);
+    }
+
+    private static StringBuilder successPrefix(
+            BridgeProtocol protocol, String requestId, String type) {
         StringBuilder output = new StringBuilder(512);
-        output.append("{\"schemaVersion\":1,\"requestId\":");
+        appendEnvelopePrefix(output, protocol);
+        output.append(",\"requestId\":");
         appendQuoted(output, fixedRequestId(requestId));
         output.append(",\"ok\":true,\"payload\":{\"type\":");
         appendQuoted(output, type);
         return output;
+    }
+
+    private static void appendEnvelopePrefix(
+            StringBuilder output, BridgeProtocol protocol) {
+        output.append("{\"schemaVersion\":").append(protocol.schemaVersion());
+        if (protocol.isPaired()) {
+            output.append(",\"buildId\":");
+            appendQuoted(output, protocol.buildId());
+        }
     }
 
     private static void appendStringField(StringBuilder output, String name, String value) {
@@ -143,7 +188,8 @@ final class JsonLine {
                 || "launch-package".equals(requestId)
                 || "set-enabled".equals(requestId)
                 || "restore-enabled".equals(requestId)
-                || "restore-suspended".equals(requestId)) {
+                || "restore-suspended".equals(requestId)
+                || "handshake".equals(requestId)) {
             return requestId;
         }
         return "request";

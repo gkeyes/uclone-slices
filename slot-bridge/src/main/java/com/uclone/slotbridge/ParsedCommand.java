@@ -100,4 +100,10 @@ final class ParsedCommand {
                 throw new AssertionError();
         }
     }
+
+    boolean readOnly() {
+        return kind == CommandKind.PROBE_DEVICE
+                || kind == CommandKind.PROBE_PACKAGE
+                || kind == CommandKind.PROBE_GATE;
+    }
 }

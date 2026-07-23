@@ -63,6 +63,8 @@ impl uclone_slot_runtime::bridge::BridgeCommandRunner for FakeRunner {
                 Err(BridgeRunnerError::OutputTooLarge { size: *size })
             }
             Err(BridgeRunnerError::TimedOut) => Err(BridgeRunnerError::TimedOut),
+            Err(BridgeRunnerError::BuildMismatch) => Err(BridgeRunnerError::BuildMismatch),
+            Err(BridgeRunnerError::InvalidHandshake) => Err(BridgeRunnerError::InvalidHandshake),
             Err(BridgeRunnerError::Io(_)) => Err(BridgeRunnerError::Io(std::io::Error::other(
                 "fake runner unavailable",
             ))),
@@ -98,7 +100,9 @@ fn package_bytes(package: &str, user_id: u32) -> Vec<u8> {
 
 fn ack_bytes(request_id: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({
-        "schemaVersion": 1, "requestId": request_id, "ok": true,
+        "schemaVersion": 2,
+        "buildId": uclone_slot_runtime::protocol::RUNTIME_BUILD_ID,
+        "requestId": request_id, "ok": true,
         "payload": {"type": "ack"}
     }))
     .unwrap_or_default()
@@ -206,155 +210,17 @@ fn runner_failures_map_to_stable_codes() {
         timed_out.query_device(0).unwrap_err().code(),
         BridgeErrorCode::TimedOut
     );
-}
-
-#[test]
-fn request_and_payload_types_are_verified() {
-    let wrong_request = serde_json::to_vec(&json!({
-        "schemaVersion": 1, "requestId": "package", "ok": true,
-        "payload": {"type": "device", "userId": 0, "unlocked": true}
-    }))
-    .unwrap_or_default();
-    let mut client = BridgeClient::new(FakeRunner::ok(wrong_request));
+    let mut mismatch = BridgeClient::new(FakeRunner::failure(BridgeRunnerError::BuildMismatch));
     assert_eq!(
-        client.query_device(0).unwrap_err().code(),
-        BridgeErrorCode::RequestMismatch
+        mismatch.query_device(0).unwrap_err().code(),
+        BridgeErrorCode::BuildMismatch
     );
-    let wrong_payload = serde_json::to_vec(&json!({
-        "schemaVersion": 1, "requestId": "device", "ok": true,
-        "payload": {"type": "ack"}
-    }))
-    .unwrap_or_default();
-    let mut client = BridgeClient::new(FakeRunner::ok(wrong_payload));
+    let mut invalid = BridgeClient::new(FakeRunner::failure(BridgeRunnerError::InvalidHandshake));
     assert_eq!(
-        client.query_device(0).unwrap_err().code(),
+        invalid.query_device(0).unwrap_err().code(),
         BridgeErrorCode::InvalidResponse
     );
 }
 
-#[test]
-fn typed_mutations_require_ack_and_fixed_target() {
-    let mut client = BridgeClient::new(FakeRunner::ok(ack_bytes("set-enabled")));
-    assert!(
-        client
-            .set_enabled(ALLOWED_PACKAGE, 0, PackageEnabledState::DisabledUser)
-            .is_ok()
-    );
-    assert_eq!(
-        client.into_inner().seen,
-        vec![BridgeCommand::SetEnabled(
-            package_name(ALLOWED_PACKAGE),
-            PackageEnabledState::DisabledUser
-        )]
-    );
-    let identity = expected_identity();
-    let base = expected_base_inodes();
-    let mut client = BridgeClient::new(FakeRunner::ok(ack_bytes("restore-enabled")));
-    assert!(
-        client
-            .restore_enabled(
-                ALLOWED_PACKAGE,
-                0,
-                PackageEnabledState::Default,
-                &identity,
-                base,
-            )
-            .is_ok()
-    );
-    assert_eq!(
-        client.into_inner().seen,
-        vec![BridgeCommand::RestoreEnabled {
-            package: package_name(ALLOWED_PACKAGE),
-            state: PackageEnabledState::Default,
-            expected_identity: identity.clone(),
-            expected_base_inodes: base,
-        }]
-    );
-    let mut client = BridgeClient::new(FakeRunner::ok(ack_bytes("restore-suspended")));
-    assert!(
-        client
-            .restore_suspended(ALLOWED_PACKAGE, 0, true, &identity, base)
-            .is_ok()
-    );
-    assert_eq!(
-        client.into_inner().seen,
-        vec![BridgeCommand::RestoreSuspended {
-            package: package_name(ALLOWED_PACKAGE),
-            suspended: true,
-            expected_identity: identity.clone(),
-            expected_base_inodes: base,
-        }]
-    );
-    let mut client = BridgeClient::new(FakeRunner::ok(ack_bytes("launch-package")));
-    assert!(
-        client
-            .launch_package(ALLOWED_PACKAGE, 0, &identity, base)
-            .is_ok()
-    );
-    assert_eq!(
-        client.into_inner().seen,
-        vec![BridgeCommand::LaunchPackage {
-            package: package_name(ALLOWED_PACKAGE),
-            expected_identity: identity,
-            expected_base_inodes: base,
-        }]
-    );
-}
-
-#[test]
-fn unchecked_enabled_mutation_cannot_release_the_gate() {
-    let mut client = BridgeClient::new(FakeRunner::ok(ack_bytes("set-enabled")));
-
-    let error = client
-        .set_enabled(ALLOWED_PACKAGE, 0, PackageEnabledState::Enabled)
-        .unwrap_err();
-
-    assert_eq!(error.code(), BridgeErrorCode::InvalidRequest);
-    assert!(client.into_inner().seen.is_empty());
-}
-
-#[test]
-fn missing_launcher_entry_is_preserved_as_a_typed_bridge_failure() {
-    let bytes = serde_json::to_vec(&json!({
-        "schemaVersion": 1,
-        "requestId": "launch-package",
-        "ok": false,
-        "errorCode": "launch_entry_not_found"
-    }))
-    .unwrap_or_default();
-    let mut client = BridgeClient::new(FakeRunner::ok(bytes));
-
-    let error = client
-        .launch_package(
-            ALLOWED_PACKAGE,
-            0,
-            &expected_identity(),
-            expected_base_inodes(),
-        )
-        .unwrap_err();
-
-    assert_eq!(error.code(), BridgeErrorCode::LaunchEntryNotFound);
-}
-
-#[test]
-fn launch_identity_drift_is_preserved_as_a_typed_bridge_failure() {
-    let bytes = serde_json::to_vec(&json!({
-        "schemaVersion": 1,
-        "requestId": "launch-package",
-        "ok": false,
-        "errorCode": "identity_changed"
-    }))
-    .unwrap_or_default();
-    let mut client = BridgeClient::new(FakeRunner::ok(bytes));
-
-    let error = client
-        .launch_package(
-            ALLOWED_PACKAGE,
-            0,
-            &expected_identity(),
-            expected_base_inodes(),
-        )
-        .unwrap_err();
-
-    assert_eq!(error.code(), BridgeErrorCode::IdentityChanged);
-}
+#[path = "bridge_client/operations.rs"]
+mod operations;

@@ -16,14 +16,30 @@ final class BridgeServer {
         return argv != null && argv.length == 1 && "serve".equals(argv[0]);
     }
 
+    static boolean isPairedServeRequest(String[] argv) {
+        return argv != null && argv.length == 2 && "serve-v2".equals(argv[0]);
+    }
+
     static void serve(AndroidBridge bridge) throws IOException {
+        serve(bridge, BridgeProtocol.legacyV1());
+    }
+
+    static void serve(AndroidBridge bridge, BridgeProtocol protocol) throws IOException {
         BufferedReader reader = new BufferedReader(
                 new InputStreamReader(System.in, StandardCharsets.UTF_8));
         BufferedWriter writer = new BufferedWriter(
                 new OutputStreamWriter(System.out, StandardCharsets.UTF_8));
+        if (protocol.isPaired()) {
+            try {
+                writer.write(JsonLine.handshake(protocol));
+                writer.flush();
+            } catch (BridgeFailure failure) {
+                throw new IOException("could not encode bridge handshake", failure);
+            }
+        }
         String line;
         while ((line = reader.readLine()) != null) {
-            writer.write(executeLine(line, bridge));
+            writer.write(executeLine(line, bridge, protocol));
             writer.flush();
         }
     }
@@ -42,12 +58,17 @@ final class BridgeServer {
     }
 
     private static String executeLine(String line, AndroidBridge bridge) {
+        return executeLine(line, bridge, BridgeProtocol.legacyV1());
+    }
+
+    private static String executeLine(
+            String line, AndroidBridge bridge, BridgeProtocol protocol) {
         try {
-            return Main.execute(CommandParser.parse(parseLine(line)), bridge);
+            return Main.execute(CommandParser.parse(parseLine(line)), bridge, protocol);
         } catch (BridgeFailure failure) {
-            return Main.error(failure.requestId(), failure.code());
+            return Main.error(failure.requestId(), failure.code(), protocol);
         } catch (Throwable failure) {
-            return Main.error("request", ErrorCode.INTERNAL);
+            return Main.error("request", ErrorCode.INTERNAL, protocol);
         }
     }
 }

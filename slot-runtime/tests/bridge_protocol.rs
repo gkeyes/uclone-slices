@@ -7,8 +7,12 @@
 
 use serde_json::json;
 use uclone_slot_runtime::bridge::{
-    BridgeErrorCode, BridgePayload, PackageEnabledState, decode_response,
+    BRIDGE_SCHEMA_VERSION, BridgeErrorCode, BridgePayload, PackageEnabledState, decode_response,
 };
+use uclone_slot_runtime::protocol::RUNTIME_BUILD_ID;
+
+const V2_PACKAGE_GOLDEN: &str =
+    include_str!("../../protocol-fixtures/bridge-v2/package-success.json");
 
 fn package_payload() -> serde_json::Value {
     json!({
@@ -83,6 +87,23 @@ fn valid_package_response_is_typed_and_normalized() {
 }
 
 #[test]
+fn valid_v2_cross_language_golden_carries_runtime_build_identity() {
+    let bytes = V2_PACKAGE_GOLDEN
+        .replace("__BUILD_ID__", RUNTIME_BUILD_ID)
+        .into_bytes();
+
+    let response = decode_response(&bytes).expect("valid paired v2 response");
+
+    assert_eq!(response.schema_version(), BRIDGE_SCHEMA_VERSION);
+    assert_eq!(response.build_id(), Some(RUNTIME_BUILD_ID));
+    assert_eq!(response.request_id(), "package");
+    assert!(matches!(
+        response.payload(),
+        Some(BridgePayload::Package(_))
+    ));
+}
+
+#[test]
 fn device_response_requires_user_and_unlock_fields() {
     let bytes = serde_json::to_vec(&json!({
         "schemaVersion": 1,
@@ -125,6 +146,48 @@ fn deny_unknown_fields_at_envelope_and_payload() {
     let nested_bytes = serde_json::to_vec(&nested).unwrap_or_default();
     assert_eq!(
         decode_response(&nested_bytes).unwrap_err().code(),
+        BridgeErrorCode::InvalidResponse
+    );
+}
+
+#[test]
+fn v2_requires_exact_build_field_and_rejects_unknown_fields() {
+    let missing = serde_json::to_vec(&json!({
+        "schemaVersion": 2,
+        "requestId": "device",
+        "ok": true,
+        "payload": {"type": "device", "userId": 0, "unlocked": true}
+    }))
+    .unwrap_or_default();
+    assert_eq!(
+        decode_response(&missing).unwrap_err().code(),
+        BridgeErrorCode::InvalidResponse
+    );
+
+    let legacy_with_build = serde_json::to_vec(&json!({
+        "schemaVersion": 1,
+        "buildId": RUNTIME_BUILD_ID,
+        "requestId": "device",
+        "ok": true,
+        "payload": {"type": "device", "userId": 0, "unlocked": true}
+    }))
+    .unwrap_or_default();
+    assert_eq!(
+        decode_response(&legacy_with_build).unwrap_err().code(),
+        BridgeErrorCode::InvalidResponse
+    );
+
+    let unknown = serde_json::to_vec(&json!({
+        "schemaVersion": 2,
+        "buildId": RUNTIME_BUILD_ID,
+        "unexpected": false,
+        "requestId": "device",
+        "ok": true,
+        "payload": {"type": "device", "userId": 0, "unlocked": true}
+    }))
+    .unwrap_or_default();
+    assert_eq!(
+        decode_response(&unknown).unwrap_err().code(),
         BridgeErrorCode::InvalidResponse
     );
 }

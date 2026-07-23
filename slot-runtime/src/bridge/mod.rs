@@ -26,8 +26,10 @@ pub use crate::domain::PackageEnabledState;
 use crate::domain::PackageName;
 use crate::domain::{AppIdentity, DataInodes};
 
-/// Current bridge response schema.
-pub const BRIDGE_SCHEMA_VERSION: u32 = 1;
+/// Legacy read-only bridge response schema.
+pub const LEGACY_BRIDGE_SCHEMA_VERSION: u32 = 1;
+/// Current paired bridge response schema.
+pub const BRIDGE_SCHEMA_VERSION: u32 = 2;
 /// Maximum response size accepted from the app_process child, including no
 /// implicit framing bytes.
 pub const MAX_OUTPUT_BYTES: usize = 16 * 1024;
@@ -166,6 +168,14 @@ impl BridgeCommand {
             | Self::RestoreEnabled { .. }
             | Self::RestoreSuspended { .. } => "ack",
         }
+    }
+
+    /// Returns whether the command is safe to execute through a legacy v1 bridge.
+    pub const fn allows_legacy_v1(&self) -> bool {
+        matches!(
+            self,
+            Self::DeviceStatus | Self::PackageStatus(_) | Self::GateStatus(_)
+        )
     }
 }
 

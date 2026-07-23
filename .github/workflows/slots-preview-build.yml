@@ -122,6 +122,7 @@ jobs:
           lintRelease
           appProcessArtifact
           -PtargetProfile=generic
+          -PpreviewBuildId="$PREVIEW_BUILD_ID"
 
       - name: Build filesystem probe
         run: >-
