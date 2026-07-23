@@ -150,7 +150,9 @@ impl<P: ServicePlatform> PreviewService<P> {
     }
 }
 
-fn reconcile_failure(result: &Result<ReconcileOutcome, ServiceError>) -> Option<ServiceError> {
+const fn reconcile_failure(
+    result: &Result<ReconcileOutcome, ServiceError>,
+) -> Option<ServiceError> {
     match result {
         Ok(ReconcileOutcome::Locked | ReconcileOutcome::Held) | Err(ServiceError::UserLocked) => {
             Some(ServiceError::UserLocked)
