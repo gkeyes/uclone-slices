@@ -4,6 +4,7 @@
 )]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 
 use tempfile::TempDir;
 
@@ -22,7 +23,7 @@ struct FakeMetadata;
 
 #[test]
 fn direct_authorization_requires_existing_management_evidence() {
-    let root = TempDir::new().unwrap();
+    let root = secure_tempdir();
     let enrollment = root.path().join("enrollment");
     let catalog = root.path().join("catalog");
     let journal = root.path().join("rescue-journal");
@@ -56,7 +57,7 @@ fn direct_authorization_requires_existing_management_evidence() {
 
 #[test]
 fn direct_authorization_maps_unattributed_journal_corruption_to_recovery_required() {
-    let root = TempDir::new().unwrap();
+    let root = secure_tempdir();
     let enrollment = root.path().join("enrollment");
     let catalog = root.path().join("catalog");
     let rescue_journal = root.path().join("rescue-journal");
@@ -81,7 +82,7 @@ fn direct_authorization_maps_unattributed_journal_corruption_to_recovery_require
 
 #[test]
 fn weak_package_artifact_does_not_authorize_with_global_journal_corruption() {
-    let root = TempDir::new().unwrap();
+    let root = secure_tempdir();
     let enrollment = root.path().join("enrollment");
     let catalog = root.path().join("catalog");
     let rescue_journal = root.path().join("rescue-journal");
@@ -134,7 +135,7 @@ fn fake_management_artifacts_never_authorize_direct_rescue() {
     .into_iter()
     .enumerate()
     {
-        let root = TempDir::new().unwrap();
+        let root = secure_tempdir();
         let path = root.path().join(relative);
         if index == 0 {
             fs::create_dir_all(&path).unwrap();
@@ -157,6 +158,12 @@ fn fake_management_artifacts_never_authorize_direct_rescue() {
             "{case_name} must not authorize",
         );
     }
+}
+
+fn secure_tempdir() -> TempDir {
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    root
 }
 
 fn rescue(package: PackageName) -> Request {

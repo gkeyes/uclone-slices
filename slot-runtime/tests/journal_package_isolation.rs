@@ -1,3 +1,4 @@
+#![doc = "Cross-package journal corruption isolation tests."]
 #![allow(
     clippy::unwrap_used,
     reason = "isolated journal fixtures fail fast on invalid test construction"
