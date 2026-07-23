@@ -9,6 +9,7 @@ use super::super::orphan_gate::{probe, stores};
 use super::super::slot_lifecycle_support::TrackingMaterializer;
 use super::runtime::MultiPackageRuntime;
 use super::{publish, request};
+use crate::daemon::RequestHandler;
 use crate::domain::{PackageKey, PackageName};
 use crate::package_state::PackageStateStore;
 use crate::protocol::{Command, ErrorCode, ResponsePayload};
