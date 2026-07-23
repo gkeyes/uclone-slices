@@ -6,6 +6,18 @@ use super::ContainmentObligation;
 /// Validation, transition, integrity, and durable-I/O failures for the emergency manifest.
 #[derive(Debug, thiserror::Error)]
 pub enum EmergencyManifestError {
+    #[doc = "The fixed emergency-manifest root does not exist."]
+    #[error("emergency manifest root is missing: {path}")]
+    MissingRoot {
+        #[doc = "Root path that was inspected without creating it."]
+        path: PathBuf,
+    },
+    #[doc = "The fixed emergency-manifest record does not exist beneath an existing root."]
+    #[error("emergency manifest record is missing: {path}")]
+    MissingManifest {
+        #[doc = "Record path that was inspected without creating it."]
+        path: PathBuf,
+    },
     /// A newly constructed manifest violates a safety invariant.
     #[error("invalid emergency manifest: {0}")]
     InvalidManifest(String),

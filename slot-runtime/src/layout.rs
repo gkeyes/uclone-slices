@@ -94,6 +94,11 @@ impl RuntimeLayout {
         Self::root().join("state")
     }
 
+    #[doc = "Returns the fixed read-only emergency-manifest root."]
+    pub fn emergency_manifest_root() -> PathBuf {
+        Self::root().join("emergency-manifest")
+    }
+
     #[doc = "Derives CE and DE paths without accepting caller-controlled roots."]
     pub fn slot_paths(package_name: &PackageName, slot_id: &SlotId) -> SlotPaths {
         let package = package_name.as_str();

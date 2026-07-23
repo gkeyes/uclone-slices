@@ -5,8 +5,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
+mod owner_verifier;
 mod platform;
 mod record;
+
+pub use owner_verifier::{
+    RuntimeOwnerMismatch, RuntimeOwnerVerdict, RuntimeOwnerVerificationError, verify_runtime_owner,
+};
 
 use record::OwnerRecord;
 

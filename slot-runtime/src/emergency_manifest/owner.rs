@@ -6,7 +6,7 @@ use crate::domain::BootId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeOwnerRole {
-    /// The privileged UClone Slots daemon.
+    /// The privileged `UClone` Slots daemon.
     Ucloned,
 }
 
@@ -62,12 +62,12 @@ impl RuntimeOwnerProof {
         self.role
     }
 
-    /// Returns the device containing the authoritative Runtime lock.
+    /// Returns the device containing the authoritative `Runtime` lock.
     pub const fn lock_device(&self) -> u64 {
         self.lock_device
     }
 
-    /// Returns the inode of the authoritative Runtime lock.
+    /// Returns the inode of the authoritative `Runtime` lock.
     pub const fn lock_inode(&self) -> u64 {
         self.lock_inode
     }

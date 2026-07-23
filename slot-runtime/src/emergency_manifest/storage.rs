@@ -5,11 +5,16 @@ use std::path::Path;
 
 use super::{EmergencyManifestError, no_follow_flag};
 
+mod readonly;
 mod temporary;
 
 const DIRECTORY_MODE: u32 = 0o700;
 const FILE_MODE: u32 = 0o600;
 pub(super) const MAX_RECORD_BYTES: usize = 64 * 1024;
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "MAX_RECORD_BYTES is a fixed 64 KiB protocol bound"
+)]
 const MAX_RECORD_BYTES_U64: u64 = MAX_RECORD_BYTES as u64;
 
 #[cfg(test)]
@@ -19,6 +24,19 @@ std::thread_local! {
 
 #[cfg(test)]
 mod storage_tests;
+
+pub(super) fn open_existing_root(path: &Path) -> Result<u32, EmergencyManifestError> {
+    readonly::open_existing_root(path)
+}
+
+pub(super) fn read_record_with_fence(
+    root: &Path,
+    path: &Path,
+    owner_uid: u32,
+) -> Result<readonly::ReadRecord, EmergencyManifestError> {
+    readonly::read_record_with_fence(root, path, owner_uid)
+}
+
 pub(super) fn initialize_root(path: &Path) -> Result<u32, EmergencyManifestError> {
     if !path.is_absolute() {
         return Err(EmergencyManifestError::Corrupt(format!(

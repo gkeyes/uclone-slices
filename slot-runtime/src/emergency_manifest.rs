@@ -11,7 +11,9 @@ mod types;
 pub use error::EmergencyManifestError;
 pub use model::EmergencyManifestV1;
 pub use owner::{RuntimeOwnerProof, RuntimeOwnerRole};
-pub use store::{EmergencyManifestStore, MANIFEST_FILE_NAME};
+pub use store::{
+    EmergencyManifestFence, EmergencyManifestRecord, EmergencyManifestStore, MANIFEST_FILE_NAME,
+};
 pub use types::{
     ContainmentObligation, DiscoveryIntegrity, OverallDisposition, PackageContainment,
     SCHEMA_VERSION,

@@ -16,7 +16,10 @@ mod lock;
 mod socket;
 
 use connection::{invalid_request_response, read_frame, write_response};
-pub use lock::{RuntimeLock, RuntimeLockError};
+pub use lock::{
+    RuntimeLock, RuntimeLockError, RuntimeOwnerMismatch, RuntimeOwnerVerdict,
+    RuntimeOwnerVerificationError, verify_runtime_owner,
+};
 use socket::prepare_socket_path;
 
 /// Default per-connection read and write timeout.
