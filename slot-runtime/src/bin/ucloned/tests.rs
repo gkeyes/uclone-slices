@@ -3,7 +3,7 @@
     reason = "daemon startup tests use isolated temporary directories and fail-fast fixtures"
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
 use clap::Parser;
@@ -76,8 +76,8 @@ fn package_recovery_does_not_drop_healthy_startup_peer() {
         UserId::PRIMARY,
     );
     let mut ordinary = Vec::new();
-    let mut recovery = Default::default();
-    let mut retired = Default::default();
+    let mut recovery = BTreeSet::default();
+    let mut retired = BTreeSet::default();
 
     record_startup_outcome(
         &broken,
@@ -94,7 +94,7 @@ fn package_recovery_does_not_drop_healthy_startup_peer() {
         &mut retired,
     );
 
-    assert_eq!(ordinary, [healthy.clone()]);
+    assert_eq!(ordinary.as_slice(), std::slice::from_ref(&healthy));
     assert!(recovery.contains(broken.package_name()));
     assert!(retired.is_empty());
     assert_eq!(reconciliation_keys(&ordinary, &recovery), [broken, healthy]);
