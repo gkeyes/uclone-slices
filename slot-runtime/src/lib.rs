@@ -17,6 +17,8 @@ pub mod compatibility_policy;
 pub mod daemon;
 #[doc = "Validated package, slot, inode, and transaction boundary values."]
 pub mod domain;
+#[doc = "Boot-scoped emergency containment manifest and secure single-record store."]
+pub mod emergency_manifest;
 #[doc = "Immutable base package enrollment persistence."]
 pub mod enrollment;
 #[doc = "Durable pre-enrollment attempt, commit, and recovery anchors."]
