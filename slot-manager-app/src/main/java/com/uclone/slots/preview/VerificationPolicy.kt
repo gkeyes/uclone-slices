@@ -3,6 +3,7 @@ package com.uclone.slots.preview
 import com.uclone.slots.preview.model.VerificationSource
 import com.uclone.slots.preview.model.VerificationState
 import com.uclone.slots.preview.model.VerifiedPackageSnapshot
+import com.uclone.slots.preview.model.revokeVerification
 import com.uclone.slots.preview.runtime.PackageSnapshot
 import com.uclone.slots.preview.runtime.RuntimePayload
 import com.uclone.slots.preview.runtime.RuntimeResult
@@ -18,20 +19,33 @@ internal fun SlotsViewModel.applyVerifiedSnapshot(
     snapshot: PackageSnapshot,
     source: VerificationSource,
 ) {
-    selectedStatus = snapshot.status
-    selectedSlots = snapshot.slots
-    markPackageLifecycle(snapshot.status.packageName, snapshot.status.lifecycle)
-    verificationState = if (snapshot.status.requiresRecovery) {
-        VerificationState.Unverified
-    } else {
-        snapshot.toVerificationState(source)
+    updateUiState {
+        copy(
+            selectedStatus = snapshot.status,
+            selectedSlots = snapshot.slots,
+            managedApps = managedApps.withPackageLifecycle(
+                snapshot.status.packageName,
+                snapshot.status.lifecycle,
+            ),
+            verificationState = if (snapshot.status.requiresRecovery) {
+                VerificationState.Unverified
+            } else {
+                snapshot.toVerificationState(source)
+            },
+        )
     }
 }
 
 internal fun SlotsViewModel.revokePackageVerification() {
-    verificationState = VerificationState.Unverified
-    selectedStatus = null
-    selectedSlots = emptyList()
+    updateUiState { revokeVerification() }
+}
+
+internal fun SlotsViewModel.failClosedAfterUnexpectedOperation() {
+    updateUiState {
+        revokeVerification().copy(
+            message = "操作异常中止，当前数据视图需要重新确认；不会自动启动 App",
+        )
+    }
 }
 
 internal fun verificationAfterUnknown(

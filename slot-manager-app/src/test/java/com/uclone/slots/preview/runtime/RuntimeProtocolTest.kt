@@ -60,6 +60,16 @@ class RuntimeProtocolTest {
     }
 
     @Test
+    fun missingResponseIdCannotBeAccepted() {
+        assertFailsWith<org.json.JSONException> {
+            RuntimeProtocol.decode(
+                """{"schema_version":2,"status":"error","error_code":"recovery_required"}""",
+                "current",
+            )
+        }
+    }
+
+    @Test
     fun parsesTypedSlotsPayload() {
         val result = RuntimeProtocol.decode(
             """{"schema_version":2,"request_id":"test","status":"ok","payload":{"kind":"slots","data":{"package":"com.example.app","slots":[{"slot":"base","display_name":"Base","seed_mode":"clone_base","state":"ready","active":true,"created_version_code":1,"last_opened_version_code":1,"inodes":{"ce":101,"de":202}}]}}}""",

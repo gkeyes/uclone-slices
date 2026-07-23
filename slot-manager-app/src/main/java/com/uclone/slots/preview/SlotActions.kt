@@ -12,47 +12,57 @@ fun SlotsViewModel.createSlot(packageName: String, name: String, blank: Boolean)
         if (trimmed.isEmpty() || trimmed.length > 48) {
             return@launchOperation reject("名称需要 1–48 个字符")
         }
-        when (val result = runtime.createSlot(packageName, trimmed, blank)) {
-            is RuntimeResult.Success -> {
-                val switched = result.payload as? RuntimePayload.Switch
-                if (switched?.packageName != packageName || switched.slotId == "base") {
-                    return@launchOperation handleFailure(
-                        RuntimeResult.Unknown("mismatched create result"),
-                        packageName,
-                    )
-                }
-                if (confirmAndRefresh(packageName, switched.slotId)) {
-                    record("已创建空间：$trimmed")
-                    finishConfirmedLaunch(packageName, switched.slotId, result)
-                }
-            }
-            else -> handleFailure(result, packageName)
-        }
+        coordinator.executeMutationAndLaunch(
+            runtime = runtime,
+            packageName = packageName,
+            requestedSlot = null,
+            mutation = { runtime.createSlot(packageName, trimmed, blank) },
+            onSnapshot = { snapshot, slotId, mutationResult ->
+                confirmAndRefresh(packageName, slotId, snapshot) &&
+                    canLaunchAfterSwitch(mutationResult, verificationState, packageName, slotId)
+            },
+            onLaunch = { launchResult, slotId, mutationResult ->
+                record("已创建空间：$trimmed")
+                finishConfirmedLaunch(packageName, slotId, mutationResult, launchResult)
+            },
+            onFailure = {
+                revokePackageVerification()
+                handleFailure(it, packageName)
+            },
+        )
     }
 
 fun SlotsViewModel.switchAndOpen(packageName: String, slotId: String) =
     launchOperation("切换数据空间", "暂停 App 并切换 CE + DE") {
-        when (val result = runtime.switchSlot(packageName, slotId)) {
-            is RuntimeResult.Success -> {
-                val switched = result.payload as? RuntimePayload.Switch
-                if (switched?.packageName != packageName || switched.slotId != slotId) {
-                    return@launchOperation handleFailure(
-                        RuntimeResult.Unknown("mismatched switch result"),
+        coordinator.executeMutationAndLaunch(
+            runtime = runtime,
+            packageName = packageName,
+            requestedSlot = slotId,
+            mutation = { runtime.switchSlot(packageName, slotId) },
+            onSnapshot = { snapshot, expectedSlot, mutationResult ->
+                confirmAndRefresh(packageName, expectedSlot, snapshot) &&
+                    canLaunchAfterSwitch(
+                        mutationResult,
+                        verificationState,
                         packageName,
+                        expectedSlot,
                     )
-                }
-                if (!confirmAndRefresh(packageName, slotId)) return@launchOperation
-                finishConfirmedLaunch(packageName, slotId, result)
-            }
-            else -> handleFailure(result, packageName)
-        }
+            },
+            onLaunch = { launchResult, expectedSlot, mutationResult ->
+                finishConfirmedLaunch(packageName, expectedSlot, mutationResult, launchResult)
+            },
+            onFailure = {
+                revokePackageVerification()
+                handleFailure(it, packageName)
+            },
+        )
     }
 
 fun SlotsViewModel.renameSlot(packageName: String, slotId: String, name: String) =
     launchOperation("重命名空间") {
         when (val result = runtime.rename(packageName, slotId, name.trim())) {
             is RuntimeResult.Success -> if (result.isAck("rename_slot")) {
-                openDetail(packageName)
+                refreshPackage(packageName)
             } else handleFailure(RuntimeResult.Unknown("invalid rename result"), packageName)
             else -> handleFailure(result, packageName)
         }
@@ -63,7 +73,7 @@ fun SlotsViewModel.deleteSlot(packageName: String, slotId: String) =
         when (val result = runtime.delete(packageName, slotId)) {
             is RuntimeResult.Success -> if (result.isAck("delete_slot")) {
                 record("已删除非活动空间")
-                openDetail(packageName)
+                refreshPackage(packageName)
             } else handleFailure(RuntimeResult.Unknown("invalid delete result"), packageName)
             else -> handleFailure(result, packageName)
         }
@@ -71,7 +81,7 @@ fun SlotsViewModel.deleteSlot(packageName: String, slotId: String) =
 
 fun SlotsViewModel.reconcile(packageName: String) = launchOperation("重新确认安全状态") {
     when (val result = runtime.reconcile(packageName)) {
-        is RuntimeResult.Success -> openDetail(packageName)
+        is RuntimeResult.Success -> refreshPackage(packageName)
         else -> handleFailure(result, packageName)
     }
 }
@@ -84,7 +94,7 @@ fun SlotsViewModel.rescue(packageName: String) = launchOperation("安全退回 B
             revokePackageVerification()
             record("已安全退回 Base")
             navigate(Destination.Apps)
-            refreshRuntime()
+            refreshRuntimeInternal()
         } else handleFailure(RuntimeResult.Unknown("invalid rescue result"), packageName)
         else -> handleFailure(result, packageName)
     }
@@ -94,6 +104,7 @@ private suspend fun SlotsViewModel.finishConfirmedLaunch(
     packageName: String,
     slotId: String,
     switchResult: RuntimeResult,
+    launchResult: RuntimeResult,
 ) {
     if (!canLaunchAfterSwitch(switchResult, verificationState, packageName, slotId)) {
         revokePackageVerification()
@@ -101,7 +112,7 @@ private suspend fun SlotsViewModel.finishConfirmedLaunch(
         return
     }
     updateOperationPhase("启动已确认的数据空间")
-    when (val result = runtime.launchCurrent(packageName, slotId)) {
+    when (val result = launchResult) {
         is RuntimeResult.Success -> {
             val launched = result.payload as? RuntimePayload.Launch
             if (launched?.packageName == packageName && launched.slotId == slotId) {
@@ -111,9 +122,13 @@ private suspend fun SlotsViewModel.finishConfirmedLaunch(
             }
         }
         is RuntimeResult.Unknown -> {
-            message = "数据空间已提交；启动请求结果未知，请查看 App 当前状态"
+            revokePackageVerification()
+            handleFailure(result, packageName)
         }
-        is RuntimeResult.Rejected -> handleFailure(result, packageName)
+        is RuntimeResult.Rejected -> {
+            revokePackageVerification()
+            handleFailure(result, packageName)
+        }
     }
 }
 

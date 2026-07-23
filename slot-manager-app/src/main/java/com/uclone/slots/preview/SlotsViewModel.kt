@@ -1,53 +1,61 @@
 package com.uclone.slots.preview
 
 import android.app.Application
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.uclone.slots.preview.apps.InstalledAppsRepository
 import com.uclone.slots.preview.model.*
 import com.uclone.slots.preview.runtime.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-
 class SlotsViewModel(application: Application) : AndroidViewModel(application) {
     internal val runtime: RuntimeGateway = RuntimeRepository()
     internal val apps = InstalledAppsRepository(application)
-    private val operationMutex = Mutex()
-    private var queuedOperations = 0
-    var destination by mutableStateOf<Destination>(Destination.Apps)
-        internal set
-    var runtimeHealth by mutableStateOf(RuntimeHealth.Checking)
-        private set
-    var runtimeMode by mutableStateOf(RuntimeMode.Ordinary)
-        private set
-    var managedApps by mutableStateOf<List<ManagedApp>>(emptyList())
-        internal set
-    var installedApps by mutableStateOf<List<InstalledApp>>(emptyList())
-        private set
-    var selectedStatus by mutableStateOf<PackageRuntimeStatus?>(null)
-        internal set
-    var selectedSlots by mutableStateOf<List<SlotSpace>>(emptyList())
-        internal set
-    var verificationState by mutableStateOf<VerificationState>(VerificationState.Unverified)
-        internal set
-    var operation by mutableStateOf<OperationState?>(null)
-        private set
-    var runtimeBusy by mutableStateOf(false)
-        private set
-    var message by mutableStateOf<String?>(null)
-        internal set
-    var taskHistory by mutableStateOf<List<String>>(emptyList())
-        internal set
-    var enrollmentReview by mutableStateOf<EnrollmentReview?>(null)
-        internal set
-    init {
-        refreshRuntime()
+    private val state = mutableStateOf(SlotsUiState())
+    private val stateLock = Any()
+    internal val coordinator = SlotOperationCoordinator(viewModelScope, ::updateUiState) { failClosedAfterUnexpectedOperation() }
+    val uiState: SlotsUiState get() = state.value
+    var destination: Destination
+        get() = uiState.destination
+        internal set(value) = updateUiState { copy(destination = value) }
+    var runtimeHealth: RuntimeHealth
+        get() = uiState.runtimeHealth
+        private set(value) = updateUiState { copy(runtimeHealth = value) }
+    var runtimeMode: RuntimeMode
+        get() = uiState.runtimeMode
+        private set(value) = updateUiState { copy(runtimeMode = value) }
+    var managedApps: List<ManagedApp>
+        get() = uiState.managedApps
+        internal set(value) = updateUiState { copy(managedApps = value) }
+    var installedApps: List<InstalledApp>
+        get() = uiState.installedApps
+        private set(value) = updateUiState { copy(installedApps = value) }
+    var selectedStatus: PackageRuntimeStatus?
+        get() = uiState.selectedStatus
+        internal set(value) = updateUiState { copy(selectedStatus = value) }
+    var selectedSlots: List<SlotSpace>
+        get() = uiState.selectedSlots
+        internal set(value) = updateUiState { copy(selectedSlots = value) }
+    var verificationState: VerificationState
+        get() = uiState.verificationState
+        internal set(value) = updateUiState { copy(verificationState = value) }
+    val operation: OperationState? get() = uiState.operation
+    val runtimeBusy: Boolean get() = uiState.runtimeBusy
+    var message: String?
+        get() = uiState.message
+        internal set(value) = updateUiState { copy(message = value) }
+    var taskHistory: List<String>
+        get() = uiState.taskHistory
+        internal set(value) = updateUiState { copy(taskHistory = value) }
+    var enrollmentReview: EnrollmentReview?
+        get() = uiState.enrollmentReview
+        internal set(value) = updateUiState { copy(enrollmentReview = value) }
+    init { refreshRuntime() }
+    internal fun updateUiState(reducer: SlotsUiState.() -> SlotsUiState) {
+        synchronized(stateLock) { state.value = reducer(state.value) }
     }
     fun navigate(target: Destination) {
         destination = target
@@ -55,7 +63,8 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
             loadInstalledApps(includeManaged = target == Destination.RescueApp)
         }
     }
-    fun refreshRuntime() = launchOperation(null) {
+    fun refreshRuntime() = launchOperation(null) { refreshRuntimeInternal() }
+    internal suspend fun refreshRuntimeInternal() {
         runtimeHealth = RuntimeHealth.Checking
         val probeState = UiMappings.probeState(runtime.probe())
         runtimeHealth = probeState.health
@@ -128,13 +137,25 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         packageName: String,
         slotId: String,
     ): Boolean {
-        operation = operation?.copy(phase = "验证 Runtime 提交结果")
+        updateOperationPhase("验证 Runtime 提交结果")
         val snapshot = runtime.readPackageSnapshot(packageName)
-        if (snapshot == null || snapshot.status.activeSlot != slotId ||
+        if (snapshot == null) {
+            revokePackageVerification()
+            unknown(packageName)
+            return false
+        }
+        return confirmAndRefresh(packageName, slotId, snapshot)
+    }
+    internal suspend fun confirmAndRefresh(
+        packageName: String,
+        slotId: String,
+        snapshot: PackageSnapshot,
+    ): Boolean {
+        updateOperationPhase("验证 Runtime 提交结果")
+        if (snapshot.status.packageName != packageName || snapshot.status.activeSlot != slotId ||
             snapshot.status.requiresRecovery
         ) {
             revokePackageVerification()
-            unknown(packageName)
             return false
         }
         applyVerifiedSnapshot(snapshot, VerificationSource.PostMutation)
@@ -142,7 +163,7 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         return true
     }
     internal fun updateOperationPhase(phase: String) {
-        operation = operation?.copy(phase = phase)
+        coordinator.updatePhase(phase)
     }
     private suspend fun loadPackage(packageName: String, recoverUnknown: Boolean = true): Boolean {
         if (runtimeMode == RuntimeMode.RecoveryOnly) {
@@ -160,10 +181,11 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         applyVerifiedSnapshot(snapshot, VerificationSource.Snapshot)
         return true
     }
-    private suspend fun openDetailInternal(packageName: String) {
+    internal suspend fun openDetailInternal(packageName: String) {
         destination = Destination.Detail(packageName)
         loadPackage(packageName)
     }
+    internal suspend fun refreshPackage(packageName: String) = loadPackage(packageName)
     private suspend fun refreshManagedInternal(): Boolean {
         val rows = runtime.listManaged().payloadAs<RuntimePayload.ManagedApps>()?.rows
             ?: return false
@@ -187,25 +209,7 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
         title: String?,
         phase: String = "正在与 Runtime 通信",
         block: suspend () -> Unit,
-    ) = run {
-        queuedOperations += 1
-        runtimeBusy = true
-        viewModelScope.launch {
-            try {
-                operationMutex.withLock {
-                    if (title != null) operation = OperationState(title, phase)
-                    try {
-                        block()
-                    } finally {
-                        operation = null
-                    }
-                }
-            } finally {
-                queuedOperations -= 1
-                runtimeBusy = queuedOperations > 0
-            }
-        }
-    }
+    ): Job = coordinator.launch(title, phase, block)
     internal suspend fun handleFailure(result: RuntimeResult, packageName: String) {
         when (result) {
             is RuntimeResult.Rejected -> {
@@ -230,7 +234,7 @@ class SlotsViewModel(application: Application) : AndroidViewModel(application) {
     }
     private suspend fun unknown(packageName: String) {
         revokePackageVerification()
-        operation = operation?.copy(phase = "结果未知，正在重新确认", resultUnknown = true)
+        coordinator.markResultUnknown("结果未知，正在重新确认")
         val reconciled = runtime.reconcile(packageName)
         val loaded = reconciled is RuntimeResult.Success &&
             loadPackage(packageName, recoverUnknown = false)

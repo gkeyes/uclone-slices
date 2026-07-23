@@ -34,6 +34,20 @@ class RootRpcClientTest {
     }
 
     @Test
+    fun missingResponseIdBecomesUnknown() = runBlocking {
+        val request = RuntimeRequest(command = "probe", requestId = "apk-current")
+        val process = StubProcess(
+            """{"schema_version":2,"status":"error","error_code":"recovery_required"}""" +
+                "\n",
+        )
+
+        val result = RootRpcClient { process }.call(request, 1_000)
+
+        assertIs<RuntimeResult.Unknown>(result)
+        Unit
+    }
+
+    @Test
     fun duplicateResponseFramesBecomeUnknown() = runBlocking {
         val request = RuntimeRequest(command = "probe", requestId = "apk-current")
         val process = StubProcess(response("apk-current") + response("apk-current"))
