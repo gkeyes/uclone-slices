@@ -9,7 +9,7 @@ BIN="$FIXTURE/bin"
 BOOT_ID_FILE="$FIXTURE/boot-id"
 
 host_mode() {
-    /usr/bin/stat -f '%Lp' "$1" 2>/dev/null || /usr/bin/stat -c '%a' "$1"
+    /usr/bin/stat -c '%a' "$1" 2>/dev/null || /usr/bin/stat -f '%Lp' "$1"
 }
 
 mkdir -p "$BIN"
@@ -23,8 +23,8 @@ case "${1:-}" in
         case "$format" in
             %u:%g) printf '%s\n' '0:0' ;;
             %u:%g:%a)
-                mode=$(/usr/bin/stat -f '%Lp' "$path" 2>/dev/null) ||
-                    mode=$(/usr/bin/stat -c '%a' "$path")
+                mode=$(/usr/bin/stat -c '%a' "$path" 2>/dev/null) ||
+                    mode=$(/usr/bin/stat -f '%Lp' "$path")
                 printf '0:0:%s\n' "$mode"
                 ;;
             *) exit 1 ;;

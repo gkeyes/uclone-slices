@@ -1,0 +1,61 @@
+name: Slots Preview Nightly Stress
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slots-preview-nightly
+  cancel-in-progress: false
+
+jobs:
+  runtime-stress:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust 1.95
+        run: >-
+          rustup toolchain install 1.95.0
+          --profile minimal
+          --component rustfmt
+          --component clippy
+
+      - name: Run host stress test outside repository
+        run: |
+          set -o pipefail
+          umask 077
+          install -d -m 0700 "$RUNNER_TEMP/uclone-rust-stress"
+          export TMPDIR="$RUNNER_TEMP/uclone-rust-stress/tmp"
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/uclone-rust-stress/target"
+          install -d -m 0700 "$TMPDIR" "$CARGO_TARGET_DIR"
+          {
+            printf 'commit=%s\n' "$GITHUB_SHA"
+            printf 'run=%s.%s\n' "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT"
+            rustc +1.95.0 --version
+            cargo +1.95.0 --version
+            cargo +1.95.0 test \
+              --manifest-path slot-runtime/Cargo.toml \
+              --locked \
+              --test runtime_stress \
+              -- \
+              --nocapture \
+              --test-threads=1
+          } 2>&1 | tee "$RUNNER_TEMP/uclone-rust-stress/runtime-stress.log"
+
+      - name: Upload stress evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: slots-preview-nightly-stress-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/uclone-rust-stress/runtime-stress.log
+          if-no-files-found: error
+          retention-days: 30

@@ -354,4 +354,5 @@ jobs:
             cmp -s "dist/$asset" "$VERIFY_DIR/$asset"
           done
           (cd "$VERIFY_DIR" && sha256sum -c SHA256SUMS)
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          printf '%s\n' "Draft Preview release created: $TAG"
+          printf '%s\n' 'Manual promotion is required after device and release-review gates pass.'
