@@ -9,6 +9,8 @@ mod fixture;
 mod fixture_cases;
 #[path = "package_state_matrix/fixture_data.rs"]
 mod fixture_data;
+#[path = "package_state_matrix/legacy_update_fixture.rs"]
+mod legacy_update_fixture;
 #[path = "package_state_matrix/probe.rs"]
 mod matrix_probe;
 

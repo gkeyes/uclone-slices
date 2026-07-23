@@ -42,6 +42,62 @@ impl<'a> InstalledArtifactRef<'a> {
     }
 }
 
+#[doc = "Owned, validated installed-artifact facts accepted by package state."]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "InstalledArtifactRecord")]
+pub struct InstalledArtifact {
+    version_code: u64,
+    code_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InstalledArtifactRecord {
+    version_code: u64,
+    code_path: String,
+}
+
+impl TryFrom<InstalledArtifactRecord> for InstalledArtifact {
+    type Error = DomainError;
+
+    fn try_from(value: InstalledArtifactRecord) -> Result<Self, Self::Error> {
+        Self::new(value.version_code, &value.code_path)
+    }
+}
+
+impl InstalledArtifact {
+    #[doc = "Constructs validated installed APK facts."]
+    pub fn new(version_code: u64, code_path: &str) -> Result<Self, DomainError> {
+        if version_code == 0 {
+            return Err(DomainError::InvalidVersionCode(version_code));
+        }
+        validate_code_path(code_path)?;
+        Ok(Self {
+            version_code,
+            code_path: code_path.to_owned(),
+        })
+    }
+
+    #[doc = "Returns the installed APK version code."]
+    pub const fn version_code(&self) -> u64 {
+        self.version_code
+    }
+
+    #[doc = "Returns the canonical APK code path captured by `PackageManager`."]
+    pub fn code_path(&self) -> &str {
+        &self.code_path
+    }
+}
+
+impl From<InstalledArtifactRef<'_>> for InstalledArtifact {
+    fn from(value: InstalledArtifactRef<'_>) -> Self {
+        Self {
+            version_code: value.version_code,
+            code_path: value.code_path.to_owned(),
+        }
+    }
+}
+
 #[doc = "Validated package observation containing immutable owner and installed-artifact facts."]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "AppIdentityRecord")]

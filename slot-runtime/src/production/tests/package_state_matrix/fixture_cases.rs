@@ -140,12 +140,10 @@ pub(super) fn transition_update_preparing(
     stores: &super::super::super::stores::ProductionStores,
     key: &crate::domain::PackageKey,
 ) {
-    transition(
-        stores,
+    super::legacy_update_fixture::advance_to(
+        &stores.package_state,
         key,
-        LifecycleState::Normal,
         LifecycleState::UpdatePreparing,
-        PackageStateReason::ManagedUpdate,
     );
 }
 
@@ -153,13 +151,10 @@ pub(super) fn transition_update_window_open(
     stores: &super::super::super::stores::ProductionStores,
     key: &crate::domain::PackageKey,
 ) {
-    transition_update_preparing(stores, key);
-    transition(
-        stores,
+    super::legacy_update_fixture::advance_to(
+        &stores.package_state,
         key,
-        LifecycleState::UpdatePreparing,
         LifecycleState::UpdateWindowOpen,
-        PackageStateReason::ManagedUpdate,
     );
 }
 
@@ -167,13 +162,10 @@ pub(super) fn transition_update_verifying(
     stores: &super::super::super::stores::ProductionStores,
     key: &crate::domain::PackageKey,
 ) {
-    transition_update_window_open(stores, key);
-    transition(
-        stores,
+    super::legacy_update_fixture::advance_to(
+        &stores.package_state,
         key,
-        LifecycleState::UpdateWindowOpen,
         LifecycleState::UpdateVerifying,
-        PackageStateReason::ManagedUpdate,
     );
 }
 

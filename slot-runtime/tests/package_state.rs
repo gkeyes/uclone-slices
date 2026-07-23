@@ -95,29 +95,21 @@ fn rejects_wrong_expected_state_and_duplicate_initialization() {
 }
 
 #[test]
-fn persists_managed_update_progression() {
+fn generic_writer_refuses_managed_update_progression() {
     let (_root, state) = store();
     let package = key("com.uclone.update");
     state.initialize(&package).unwrap();
-    state
+    let error = state
         .transition(
             &package,
             LifecycleState::Normal,
             LifecycleState::UpdatePreparing,
             PackageStateReason::ManagedUpdate,
         )
-        .unwrap();
-    let revision = state
-        .transition(
-            &package,
-            LifecycleState::UpdatePreparing,
-            LifecycleState::UpdateWindowOpen,
-            PackageStateReason::ManagedUpdate,
-        )
-        .unwrap();
+        .unwrap_err();
 
-    assert_eq!(revision.lifecycle_state(), LifecycleState::UpdateWindowOpen);
-    assert_eq!(revision.reason(), PackageStateReason::ManagedUpdate);
+    assert!(error.to_string().contains("proof-bearing coordinator"));
+    assert_eq!(state.latest(&package).unwrap().unwrap().generation(), 1);
 }
 
 #[test]

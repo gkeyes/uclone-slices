@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::storage;
 use super::{PackageStateError, PackageStateReason, PackageStateRevision};
-use crate::domain::{PackageKey, PackageName, UserId};
+use crate::domain::{InstalledArtifact, PackageKey, PackageName, UserId};
 use crate::lifecycle::LifecycleState;
 
 #[doc = "Filesystem-backed append-only package lifecycle-state store."]
@@ -44,9 +44,52 @@ impl PackageStateStore {
         let package_directory = self.package_path(package.package_name());
         storage::ensure_directory(&package_directory, self.owner_uid)?;
         storage::ensure_directory(&revisions, self.owner_uid)?;
-        let revision = PackageStateRevision::initialized(package)?;
+        let revision = PackageStateRevision::initialized_v1(package)?;
         storage::write_revision(&revisions, self.owner_uid, &revision)?;
         storage::sync_directory(&package_directory, self.owner_uid)?;
+        Ok(revision)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "private until a proof-bearing managed-update coordinator owns migration"
+    )]
+    fn migrate_v1_normal_to_v2(
+        &self,
+        package: &PackageKey,
+        expected_generation: u64,
+        expected_sha256: &str,
+        accepted_artifact: InstalledArtifact,
+    ) -> Result<PackageStateRevision, PackageStateError> {
+        require_primary(package)?;
+        self.validate_root()?;
+        let revisions = self.revisions_path(package.package_name());
+        let previous = storage::load_all(&revisions, package.package_name(), self.owner_uid)?
+            .and_then(|mut revisions| revisions.pop())
+            .ok_or_else(|| PackageStateError::NotInitialized(package.clone()))?;
+        if previous.package_key() != *package {
+            return Err(PackageStateError::Corrupt(
+                "package state directory does not match package key".to_owned(),
+            ));
+        }
+        if previous.generation() != expected_generation || previous.sha256() != expected_sha256 {
+            return Err(PackageStateError::UnexpectedHead {
+                expected_generation,
+                expected_sha256: expected_sha256.to_owned(),
+                actual_generation: previous.generation(),
+                actual_sha256: previous.sha256().to_owned(),
+            });
+        }
+        if previous.schema_version() != super::revision::V1_SCHEMA_VERSION
+            || previous.lifecycle_state() != LifecycleState::Normal
+        {
+            return Err(PackageStateError::MigrationRefused {
+                schema_version: previous.schema_version(),
+                state: previous.lifecycle_state(),
+            });
+        }
+        let revision = PackageStateRevision::migrated_normal_v2(&previous, accepted_artifact)?;
+        storage::write_revision(&revisions, self.owner_uid, &revision)?;
         Ok(revision)
     }
 
@@ -191,3 +234,6 @@ fn require_primary(package: &PackageKey) -> Result<(), PackageStateError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

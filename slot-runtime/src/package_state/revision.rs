@@ -1,24 +1,28 @@
-use serde::{Deserialize, Serialize};
-
-use super::{PackageStateError, PackageStateReason};
-use crate::domain::{PackageKey, PackageName, UserId};
-use crate::integrity::digest_json;
+use crate::domain::{InstalledArtifact, ManagedUpdateContext, PackageKey, PackageName, UserId};
 use crate::lifecycle::LifecycleState;
 
-pub(super) const SCHEMA_VERSION: u32 = 1;
+use super::{PackageStateError, PackageStateReason};
+
+mod semantics;
+mod validation;
+mod wire;
+
+pub(super) const V1_SCHEMA_VERSION: u32 = 1;
+pub(super) const V2_SCHEMA_VERSION: u32 = 2;
 
 #[doc = "One immutable, hash-linked package lifecycle-state revision."]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageStateRevision {
-    pub(super) schema_version: u32,
-    pub(super) generation: u64,
-    pub(super) package_name: PackageName,
-    pub(super) user_id: UserId,
-    pub(super) lifecycle_state: LifecycleState,
-    pub(super) reason: PackageStateReason,
-    pub(super) previous_sha256: Option<String>,
-    pub(super) sha256: String,
+    schema_version: u32,
+    generation: u64,
+    package_name: PackageName,
+    user_id: UserId,
+    lifecycle_state: LifecycleState,
+    reason: PackageStateReason,
+    accepted_artifact: Option<InstalledArtifact>,
+    managed_update_context: Option<ManagedUpdateContext>,
+    previous_sha256: Option<String>,
+    sha256: String,
 }
 
 impl PackageStateRevision {
@@ -57,6 +61,16 @@ impl PackageStateRevision {
         self.reason
     }
 
+    #[doc = "Returns the v2 artifact accepted for ordinary execution."]
+    pub const fn accepted_artifact(&self) -> Option<&InstalledArtifact> {
+        self.accepted_artifact.as_ref()
+    }
+
+    #[doc = "Returns the exact v2 managed-update context, when executable."]
+    pub const fn managed_update_context(&self) -> Option<&ManagedUpdateContext> {
+        self.managed_update_context.as_ref()
+    }
+
     #[doc = "Returns the previous revision digest, when present."]
     pub fn previous_sha256(&self) -> Option<&str> {
         self.previous_sha256.as_deref()
@@ -67,14 +81,35 @@ impl PackageStateRevision {
         &self.sha256
     }
 
-    pub(super) fn initialized(key: &PackageKey) -> Result<Self, PackageStateError> {
-        Self::new(
+    pub(super) fn initialized_v1(key: &PackageKey) -> Result<Self, PackageStateError> {
+        let revision = Self::build(
+            V1_SCHEMA_VERSION,
             key,
             1,
             None,
             LifecycleState::Normal,
             PackageStateReason::Enrolled,
-        )
+            None,
+            None,
+        )?;
+        revision.verify(None)?;
+        Ok(revision)
+    }
+
+    pub(super) fn migrated_normal_v2(
+        previous: &Self,
+        accepted_artifact: InstalledArtifact,
+    ) -> Result<Self, PackageStateError> {
+        let revision = Self::build_next(
+            previous,
+            V2_SCHEMA_VERSION,
+            LifecycleState::Normal,
+            PackageStateReason::Enrolled,
+            Some(accepted_artifact),
+            None,
+        )?;
+        revision.verify(Some(previous))?;
+        Ok(revision)
     }
 
     pub(super) fn transitioned(
@@ -82,87 +117,84 @@ impl PackageStateRevision {
         next: LifecycleState,
         reason: PackageStateReason,
     ) -> Result<Self, PackageStateError> {
-        if !reason_matches_state(next, reason, false) {
+        if semantics::is_update_state(previous.lifecycle_state) || semantics::is_update_state(next)
+        {
             return Err(PackageStateError::Corrupt(
-                "lifecycle state and reason do not match".to_owned(),
+                "managed update requires a proof-bearing coordinator".to_owned(),
             ));
         }
+        let (accepted_artifact, managed_update_context) = if previous.schema_version
+            == V1_SCHEMA_VERSION
+        {
+            (None, None)
+        } else {
+            (
+                Some(previous.accepted_artifact.clone().ok_or_else(|| {
+                    PackageStateError::Corrupt("v2 head is missing accepted artifact".to_owned())
+                })?),
+                None,
+            )
+        };
+        let revision = Self::build_next(
+            previous,
+            previous.schema_version,
+            next,
+            reason,
+            accepted_artifact,
+            managed_update_context,
+        )?;
+        revision.verify(Some(previous))?;
+        Ok(revision)
+    }
+
+    pub(super) fn verify(&self, previous: Option<&Self>) -> Result<(), PackageStateError> {
+        validation::verify(self, previous)
+    }
+
+    fn build_next(
+        previous: &Self,
+        schema_version: u32,
+        lifecycle_state: LifecycleState,
+        reason: PackageStateReason,
+        accepted_artifact: Option<InstalledArtifact>,
+        managed_update_context: Option<ManagedUpdateContext>,
+    ) -> Result<Self, PackageStateError> {
         let generation = previous
             .generation
             .checked_add(1)
             .ok_or_else(|| PackageStateError::Corrupt("generation overflow".to_owned()))?;
-        Self::new(
+        Self::build(
+            schema_version,
             &previous.package_key(),
             generation,
             Some(previous.sha256.clone()),
-            next,
+            lifecycle_state,
             reason,
+            accepted_artifact,
+            managed_update_context,
         )
     }
 
-    pub(super) fn verify(&self, previous: Option<&Self>) -> Result<(), PackageStateError> {
-        if self.schema_version != SCHEMA_VERSION {
-            return Err(PackageStateError::Corrupt(
-                "unsupported schema version".to_owned(),
-            ));
-        }
-        if self.generation == 0 {
-            return Err(PackageStateError::Corrupt("zero generation".to_owned()));
-        }
-        let expected_generation = previous.map_or(Ok(1), |value| {
-            value
-                .generation
-                .checked_add(1)
-                .ok_or_else(|| PackageStateError::Corrupt("generation overflow".to_owned()))
-        })?;
-        if self.generation != expected_generation
-            || self.previous_sha256.as_deref() != previous.map(Self::sha256)
-        {
-            return Err(PackageStateError::Corrupt(
-                "generation or previous digest mismatch".to_owned(),
-            ));
-        }
-        if self.digest()? != self.sha256 {
-            return Err(PackageStateError::Corrupt("digest mismatch".to_owned()));
-        }
-        if !reason_matches_state(self.lifecycle_state, self.reason, previous.is_none()) {
-            return Err(PackageStateError::Corrupt(
-                "lifecycle state and reason do not match".to_owned(),
-            ));
-        }
-        if let Some(previous) = previous {
-            if previous.package_name != self.package_name || previous.user_id != self.user_id {
-                return Err(PackageStateError::Corrupt(
-                    "revision changes package stream identity".to_owned(),
-                ));
-            }
-            if !previous
-                .lifecycle_state
-                .can_transition_to(self.lifecycle_state)
-            {
-                return Err(PackageStateError::Corrupt(format!(
-                    "illegal lifecycle transition from {:?} to {:?}",
-                    previous.lifecycle_state, self.lifecycle_state
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    fn new(
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        schema_version: u32,
         key: &PackageKey,
         generation: u64,
         previous_sha256: Option<String>,
         lifecycle_state: LifecycleState,
         reason: PackageStateReason,
+        accepted_artifact: Option<InstalledArtifact>,
+        managed_update_context: Option<ManagedUpdateContext>,
     ) -> Result<Self, PackageStateError> {
         let mut revision = Self {
-            schema_version: SCHEMA_VERSION,
+            schema_version,
             generation,
             package_name: key.package_name().clone(),
             user_id: key.user_id(),
             lifecycle_state,
             reason,
+            accepted_artifact,
+            managed_update_context,
             previous_sha256,
             sha256: String::new(),
         };
@@ -171,60 +203,12 @@ impl PackageStateRevision {
     }
 
     fn digest(&self) -> Result<String, PackageStateError> {
-        Ok(digest_json(&UnsignedRevision::from(self))?)
-    }
-}
-
-fn reason_matches_state(state: LifecycleState, reason: PackageStateReason, first: bool) -> bool {
-    if first {
-        return state == LifecycleState::Normal && reason == PackageStateReason::Enrolled;
-    }
-    match reason {
-        PackageStateReason::Enrolled => false,
-        PackageStateReason::ManagedUpdate => matches!(
-            state,
-            LifecycleState::UpdatePreparing
-                | LifecycleState::UpdateWindowOpen
-                | LifecycleState::UpdateVerifying
-        ),
-        PackageStateReason::IdentityChanged => state == LifecycleState::Quarantined,
-        PackageStateReason::ViewUncertain => state == LifecycleState::RecoveryRequired,
-        PackageStateReason::LifecycleDrift => {
-            matches!(
-                state,
-                LifecycleState::LifecycleDrifted | LifecycleState::RecoveryRequired
-            )
-        }
-        PackageStateReason::ManualRepair => {
-            matches!(
-                state,
-                LifecycleState::RepairWaiting | LifecycleState::Normal
-            )
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct UnsignedRevision<'a> {
-    schema_version: u32,
-    generation: u64,
-    package_name: &'a PackageName,
-    user_id: UserId,
-    lifecycle_state: LifecycleState,
-    reason: PackageStateReason,
-    previous_sha256: Option<&'a str>,
-}
-
-impl<'a> From<&'a PackageStateRevision> for UnsignedRevision<'a> {
-    fn from(value: &'a PackageStateRevision) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            generation: value.generation,
-            package_name: &value.package_name,
-            user_id: value.user_id,
-            lifecycle_state: value.lifecycle_state,
-            reason: value.reason,
-            previous_sha256: value.previous_sha256.as_deref(),
+        match self.schema_version {
+            V1_SCHEMA_VERSION => wire::digest_v1(self),
+            V2_SCHEMA_VERSION => wire::digest_v2(self),
+            _ => Err(PackageStateError::Corrupt(
+                "unsupported schema version".to_owned(),
+            )),
         }
     }
 }

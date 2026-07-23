@@ -22,6 +22,28 @@ pub enum PackageStateError {
         #[doc = "Latest state in the durable stream."]
         actual: LifecycleState,
     },
+    #[doc = "The caller's exact generation/digest compare-and-swap head is stale."]
+    #[error(
+        "unexpected package-state head: expected {expected_generation}/{expected_sha256}, actual {actual_generation}/{actual_sha256}"
+    )]
+    UnexpectedHead {
+        #[doc = "Generation supplied by the caller."]
+        expected_generation: u64,
+        #[doc = "Digest supplied by the caller."]
+        expected_sha256: String,
+        #[doc = "Latest durable generation."]
+        actual_generation: u64,
+        #[doc = "Latest durable digest."]
+        actual_sha256: String,
+    },
+    #[doc = "The schema-v1 head is unsafe to migrate into executable schema v2."]
+    #[error("schema-v1 to schema-v2 migration refused from schema {schema_version} {state:?}")]
+    MigrationRefused {
+        #[doc = "Head schema version."]
+        schema_version: u32,
+        #[doc = "Legacy head lifecycle state."]
+        state: LifecycleState,
+    },
     #[doc = "The requested lifecycle transition is not legal."]
     #[error("illegal lifecycle transition from {previous:?} to {next:?}")]
     IllegalTransition {

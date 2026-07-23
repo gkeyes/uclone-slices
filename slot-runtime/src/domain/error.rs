@@ -16,6 +16,9 @@ pub enum DomainError {
     #[doc = "The Linux boot identifier is malformed."]
     #[error("invalid boot identifier")]
     InvalidBootId,
+    #[doc = "The managed-update token is malformed."]
+    #[error("invalid managed-update token")]
+    InvalidUpdateToken,
     #[doc = "The signing-certificate digest is not a SHA-256 hex string."]
     #[error("invalid signature digest")]
     InvalidSignatureDigest,
