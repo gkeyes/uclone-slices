@@ -123,7 +123,7 @@ pub(super) fn load<Q: PackageProbe>(
     ))))
 }
 
-fn active_slot_metadata_ready(
+pub(super) fn active_slot_metadata_ready(
     stores: &ProductionStores,
     enrolled: &ManagedPackage,
     active: &SlotView,
@@ -171,7 +171,7 @@ pub(super) fn catalog_views(
     ))
 }
 
-fn active_view(
+pub(super) fn active_view(
     enrolled: &ManagedPackage,
     revision: Option<&PackageRevision>,
     base: SlotView,
@@ -199,7 +199,7 @@ fn active_view(
     }
 }
 
-fn journal_for<'a>(
+pub(super) fn journal_for<'a>(
     transactions: &'a [Transaction],
     key: &'a PackageKey,
 ) -> impl Iterator<Item = &'a Transaction> {
@@ -209,7 +209,7 @@ fn journal_for<'a>(
     })
 }
 
-fn has_unfinished(transactions: &[Transaction], key: &PackageKey) -> bool {
+pub(super) fn has_unfinished(transactions: &[Transaction], key: &PackageKey) -> bool {
     journal_for(transactions, key).any(|transaction| {
         !matches!(
             transaction.steps().last().map(JournalStep::event),
@@ -218,7 +218,7 @@ fn has_unfinished(transactions: &[Transaction], key: &PackageKey) -> bool {
     })
 }
 
-fn registry_matches_journal(
+pub(super) fn registry_matches_journal(
     revision: Option<&PackageRevision>,
     transactions: &[Transaction],
     key: &PackageKey,

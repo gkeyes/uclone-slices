@@ -10,6 +10,8 @@ mod managed_names;
 mod management;
 mod mapping;
 mod metadata;
+#[cfg(test)]
+mod package_aggregate;
 mod reconciliation;
 mod reconciliation_clean;
 mod reconciliation_flow;

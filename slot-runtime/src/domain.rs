@@ -1,5 +1,6 @@
 #![doc = "Validated persistence and command-boundary values."]
 
+mod aggregate;
 mod error;
 mod gate;
 mod identifier;
@@ -7,6 +8,10 @@ mod package;
 mod storage;
 mod transaction_token;
 
+pub use aggregate::{
+    AggregateState, AllowedAction, DurablePackageFacts, EvidenceScope, GateFacts,
+    InvariantViolation, LivePackageFacts, PackageAggregate, PackageFacts, SafetyDisposition,
+};
 pub use error::DomainError;
 pub use gate::{GateSnapshot, PackageEnabledState};
 pub use identifier::{PackageName, SlotId};

@@ -13,7 +13,7 @@ mod fixture_data;
 mod matrix_probe;
 
 use super::slot_lifecycle_support::ready_package;
-use crate::domain::{GateSnapshot, PackageEnabledState};
+use crate::domain::{AggregateState, EvidenceScope, GateSnapshot, PackageEnabledState};
 use crate::service::{ObservedGateState, PackageState};
 use matrix_probe::MatrixProbe;
 
@@ -23,6 +23,35 @@ fn package_state_matrix_rows() {
         let mut case = fixture::build(row);
         let actual = super::super::state::load(&case.stores, &mut case.probe, &case.key);
         fixture::assert_expected(actual, case.expected);
+    }
+}
+
+#[test]
+fn package_state_matrix_shadow_resolver_matches_legacy() {
+    for row in fixture::rows() {
+        let mut case = fixture::build(row);
+        let mut shadow_probe = case.probe.clone();
+        let legacy = super::super::state::load(&case.stores, &mut case.probe, &case.key);
+        let shadow = super::super::package_aggregate::resolve(
+            &case.stores,
+            &mut shadow_probe,
+            &case.key,
+            EvidenceScope::Unlocked,
+        );
+
+        match legacy {
+            Ok(PackageState::Absent) => assert_eq!(shadow.state(), AggregateState::Absent),
+            Ok(PackageState::Ready(snapshot)) => {
+                assert_eq!(shadow.state(), AggregateState::Ready);
+                assert_eq!(shadow.active_slot(), Some(snapshot.managed().active_slot()));
+            }
+            Ok(PackageState::RecoveryRequired) | Err(_) => {
+                assert_eq!(shadow.state(), AggregateState::RecoveryRequired);
+            }
+            Ok(PackageState::Quarantined) => {
+                assert_eq!(shadow.state(), AggregateState::Quarantined);
+            }
+        }
     }
 }
 
