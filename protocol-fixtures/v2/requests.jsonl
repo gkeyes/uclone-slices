@@ -1,0 +1,17 @@
+{"schema_version":2,"request_id":"golden-probe","command":"probe","build_id":"development"}
+{"schema_version":2,"request_id":"golden-inspect","command":"inspect_package","build_id":"development","package":"com.example.app"}
+{"schema_version":2,"request_id":"golden-managed","command":"list_managed_apps","build_id":"development"}
+{"schema_version":2,"request_id":"golden-recovery-targets","command":"list_recovery_targets","build_id":"development"}
+{"schema_version":2,"request_id":"golden-enroll","command":"enroll_package","build_id":"development","package":"com.example.app","accept_direct_boot_conditional":true}
+{"schema_version":2,"request_id":"golden-status","command":"status_package","build_id":"development","package":"com.example.app"}
+{"schema_version":2,"request_id":"golden-snapshot","command":"package_snapshot","build_id":"development","package":"com.example.app"}
+{"schema_version":2,"request_id":"golden-create","command":"create_slot","build_id":"development","package":"com.example.app","display_name":"Work Profile","seed_mode":"blank"}
+{"schema_version":2,"request_id":"golden-list-slots","command":"list_slots","build_id":"development","package":"com.example.app"}
+{"schema_version":2,"request_id":"golden-switch","command":"switch","build_id":"development","package":"com.example.app","slot":"preview"}
+{"schema_version":2,"request_id":"golden-launch","command":"launch_current","build_id":"development","package":"com.example.app","slot":"preview"}
+{"schema_version":2,"request_id":"golden-rename","command":"rename_slot","build_id":"development","package":"com.example.app","slot":"preview","display_name":"Work Profile"}
+{"schema_version":2,"request_id":"golden-delete","command":"delete_slot","build_id":"development","package":"com.example.app","slot":"preview"}
+{"schema_version":2,"request_id":"golden-reconcile","command":"reconcile","build_id":"development"}
+{"schema_version":2,"request_id":"golden-reconcile-package","command":"reconcile_package","build_id":"development","package":"com.example.app"}
+{"schema_version":2,"request_id":"golden-retire","command":"retire_package","build_id":"development","package":"com.example.app"}
+{"schema_version":2,"request_id":"golden-rescue","command":"rescue_to_base","build_id":"development","package":"com.example.app"}

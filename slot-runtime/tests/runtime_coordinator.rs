@@ -1,6 +1,8 @@
 #![doc = "Integration coverage for the typed switch transaction coordinator."]
 #![allow(clippy::unwrap_used, reason = "validated test fixtures")]
 
+#[path = "runtime_coordinator/crash_matrix.rs"]
+mod crash_matrix;
 #[path = "runtime_coordinator/fixture.rs"]
 mod fixture;
 #[path = "runtime_coordinator/gate_acquire.rs"]

@@ -1,0 +1,13 @@
+{"schema_version":2,"request_id":"error-invalid-request","status":"error","error_code":"invalid_request"}
+{"schema_version":2,"request_id":"error-unsupported-schema","status":"error","error_code":"unsupported_schema"}
+{"schema_version":2,"request_id":"error-pair-mismatch","status":"error","error_code":"runtime_pair_mismatch"}
+{"schema_version":2,"request_id":"error-package-not-allowed","status":"error","error_code":"package_not_allowed"}
+{"schema_version":2,"request_id":"error-direct-boot","status":"error","error_code":"direct_boot_confirmation_required"}
+{"schema_version":2,"request_id":"error-not-found","status":"error","error_code":"not_found"}
+{"schema_version":2,"request_id":"error-conflict","status":"error","error_code":"conflict"}
+{"schema_version":2,"request_id":"error-recovery-required","status":"error","error_code":"recovery_required"}
+{"schema_version":2,"request_id":"error-busy","status":"error","error_code":"busy"}
+{"schema_version":2,"request_id":"error-quarantined","status":"error","error_code":"quarantined"}
+{"schema_version":2,"request_id":"error-user-locked","status":"error","error_code":"user_locked"}
+{"schema_version":2,"request_id":"error-unsupported-device","status":"error","error_code":"unsupported_device"}
+{"schema_version":2,"request_id":"error-internal","status":"error","error_code":"internal"}

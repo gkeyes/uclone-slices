@@ -39,6 +39,7 @@ mod tests {
     mod legacy_slot_lifecycle;
     mod multi_app_isolation;
     mod orphan_gate;
+    mod package_state_matrix;
     mod publication_digest;
     mod registry_journal_isolation;
     mod rescue_state;

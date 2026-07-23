@@ -36,6 +36,12 @@ android {
         buildConfig = true
     }
 
+    sourceSets {
+        getByName("test") {
+            resources.srcDir("../protocol-fixtures/v2")
+        }
+    }
+
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {

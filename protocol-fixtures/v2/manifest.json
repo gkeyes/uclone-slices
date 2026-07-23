@@ -1,0 +1,63 @@
+{
+  "schema_version": 2,
+  "build_id": "development",
+  "requests": {
+    "file": "requests.jsonl",
+    "count": 17,
+    "commands": [
+      "probe",
+      "inspect_package",
+      "list_managed_apps",
+      "list_recovery_targets",
+      "enroll_package",
+      "status_package",
+      "package_snapshot",
+      "create_slot",
+      "list_slots",
+      "switch",
+      "launch_current",
+      "rename_slot",
+      "delete_slot",
+      "reconcile",
+      "reconcile_package",
+      "retire_package",
+      "rescue_to_base"
+    ]
+  },
+  "responses": {
+    "file": "responses.jsonl",
+    "count": 11,
+    "payload_kinds": [
+      "probe_report",
+      "package_inspection",
+      "managed_apps",
+      "recovery_targets",
+      "slots",
+      "package_status",
+      "package_snapshot",
+      "switch_result",
+      "launch_result",
+      "reconcile_report",
+      "ack"
+    ]
+  },
+  "errors": {
+    "file": "errors.jsonl",
+    "count": 13,
+    "error_codes": [
+      "invalid_request",
+      "unsupported_schema",
+      "runtime_pair_mismatch",
+      "package_not_allowed",
+      "direct_boot_confirmation_required",
+      "not_found",
+      "conflict",
+      "recovery_required",
+      "busy",
+      "quarantined",
+      "user_locked",
+      "unsupported_device",
+      "internal"
+    ]
+  }
+}
