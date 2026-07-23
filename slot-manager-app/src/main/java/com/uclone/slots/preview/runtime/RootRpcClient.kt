@@ -11,13 +11,19 @@ interface RpcClient {
     suspend fun call(request: RuntimeRequest, timeoutMs: Long): RuntimeResult
 }
 
-class RootRpcClient : RpcClient {
+class RootRpcClient internal constructor(
+    private val processStarter: () -> Process = {
+        ProcessBuilder("su", "-c", RPC_COMMAND).start()
+    },
+) : RpcClient {
     override suspend fun call(request: RuntimeRequest, timeoutMs: Long): RuntimeResult =
-        withContext(Dispatchers.IO) { execute(RuntimeProtocol.encode(request), timeoutMs) }
+        withContext(Dispatchers.IO) {
+            execute(RuntimeProtocol.encode(request), request.requestId, timeoutMs)
+        }
 
-    private fun execute(frame: String, timeoutMs: Long): RuntimeResult {
+    private fun execute(frame: String, requestId: String, timeoutMs: Long): RuntimeResult {
         val process = try {
-            ProcessBuilder("su", "-c", RPC_COMMAND).start()
+            processStarter()
         } catch (_: Exception) {
             return RuntimeResult.Unknown("无法启动 Root 客户端")
         }
@@ -32,7 +38,7 @@ class RootRpcClient : RpcClient {
             } else {
                 val out = stdout.get(STREAM_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 val err = stderr.get(STREAM_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                parseResult(process.exitValue(), out, err)
+                parseResult(process.exitValue(), out, err, requestId)
             }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -44,7 +50,12 @@ class RootRpcClient : RpcClient {
         }
     }
 
-    private fun parseResult(exit: Int, stdout: ByteArray, stderr: ByteArray): RuntimeResult {
+    private fun parseResult(
+        exit: Int,
+        stdout: ByteArray,
+        stderr: ByteArray,
+        requestId: String,
+    ): RuntimeResult {
         if (stdout.size >= MAX_OUTPUT_BYTES || stderr.size >= MAX_OUTPUT_BYTES) {
             return RuntimeResult.Unknown("Runtime 输出超过安全上限")
         }
@@ -53,7 +64,7 @@ class RootRpcClient : RpcClient {
             return RuntimeResult.Unknown("Runtime 响应格式不完整")
         }
         return try {
-            val decoded = RuntimeProtocol.decode(text.trimEnd('\n'))
+            val decoded = RuntimeProtocol.decode(text.trimEnd('\n'), requestId)
             if (exit == 0 || decoded is RuntimeResult.Rejected) decoded
             else RuntimeResult.Unknown("Root 客户端异常退出")
         } catch (_: Exception) {

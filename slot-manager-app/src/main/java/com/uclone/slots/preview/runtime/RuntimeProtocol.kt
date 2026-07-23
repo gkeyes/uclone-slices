@@ -7,13 +7,12 @@ import com.uclone.slots.preview.model.PackageRuntimeStatus
 import com.uclone.slots.preview.model.PackageSupport
 import com.uclone.slots.preview.model.SlotSpace
 import org.json.JSONObject
-import java.util.UUID
 
 object RuntimeProtocol {
     fun encode(request: RuntimeRequest): String {
         val json = JSONObject()
             .put("schema_version", SCHEMA_VERSION)
-            .put("request_id", "apk-${UUID.randomUUID()}")
+            .put("request_id", request.requestId)
             .put("command", request.command)
             .put("build_id", BuildConfig.PREVIEW_BUILD_ID)
         request.packageName?.let { json.put("package", it) }
@@ -26,8 +25,11 @@ object RuntimeProtocol {
         return json.toString() + "\n"
     }
 
-    fun decode(line: String): RuntimeResult {
+    fun decode(line: String, expectedRequestId: String): RuntimeResult {
         val root = JSONObject(line)
+        if (root.getString("request_id") != expectedRequestId) {
+            return RuntimeResult.Unknown("Runtime 响应与当前请求不匹配")
+        }
         if (root.getInt("schema_version") != SCHEMA_VERSION) {
             return RuntimeResult.Rejected("runtime_pair_mismatch")
         }

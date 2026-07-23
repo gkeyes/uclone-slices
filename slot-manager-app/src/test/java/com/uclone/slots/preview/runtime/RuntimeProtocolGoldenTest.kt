@@ -49,6 +49,7 @@ class RuntimeProtocolGoldenTest {
                 displayName = root.stringOrNull("display_name"),
                 seedMode = root.stringOrNull("seed_mode"),
                 acceptDirectBootConditional = root.booleanOrNull("accept_direct_boot_conditional"),
+                requestId = root.getString("request_id"),
             )
             assertEquals(
                 normalizeRequestId(fixture),
@@ -85,7 +86,9 @@ class RuntimeProtocolGoldenTest {
             val root = JSONObject(fixture)
             val kind = root.getJSONObject("payload").getString("kind")
             assertEquals(expectedKinds[index], kind)
-            assertIs<RuntimeResult.Success>(RuntimeProtocol.decode(fixture))
+            assertIs<RuntimeResult.Success>(
+                RuntimeProtocol.decode(fixture, root.getString("request_id")),
+            )
         }
     }
 
@@ -117,7 +120,9 @@ class RuntimeProtocolGoldenTest {
         fixtures.forEachIndexed { index, fixture ->
             val expectedCode = JSONObject(fixture).getString("error_code")
             assertEquals(expectedCodes[index], expectedCode)
-            val result = assertIs<RuntimeResult.Rejected>(RuntimeProtocol.decode(fixture))
+            val result = assertIs<RuntimeResult.Rejected>(
+                RuntimeProtocol.decode(fixture, JSONObject(fixture).getString("request_id")),
+            )
             assertEquals(expectedCode, result.code)
         }
     }

@@ -4,6 +4,7 @@ import com.uclone.slots.preview.model.PackageInspection
 import com.uclone.slots.preview.model.PackageLifecycle
 import com.uclone.slots.preview.model.PackageRuntimeStatus
 import com.uclone.slots.preview.model.SlotSpace
+import java.util.UUID
 
 sealed interface RuntimePayload {
     data class Probe(
@@ -56,4 +57,5 @@ data class RuntimeRequest(
     val displayName: String? = null,
     val seedMode: String? = null,
     val acceptDirectBootConditional: Boolean? = null,
+    val requestId: String = "apk-${UUID.randomUUID()}",
 )
