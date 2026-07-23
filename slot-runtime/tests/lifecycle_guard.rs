@@ -5,8 +5,8 @@
 )]
 
 use uclone_slot_runtime::domain::{
-    AppIdentity, DataInodes, ManagedPackage, PackageKey, PackageName, PackageObservation, SlotId,
-    SlotView, UserId,
+    AppIdentity, DataInodes, InstalledArtifact, ManagedPackage, PackageKey, PackageName,
+    PackageObservation, SlotId, SlotView, UserId,
 };
 use uclone_slot_runtime::lifecycle::{
     GuardDecision, LifecycleState, PackageLifecycleGuard, RecoveryReason,
@@ -114,6 +114,71 @@ fn accepts_version_change_only_during_update_verification() {
     let decision = PackageLifecycleGuard::assess(&managed, &observed);
 
     assert_eq!(decision, GuardDecision::AllowUpdateVerification);
+}
+
+#[test]
+fn live_owner_drift_quarantines_even_when_accepted_artifact_matches() {
+    let base = DataInodes::new(100, 200).unwrap();
+    let managed = managed(SlotId::base(), base);
+    let accepted = InstalledArtifact::new(2, "/data/app/slotprobe-v2/base.apk").unwrap();
+    let changed_owner = AppIdentity::new(
+        10_322,
+        SIGNATURE_A,
+        accepted.version_code(),
+        accepted.code_path(),
+    )
+    .unwrap();
+    let observed = observation(changed_owner, base, base, false);
+
+    assert_eq!(
+        PackageLifecycleGuard::assess_with_accepted_artifact(&managed, &observed, Some(&accepted),),
+        GuardDecision::Quarantine,
+    );
+}
+
+#[test]
+fn accepted_artifact_mismatch_requires_recovery_outside_update_window() {
+    let base = DataInodes::new(100, 200).unwrap();
+    let managed = managed(SlotId::base(), base);
+    let accepted = InstalledArtifact::new(2, "/data/app/slotprobe-v2/base.apk").unwrap();
+    let observed = observation(managed.identity().clone(), base, base, false);
+
+    assert_eq!(
+        PackageLifecycleGuard::assess_with_accepted_artifact(&managed, &observed, Some(&accepted),),
+        GuardDecision::RecoveryRequired(RecoveryReason::UnexpectedPackageReplacement),
+    );
+}
+
+#[test]
+fn accepted_artifact_match_is_ready_for_the_normal_base_view() {
+    let base = DataInodes::new(100, 200).unwrap();
+    let managed = managed(SlotId::base(), base);
+    let accepted = InstalledArtifact::new(2, "/data/app/slotprobe-v2/base.apk").unwrap();
+    let observed_identity = AppIdentity::new(
+        managed.identity().uid(),
+        managed.identity().signature_sha256(),
+        accepted.version_code(),
+        accepted.code_path(),
+    )
+    .unwrap();
+    let observed = observation(observed_identity, base, base, false);
+
+    assert_eq!(
+        PackageLifecycleGuard::assess_with_accepted_artifact(&managed, &observed, Some(&accepted),),
+        GuardDecision::AllowBase,
+    );
+}
+
+#[test]
+fn schema_v1_missing_artifact_falls_back_to_enrollment_artifact() {
+    let base = DataInodes::new(100, 200).unwrap();
+    let managed = managed(SlotId::base(), base);
+    let observed = observation(managed.identity().clone(), base, base, false);
+
+    assert_eq!(
+        PackageLifecycleGuard::assess_with_accepted_artifact(&managed, &observed, None),
+        GuardDecision::AllowBase,
+    );
 }
 
 #[test]

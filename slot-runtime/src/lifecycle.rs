@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{ManagedPackage, PackageObservation};
+use crate::domain::{InstalledArtifact, ManagedPackage, PackageObservation};
 
 #[doc = "Persisted package lifecycle state."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -8,9 +8,9 @@ use crate::domain::{ManagedPackage, PackageObservation};
 pub enum LifecycleState {
     #[doc = "Package identity and `PackageManager` inode anchor are healthy."]
     Normal,
-    #[doc = "Gate acquisition and base restoration are in progress."]
+    #[doc = "`Gate` acquisition and base restoration are in progress."]
     UpdatePreparing,
-    #[doc = "The package is gated on base while an installer may replace the APK."]
+    #[doc = "The package is gated on base while an installer may replace the `APK`."]
     UpdateWindowOpen,
     #[doc = "A completed replacement is being checked before gate release."]
     UpdateVerifying,
@@ -68,7 +68,7 @@ pub enum RecoveryReason {
     PersistedLifecycleState,
     #[doc = "`PackageManager` no longer points to the enrolled base inodes."]
     PackageManagerInodeDrift,
-    #[doc = "Canonical and App-process views disagree with the committed slot."]
+    #[doc = "Canonical and `App`-process views disagree with the committed slot."]
     VisibleViewDrift,
     #[doc = "Version or code path changed outside an update verification state."]
     UnexpectedPackageReplacement,
@@ -100,13 +100,23 @@ pub struct PackageLifecycleGuard;
 impl PackageLifecycleGuard {
     #[doc = "Assesses a persisted package contract against one coherent live observation."]
     pub fn assess(managed: &ManagedPackage, observed: &PackageObservation) -> GuardDecision {
-        let expected = managed.identity();
+        Self::assess_with_accepted_artifact(managed, observed, None)
+    }
+
+    #[doc = "Assesses live facts using enrollment owner identity and the accepted package artifact."]
+    #[doc = "A missing artifact is the `schema-v1` compatibility path and falls back to enrollment."]
+    pub fn assess_with_accepted_artifact(
+        managed: &ManagedPackage,
+        observed: &PackageObservation,
+        accepted_artifact: Option<&InstalledArtifact>,
+    ) -> GuardDecision {
+        let expected_owner = managed.identity().owner_identity();
         let actual = observed.identity();
         let lifecycle = managed.lifecycle_state();
 
         if lifecycle == LifecycleState::Quarantined
-            || expected.uid() != actual.uid()
-            || expected.signature_sha256() != actual.signature_sha256()
+            || expected_owner.uid() != actual.uid()
+            || expected_owner.signature_sha256() != actual.signature_sha256()
         {
             return GuardDecision::Quarantine;
         }
@@ -131,8 +141,16 @@ impl PackageLifecycleGuard {
             return GuardDecision::RequireSafeUpdateWindow;
         }
 
-        let package_replaced = expected.version_code() != actual.version_code()
-            || expected.code_path() != actual.code_path();
+        let expected_version_code = accepted_artifact.map_or_else(
+            || managed.identity().version_code(),
+            InstalledArtifact::version_code,
+        );
+        let expected_code_path = accepted_artifact.map_or_else(
+            || managed.identity().code_path(),
+            InstalledArtifact::code_path,
+        );
+        let package_replaced = expected_version_code != actual.version_code()
+            || expected_code_path != actual.code_path();
         if package_replaced {
             if lifecycle == LifecycleState::UpdateVerifying
                 && managed.active_slot().is_base()

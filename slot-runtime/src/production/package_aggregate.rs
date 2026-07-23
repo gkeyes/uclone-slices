@@ -1,9 +1,15 @@
 use crate::android::PackageProbe;
+use crate::catalog::CatalogEntry;
+use crate::compatibility_policy::CompatibilityPolicy;
 use crate::domain::{
     DurablePackageFacts, EvidenceScope, GateFacts, InvariantViolation, LivePackageFacts,
-    ManagedPackage, PackageAggregate, PackageFacts, PackageKey, ReadyPackageEvidence,
+    ManagedPackage, PackageAggregate, PackageFacts, PackageKey, ReadyPackageEvidence, SlotView,
 };
+use crate::enrollment_attempt::EnrollmentAttempt;
+use crate::journal::Transaction;
 use crate::lifecycle::{GuardDecision, LifecycleState, PackageLifecycleGuard, RecoveryReason};
+use crate::package_state::PackageStateRevision;
+use crate::registry::PackageRevision;
 use crate::service::ServiceError;
 
 use super::state::{
@@ -11,6 +17,23 @@ use super::state::{
     registry_matches_journal,
 };
 use super::stores::ProductionStores;
+
+struct PersistedFacts {
+    attempt: Option<EnrollmentAttempt>,
+    enrollment: Option<ManagedPackage>,
+    catalog: Vec<CatalogEntry>,
+    state: Option<PackageStateRevision>,
+    registry: Option<PackageRevision>,
+    journal: Vec<Transaction>,
+    policy: Option<CompatibilityPolicy>,
+}
+
+type LiveFactsContext<'a> = (
+    EvidenceScope,
+    Option<&'a CompatibilityPolicy>,
+    &'a PackageStateRevision,
+    DurablePackageFacts,
+);
 
 pub(super) fn resolve<Q: PackageProbe>(
     stores: &ProductionStores,
@@ -27,44 +50,18 @@ fn load_facts<Q: PackageProbe>(
     key: &PackageKey,
     scope: EvidenceScope,
 ) -> Result<PackageFacts, ServiceError> {
-    let attempt = stores
-        .attempts
-        .load(key)
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let enrollment = stores
-        .enrollment
-        .load(key.package_name())
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let catalog = stores
-        .catalog
-        .list(key)
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let state = stores
-        .package_state
-        .latest(key)
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let registry = stores
-        .registry
-        .latest(key.package_name())
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let journal = stores
-        .journal
-        .list_for_package(key)
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-    let policy = stores
-        .compatibility_policy
-        .load(key.package_name())
-        .map_err(|_| ServiceError::RecoveryRequired)?;
-
-    if attempt.is_some() {
+    let persisted = load_persisted_facts(stores, key)?;
+    if persisted.attempt.is_some() {
         return Ok(facts(scope, DurablePackageFacts::EnrollmentAttempt));
     }
-    let Some(enrolled) = enrollment else {
-        let clean = catalog.is_empty()
-            && state.is_none()
-            && registry.is_none()
-            && policy.is_none()
-            && super::state::journal_for(&journal, key).next().is_none();
+    let Some(enrolled) = persisted.enrollment.as_ref() else {
+        let clean = persisted.catalog.is_empty()
+            && persisted.state.is_none()
+            && persisted.registry.is_none()
+            && persisted.policy.is_none()
+            && super::state::journal_for(&persisted.journal, key)
+                .next()
+                .is_none();
         return Ok(facts(
             scope,
             if clean {
@@ -74,28 +71,28 @@ fn load_facts<Q: PackageProbe>(
             },
         ));
     };
-    let Some(state) = state else {
+    let Some(state) = persisted.state.as_ref() else {
         return Ok(incomplete(scope, InvariantViolation::MissingPackageState));
     };
     if state.package_key() != *key {
         return Ok(incomplete(scope, InvariantViolation::PackageStateMismatch));
     }
-    if has_unfinished(&journal, key) {
+    if has_unfinished(&persisted.journal, key) {
         return Ok(incomplete(scope, InvariantViolation::UnfinishedTransaction));
     }
-    let Some((base, slots)) = catalog_views(&catalog, key, &enrolled) else {
+    let Some((base, slots)) = catalog_views(&persisted.catalog, key, enrolled) else {
         return Ok(incomplete(scope, InvariantViolation::CatalogMismatch));
     };
-    let Some(active) = active_view(&enrolled, registry.as_ref(), base, &slots) else {
+    let Some(active) = active_view(enrolled, persisted.registry.as_ref(), base, &slots) else {
         return Ok(incomplete(scope, InvariantViolation::ActiveViewUnproven));
     };
-    if !active_slot_metadata_ready(stores, &enrolled, &active) {
+    if !active_slot_metadata_ready(stores, enrolled, &active) {
         return Ok(incomplete(
             scope,
             InvariantViolation::ActiveSlotMetadataUnready,
         ));
     }
-    if !registry_matches_journal(registry.as_ref(), &journal, key) {
+    if !registry_matches_journal(persisted.registry.as_ref(), &persisted.journal, key) {
         return Ok(incomplete(
             scope,
             InvariantViolation::RegistryJournalMismatch,
@@ -117,6 +114,42 @@ fn load_facts<Q: PackageProbe>(
         state.lifecycle_state(),
     )
     .map_err(|_| ServiceError::RecoveryRequired)?;
+    load_live_facts(
+        probe,
+        key,
+        (scope, persisted.policy.as_ref(), state, durable),
+        managed,
+        slots,
+    )
+}
+
+fn load_persisted_facts(
+    stores: &ProductionStores,
+    key: &PackageKey,
+) -> Result<PersistedFacts, ServiceError> {
+    Ok(PersistedFacts {
+        attempt: map_store_error(stores.attempts.load(key))?,
+        enrollment: map_store_error(stores.enrollment.load(key.package_name()))?,
+        catalog: map_store_error(stores.catalog.list(key))?,
+        state: map_store_error(stores.package_state.latest(key))?,
+        registry: map_store_error(stores.registry.latest(key.package_name()))?,
+        journal: map_store_error(stores.journal.list_for_package(key))?,
+        policy: map_store_error(stores.compatibility_policy.load(key.package_name()))?,
+    })
+}
+
+fn map_store_error<T, E>(result: Result<T, E>) -> Result<T, ServiceError> {
+    result.map_err(|_| ServiceError::RecoveryRequired)
+}
+
+fn load_live_facts<Q: PackageProbe>(
+    probe: &mut Q,
+    key: &PackageKey,
+    context: LiveFactsContext<'_>,
+    managed: ManagedPackage,
+    slots: Vec<SlotView>,
+) -> Result<PackageFacts, ServiceError> {
+    let (scope, policy, state, durable) = context;
     let observation = probe
         .observe_package(key.package_name(), key.user_id())
         .map_err(|_| ServiceError::RecoveryRequired)?;
@@ -135,7 +168,11 @@ fn load_facts<Q: PackageProbe>(
             InvariantViolation::CompatibilityPolicyMismatch,
         ));
     }
-    let live = match PackageLifecycleGuard::assess(&managed, &observation) {
+    let live = match PackageLifecycleGuard::assess_with_accepted_artifact(
+        &managed,
+        &observation,
+        state.accepted_artifact(),
+    ) {
         GuardDecision::Quarantine => {
             LivePackageFacts::Quarantined(InvariantViolation::IdentityChanged)
         }
@@ -169,7 +206,7 @@ fn load_facts<Q: PackageProbe>(
     ))
 }
 
-fn facts(scope: EvidenceScope, durable: DurablePackageFacts) -> PackageFacts {
+const fn facts(scope: EvidenceScope, durable: DurablePackageFacts) -> PackageFacts {
     PackageFacts::new(
         scope,
         durable,
@@ -178,11 +215,11 @@ fn facts(scope: EvidenceScope, durable: DurablePackageFacts) -> PackageFacts {
     )
 }
 
-fn incomplete(scope: EvidenceScope, violation: InvariantViolation) -> PackageFacts {
+const fn incomplete(scope: EvidenceScope, violation: InvariantViolation) -> PackageFacts {
     facts(scope, DurablePackageFacts::Incomplete(violation))
 }
 
-fn with_live_quarantine(
+const fn with_live_quarantine(
     scope: EvidenceScope,
     durable: DurablePackageFacts,
     violation: InvariantViolation,
