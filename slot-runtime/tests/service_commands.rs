@@ -1,4 +1,8 @@
 #![allow(missing_docs)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "validated service command test fixtures"
+)]
 
 mod service_support;
 

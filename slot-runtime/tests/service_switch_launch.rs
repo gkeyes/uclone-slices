@@ -1,4 +1,8 @@
 #![allow(missing_docs)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "validated service switch and launch test fixtures"
+)]
 
 mod service_support;
 

@@ -1,4 +1,5 @@
 #![allow(missing_docs)]
+#![allow(clippy::unwrap_used, reason = "validated mutation-guard test fixtures")]
 
 mod service_support;
 

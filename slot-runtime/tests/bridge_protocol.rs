@@ -1,4 +1,9 @@
 #![doc = "Strict bridge response schema tests."]
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "validated bridge protocol fixtures fail fast on invalid test data"
+)]
 
 use serde_json::json;
 use uclone_slot_runtime::bridge::{

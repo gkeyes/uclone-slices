@@ -1,5 +1,6 @@
 #![doc = "Build-time target profile integration tests."]
 #![allow(
+    clippy::panic,
     clippy::unwrap_used,
     reason = "fixed profile fixtures should abort the individual test on invalid generation"
 )]
