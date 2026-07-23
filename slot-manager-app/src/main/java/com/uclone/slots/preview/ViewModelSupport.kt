@@ -1,27 +1,41 @@
 package com.uclone.slots.preview
 
-import android.content.Context
-import android.content.Intent
-import android.content.ActivityNotFoundException
 import com.uclone.slots.preview.model.RuntimeHealth
+import com.uclone.slots.preview.model.ManagedApp
+import com.uclone.slots.preview.model.PackageLifecycle
+import com.uclone.slots.preview.model.RuntimeMode
 import com.uclone.slots.preview.runtime.RuntimePayload
 import com.uclone.slots.preview.runtime.RuntimeResult
 
 internal object UiMappings {
+    data class ProbeState(val health: RuntimeHealth, val mode: RuntimeMode)
+
+    fun probeState(result: RuntimeResult): ProbeState = when (result) {
+        is RuntimeResult.Success -> ProbeState(probeHealth(result.payload), probeMode(result.payload))
+        is RuntimeResult.Rejected -> ProbeState(healthForError(result.code), RuntimeMode.Ordinary)
+        is RuntimeResult.Unknown -> ProbeState(RuntimeHealth.DaemonOffline, RuntimeMode.Ordinary)
+    }
+
     fun probeHealth(payload: RuntimePayload): RuntimeHealth {
         val probe = payload as? RuntimePayload.Probe ?: return RuntimeHealth.Unsupported
-        return when {
-            !probe.userUnlocked -> RuntimeHealth.UserLocked
-            probe.ready && probe.ceDeSupported -> RuntimeHealth.Ready
-            else -> RuntimeHealth.Unsupported
-        }
+        return RuntimeHealth.fromProbe(
+            probe.recoveryOnly,
+            probe.userUnlocked,
+            probe.ready,
+            probe.ceDeSupported,
+        )
+    }
+
+    private fun probeMode(payload: RuntimePayload): RuntimeMode {
+        val probe = payload as? RuntimePayload.Probe ?: return RuntimeMode.Ordinary
+        return RuntimeMode.fromProbe(probe.recoveryOnly)
     }
 
     fun healthForError(code: String) = when (code) {
         "user_locked" -> RuntimeHealth.UserLocked
         "recovery_required", "quarantined" -> RuntimeHealth.RecoveryRequired
         "unsupported_device" -> RuntimeHealth.Unsupported
-        "runtime_pair_mismatch" -> RuntimeHealth.ModuleMissing
+        "runtime_pair_mismatch" -> RuntimeHealth.PairMismatch
         else -> RuntimeHealth.DaemonOffline
     }
 
@@ -37,6 +51,13 @@ internal object UiMappings {
     }
 }
 
+internal fun recoveryManagedApps(
+    packages: List<String>,
+    label: (String) -> String,
+): List<ManagedApp> = packages.distinct().take(64).map {
+    ManagedApp(it, label(it), "unknown", PackageLifecycle.RecoveryRequired)
+}
+
 internal inline fun <reified T : RuntimePayload> RuntimeResult.payloadAs(): T? =
     (this as? RuntimeResult.Success)?.payload as? T
 
@@ -48,17 +69,10 @@ internal fun SlotsViewModel.handleInspectionFailure(result: RuntimeResult) {
     }
 }
 
-internal fun launchInstalledApp(context: Context, packageName: String): Boolean {
-    val intent = context.packageManager
-        .getLaunchIntentForPackage(packageName)
-        ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        ?: return false
-    return try {
-        context.startActivity(intent)
-        true
-    } catch (_: ActivityNotFoundException) {
-        false
-    } catch (_: SecurityException) {
-        false
-    }
+internal fun SlotsViewModel.markPackageLifecycle(
+    packageName: String,
+    lifecycle: PackageLifecycle,
+) {
+    managedApps = managedApps.withPackageLifecycle(packageName, lifecycle)
+    selectedStatus = selectedStatus.withPackageLifecycle(packageName, lifecycle)
 }

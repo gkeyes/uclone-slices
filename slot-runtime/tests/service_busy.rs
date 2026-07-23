@@ -22,6 +22,10 @@ fn every_mutating_command_returns_busy_before_platform_access() {
             package: allowed(),
             slot: preview_view().slot_id().clone(),
         },
+        Command::LaunchCurrent {
+            package: allowed(),
+            expected_slot: preview_view().slot_id().clone(),
+        },
         Command::Reconcile,
         Command::RescueToBase { package: allowed() },
     ];
@@ -54,9 +58,11 @@ fn read_only_commands_remain_available_while_mutation_gate_is_held() {
     // When
     let probe = service.handle(&request(Command::Probe));
     let status = service.handle(&request(Command::StatusPackage { package: allowed() }));
+    let snapshot = service.handle(&request(Command::PackageSnapshot { package: allowed() }));
 
     // Then
     assert_eq!(probe.status(), ResponseStatus::Ok);
     assert_eq!(status.status(), ResponseStatus::Ok);
+    assert_eq!(snapshot.status(), ResponseStatus::Ok);
     drop(permit);
 }

@@ -101,6 +101,27 @@ pub struct ManagedAppsReport {
     apps: Vec<ManagedAppSummary>,
 }
 
+#[doc = "Bounded packages exposed by the recovery-only control plane."]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryTargetsReport {
+    targets: Vec<PackageName>,
+}
+
+impl RecoveryTargetsReport {
+    #[doc = "Creates a sorted recovery target report."]
+    pub fn new(mut targets: Vec<PackageName>) -> Self {
+        targets.sort();
+        targets.dedup();
+        Self { targets }
+    }
+
+    #[doc = "Returns fixed-root packages eligible for Base rescue."]
+    pub fn targets(&self) -> &[PackageName] {
+        &self.targets
+    }
+}
+
 impl ManagedAppsReport {
     #[doc = "Creates a sorted managed-app report."]
     pub fn new(mut apps: Vec<ManagedAppSummary>) -> Self {
@@ -154,6 +175,10 @@ impl SlotSummary {
     #[doc = "Returns whether this is the committed active slot."]
     pub const fn active(&self) -> bool {
         self.active
+    }
+    #[doc = "Returns the durable slot lifecycle state."]
+    pub const fn state(&self) -> SlotRecordState {
+        self.state
     }
 }
 

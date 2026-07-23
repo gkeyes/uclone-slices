@@ -10,19 +10,18 @@ data class PackageSnapshot(
 )
 
 suspend fun RuntimeGateway.readPackageSnapshot(packageName: String): PackageSnapshot? {
-    return validatePackageSnapshot(packageName, status(packageName), listSlots(packageName))
+    return validatePackageSnapshot(packageName, packageSnapshot(packageName))
 }
 
 internal fun validatePackageSnapshot(
     packageName: String,
-    statusResult: RuntimeResult,
-    slotsResult: RuntimeResult,
+    result: RuntimeResult,
 ): PackageSnapshot? {
-    val status = statusResult.payloadAs<RuntimePayload.Status>()?.value ?: return null
-    val slots = slotsResult.payloadAs<RuntimePayload.Slots>() ?: return null
-    if (status.packageName != packageName || slots.packageName != packageName) return null
-    if (slots.rows.map { it.id }.distinct().size != slots.rows.size) return null
-    if (slots.rows.none { it.id == status.activeSlot && it.active && it.state == "ready" }) return null
-    if (slots.rows.count { it.active } != 1) return null
-    return PackageSnapshot(status, slots.rows)
+    val snapshot = result.payloadAs<RuntimePayload.PackageSnapshot>() ?: return null
+    if (snapshot.status.packageName != packageName) return null
+    if (snapshot.slots.map { it.id }.distinct().size != snapshot.slots.size) return null
+    if (snapshot.slots.count { it.active } != 1) return null
+    val active = snapshot.slots.single { it.active }
+    if (active.id != snapshot.status.activeSlot || active.state != "ready") return null
+    return PackageSnapshot(snapshot.status, snapshot.slots)
 }

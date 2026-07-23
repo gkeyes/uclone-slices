@@ -94,7 +94,13 @@ impl PackageProbe for FakeProbe {
         _package: &PackageName,
         _user_id: UserId,
     ) -> Result<ViewProof, ProbeError> {
-        Err(ProbeError::Unavailable)
+        let inodes = self.observation.canonical_inodes();
+        let mounts = u32::from(inodes != self.observation.package_manager_inodes());
+        Ok(ViewProof::new(
+            CanonicalView::new(inodes, MountCounts::new(mounts, mounts)),
+            inodes,
+            inodes,
+        ))
     }
 
     fn slot_inodes(
@@ -149,6 +155,7 @@ fn exact_gate_sequence_when_probe_confirms_each_state() {
         gates: VecDeque::from([
             Ok(original),
             Ok(original),
+            Ok(held),
             Ok(held),
             Ok(held),
             Ok(held),

@@ -1,7 +1,7 @@
 package com.uclone.slots.preview.runtime
 
-import com.uclone.slots.preview.model.PackageRuntimeStatus
 import com.uclone.slots.preview.model.PackageLifecycle
+import com.uclone.slots.preview.model.PackageRuntimeStatus
 import com.uclone.slots.preview.model.SlotSpace
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -18,64 +18,51 @@ class PackageSnapshotTest {
     private val slot = SlotSpace("work", "Work", "blank", "ready", true, 101, 201)
 
     @Test
-    fun requiresTwoPackageMatchedReadsWithExactlyOneActiveSlot() {
+    fun requiresOneCoherentPackageSnapshotWithExactlyOneActiveSlot() {
         val verified = validatePackageSnapshot(
             "com.example.app",
-            RuntimeResult.Success(RuntimePayload.Status(status)),
-            RuntimeResult.Success(RuntimePayload.Slots("com.example.app", listOf(slot))),
+            success(status, listOf(slot)),
         )
 
         assertEquals("work", verified?.status?.activeSlot)
         assertNull(
             validatePackageSnapshot(
                 "com.example.app",
-                RuntimeResult.Success(RuntimePayload.Status(status)),
                 RuntimeResult.Unknown("second read failed"),
             ),
         )
         assertNull(
             validatePackageSnapshot(
                 "com.example.app",
-                RuntimeResult.Success(RuntimePayload.Status(status)),
-                RuntimeResult.Success(RuntimePayload.Slots("com.other.app", listOf(slot))),
+                success(status.copy(packageName = "com.other.app"), listOf(slot)),
             ),
         )
         assertNull(
             validatePackageSnapshot(
                 "com.example.app",
-                RuntimeResult.Success(RuntimePayload.Status(status)),
-                RuntimeResult.Success(RuntimePayload.Slots("com.example.app", emptyList())),
+                success(status, emptyList()),
             ),
         )
         assertNull(
             validatePackageSnapshot(
                 "com.example.app",
-                RuntimeResult.Success(RuntimePayload.Status(status)),
-                RuntimeResult.Success(
-                    RuntimePayload.Slots("com.example.app", listOf(slot, slot.copy(id = "other"))),
-                ),
+                success(status, listOf(slot, slot.copy(id = "other"))),
             ),
         )
         assertNull(
             validatePackageSnapshot(
                 "com.example.app",
-                RuntimeResult.Success(RuntimePayload.Status(status)),
-                RuntimeResult.Success(
-                    RuntimePayload.Slots(
-                        "com.example.app",
-                        listOf(slot.copy(state = "creating")),
-                    ),
-                ),
+                success(status, listOf(slot.copy(state = "creating"))),
             ),
         )
         assertNull(
             validatePackageSnapshot(
                 "com.example.app",
-                RuntimeResult.Success(RuntimePayload.Status(status)),
-                RuntimeResult.Success(
-                    RuntimePayload.Slots("com.example.app", listOf(slot, slot.copy())),
-                ),
+                success(status, listOf(slot, slot.copy())),
             ),
         )
     }
+
+    private fun success(status: PackageRuntimeStatus, slots: List<SlotSpace>) =
+        RuntimeResult.Success(RuntimePayload.PackageSnapshot(status, slots))
 }

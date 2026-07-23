@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 pub use coordinator::{NoRescueFault, RescueFaultInjector};
 pub use event::{RescueEvent, RescuePhase};
-pub use execution::{RescueExecution, RescueStartup};
+pub use execution::{RescueExecution, RescueStartup, StartupGateOutcome};
 pub use metadata::{RescueMetadata, RescueMetadataSource};
 pub use model::{RescueDisposition, RescueId, RescueSpec};
 pub use offline::OfflineRescuePlatform;
@@ -87,4 +87,8 @@ impl RescueError {
             source,
         }
     }
+}
+
+fn platform_error(error: impl Into<crate::runtime::PlatformError>) -> RescueError {
+    RescueError::Corrupt(error.into().to_string())
 }

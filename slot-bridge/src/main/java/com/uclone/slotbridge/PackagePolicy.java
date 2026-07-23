@@ -63,6 +63,7 @@ final class PackagePolicy {
                 && !value.contains("//")
                 && !value.contains("\\")
                 && value.indexOf('\0') < 0
+                && value.indexOf('\t') < 0
                 && value.indexOf('\n') < 0
                 && value.indexOf('\r') < 0;
     }

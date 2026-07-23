@@ -1,8 +1,9 @@
 use crate::domain::{PackageName, SlotId};
 use crate::protocol::{
     Ack, AckOperation, ManagedAppSummary, ManagedAppsReport, PackageInspectionReport,
-    ReconcileReport, ResponsePayload, SlotSummary, SlotsReport, SwitchResult,
+    ReconcileReport, RecoveryTargetsReport, ResponsePayload, SlotSummary, SlotsReport,
 };
+use crate::reconcile::ReconcileOutcome;
 use crate::slot_metadata::{SlotDisplayName, SlotSeedMode};
 
 use super::{PreviewService, ServiceError, ServicePlatform, SwitchExecution, outcome, validation};
@@ -29,6 +30,16 @@ impl<P: ServicePlatform> PreviewService<P> {
         Ok(ResponsePayload::ManagedApps(ManagedAppsReport::new(rows)))
     }
 
+    pub(super) fn recovery_targets_command(&self) -> Result<ResponsePayload, ServiceError> {
+        let targets = self.platform.list_recovery_targets()?;
+        if targets.len() > super::MAX_RECOVERY_TARGETS {
+            return Err(ServiceError::Internal);
+        }
+        Ok(ResponsePayload::RecoveryTargets(
+            RecoveryTargetsReport::new(targets),
+        ))
+    }
+
     pub(super) fn slots_command(
         &self,
         package: &PackageName,
@@ -53,13 +64,16 @@ impl<P: ServicePlatform> PreviewService<P> {
         seed_mode: SlotSeedMode,
     ) -> Result<ResponsePayload, ServiceError> {
         let key = validation::package_key(package);
+        let snapshot = validation::snapshot(&key, self.platform.package_state(&key)?)?;
+        validation::switchable(snapshot.managed())?;
+        let enrollment = snapshot.managed().clone();
         match self
             .platform
             .create_slot(&key, display_name.clone(), seed_mode)?
         {
-            SwitchExecution::Committed(view) => Ok(ResponsePayload::SwitchResult(
-                SwitchResult::new(package.clone(), view.slot_id().clone()),
-            )),
+            SwitchExecution::Committed(view) => {
+                self.confirmed_switch_result(package, &enrollment, view)
+            }
             SwitchExecution::RolledBack => Err(ServiceError::Conflict),
             SwitchExecution::RecoveryRequired => Err(ServiceError::RecoveryRequired),
             SwitchExecution::Quarantined => Err(ServiceError::Quarantined),
@@ -107,23 +121,14 @@ impl<P: ServicePlatform> PreviewService<P> {
             .into_iter()
             .map(|row| row.package().clone())
             .collect();
+        let mut aggregate = None;
         for package in packages {
             let key = validation::package_key(&package);
-            let outcome = self.platform.reconcile_two_phase(&key)?;
-            match outcome {
-                crate::reconcile::ReconcileOutcome::Locked
-                | crate::reconcile::ReconcileOutcome::Held => {
-                    return Err(ServiceError::UserLocked);
-                }
-                crate::reconcile::ReconcileOutcome::RecoveryRequired(_)
-                | crate::reconcile::ReconcileOutcome::Quarantined => {
-                    return Err(ServiceError::RecoveryRequired);
-                }
-                crate::reconcile::ReconcileOutcome::RestoredBase
-                | crate::reconcile::ReconcileOutcome::RestoredSlot(_)
-                | crate::reconcile::ReconcileOutcome::RolledBack
-                | crate::reconcile::ReconcileOutcome::RolledForward => {}
-            }
+            let failure = reconcile_failure(self.platform.reconcile_two_phase(&key));
+            aggregate = merge_reconcile_failure(aggregate, failure);
+        }
+        if let Some(error) = aggregate {
+            return Err(error);
         }
         Ok(ResponsePayload::Ack(Ack::new(AckOperation::ReconcileAll)))
     }
@@ -141,5 +146,47 @@ impl<P: ServicePlatform> PreviewService<P> {
             crate::rescue::RescueExecution::Quarantined => Err(ServiceError::Quarantined),
             crate::rescue::RescueExecution::ContainmentFailed => Err(ServiceError::Internal),
         }
+    }
+}
+
+fn reconcile_failure(result: Result<ReconcileOutcome, ServiceError>) -> Option<ServiceError> {
+    match result {
+        Ok(ReconcileOutcome::Locked | ReconcileOutcome::Held) => Some(ServiceError::UserLocked),
+        Ok(ReconcileOutcome::RecoveryRequired(_) | ReconcileOutcome::Quarantined) => {
+            Some(ServiceError::RecoveryRequired)
+        }
+        Ok(
+            ReconcileOutcome::RestoredBase
+            | ReconcileOutcome::RestoredSlot(_)
+            | ReconcileOutcome::RolledBack
+            | ReconcileOutcome::RolledForward,
+        ) => None,
+        Err(ServiceError::UserLocked) => Some(ServiceError::UserLocked),
+        Err(
+            ServiceError::RecoveryRequired
+            | ServiceError::Quarantined
+            | ServiceError::NotFound
+            | ServiceError::Conflict,
+        ) => Some(ServiceError::RecoveryRequired),
+        Err(_) => Some(ServiceError::Internal),
+    }
+}
+
+fn merge_reconcile_failure(
+    current: Option<ServiceError>,
+    next: Option<ServiceError>,
+) -> Option<ServiceError> {
+    match (current, next) {
+        (Some(ServiceError::Internal), _) | (_, Some(ServiceError::Internal)) => {
+            Some(ServiceError::Internal)
+        }
+        (Some(ServiceError::RecoveryRequired), _) | (_, Some(ServiceError::RecoveryRequired)) => {
+            Some(ServiceError::RecoveryRequired)
+        }
+        (Some(ServiceError::UserLocked), _) | (_, Some(ServiceError::UserLocked)) => {
+            Some(ServiceError::UserLocked)
+        }
+        (None, None) => None,
+        _ => Some(ServiceError::Internal),
     }
 }

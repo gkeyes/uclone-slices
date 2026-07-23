@@ -69,6 +69,7 @@ fn parser_exposes_only_the_typed_command_surface() {
         ],
         vec!["slotctl", "slots", SAMPLE_PACKAGE],
         vec!["slotctl", "switch", SAMPLE_PACKAGE, "work"],
+        vec!["slotctl", "launch-current", SAMPLE_PACKAGE, "work"],
         vec![
             "slotctl",
             "rename",
@@ -199,6 +200,7 @@ fn execute_request_reuses_the_prevalidated_request_id() {
         Some(request.request_id())
     );
 }
+
 #[test]
 fn binary_help_and_invalid_command_are_manual_surface_checks() {
     let binary = env!("CARGO_BIN_EXE_slotctl");

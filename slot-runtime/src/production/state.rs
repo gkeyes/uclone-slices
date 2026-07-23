@@ -5,6 +5,7 @@ use crate::journal::{JournalEvent, JournalStep, Transaction, TransactionView};
 use crate::lifecycle::{GuardDecision, PackageLifecycleGuard};
 use crate::registry::PackageRevision;
 use crate::service::{ObservedGateState, PackageSnapshot, PackageState, ServiceError};
+use crate::slot_metadata::SlotRecordState;
 
 use super::stores::ProductionStores;
 
@@ -35,7 +36,7 @@ pub(super) fn load<Q: PackageProbe>(
         .map_err(|_| ServiceError::RecoveryRequired)?;
     let journal = stores
         .journal
-        .list()
+        .list_for_package(key)
         .map_err(|_| ServiceError::RecoveryRequired)?;
     let policy = stores
         .compatibility_policy
@@ -69,7 +70,10 @@ pub(super) fn load<Q: PackageProbe>(
     let Some(active) = active_view(&enrolled, registry.as_ref(), base, &slots) else {
         return Ok(PackageState::RecoveryRequired);
     };
-    if !registry_matches_journal(registry.as_ref(), &journal) {
+    if !active_slot_metadata_ready(stores, &enrolled, &active) {
+        return Ok(PackageState::RecoveryRequired);
+    }
+    if !registry_matches_journal(registry.as_ref(), &journal, key) {
         return Ok(PackageState::RecoveryRequired);
     }
     let managed = ManagedPackage::new(
@@ -111,6 +115,20 @@ pub(super) fn load<Q: PackageProbe>(
         slots,
         ObservedGateState::new(enabled, gate.suspended()),
     ))))
+}
+
+fn active_slot_metadata_ready(
+    stores: &ProductionStores,
+    enrolled: &ManagedPackage,
+    active: &SlotView,
+) -> bool {
+    active.slot_id().is_base()
+        || matches!(
+            stores
+                .slot_metadata
+                .latest(enrolled.package_name(), active.slot_id()),
+            Ok(Some(record)) if record.state() == SlotRecordState::Ready
+        )
 }
 
 pub(super) fn catalog_views(
@@ -197,13 +215,13 @@ fn has_unfinished(transactions: &[Transaction], key: &PackageKey) -> bool {
 fn registry_matches_journal(
     revision: Option<&PackageRevision>,
     transactions: &[Transaction],
+    key: &PackageKey,
 ) -> bool {
     let Some(revision) = revision else {
-        return transactions
-            .iter()
+        return journal_for(transactions, key)
             .all(|transaction| transaction.view() != TransactionView::CompletedTarget);
     };
-    transactions.iter().any(|transaction| {
+    journal_for(transactions, key).any(|transaction| {
         transaction.spec().transaction_id() == revision.transaction_id()
             && transaction.view() == TransactionView::CompletedTarget
             && transaction.registry_committed_nonce() == Some(revision.commit_nonce())

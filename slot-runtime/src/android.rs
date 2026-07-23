@@ -6,6 +6,7 @@ mod command;
 mod containment;
 mod gate_restore;
 mod gate_snapshot;
+mod launch;
 mod lease;
 mod materializer;
 mod package_observation;

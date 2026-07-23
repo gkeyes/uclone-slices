@@ -3,7 +3,7 @@ use std::time::Duration;
 use super::CliCommand;
 use crate::protocol::Command;
 
-const RESCUE_TIMEOUT: Duration = Duration::from_secs(10);
+const RESCUE_TIMEOUT: Duration = Duration::from_mins(10);
 const CREATE_TIMEOUT: Duration = Duration::from_mins(30);
 const MUTATION_TIMEOUT: Duration = Duration::from_mins(2);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -14,6 +14,7 @@ pub(super) const fn for_command(command: &CliCommand) -> Duration {
         CliCommand::Create { .. } => CREATE_TIMEOUT,
         CliCommand::Enroll { .. }
         | CliCommand::Switch { .. }
+        | CliCommand::LaunchCurrent { .. }
         | CliCommand::Rename { .. }
         | CliCommand::Delete { .. }
         | CliCommand::Reconcile { .. }
@@ -33,6 +34,7 @@ pub(super) const fn for_request(command: &Command) -> Duration {
         Command::CreateSlot { .. } => CREATE_TIMEOUT,
         Command::EnrollPackage { .. }
         | Command::Switch { .. }
+        | Command::LaunchCurrent { .. }
         | Command::RenameSlot { .. }
         | Command::DeleteSlot { .. }
         | Command::Reconcile
@@ -41,7 +43,9 @@ pub(super) const fn for_request(command: &Command) -> Duration {
         Command::Probe
         | Command::InspectPackage { .. }
         | Command::ListManagedApps
+        | Command::ListRecoveryTargets
         | Command::StatusPackage { .. }
+        | Command::PackageSnapshot { .. }
         | Command::ListSlots { .. } => READ_TIMEOUT,
     }
 }
@@ -56,7 +60,7 @@ mod tests {
             package: crate::target::PACKAGE.to_owned(),
             to_base: true,
         };
-        assert_eq!(for_command(&rescue), Duration::from_secs(10));
+        assert_eq!(for_command(&rescue), Duration::from_mins(10));
         assert_eq!(for_command(&CliCommand::Probe), Duration::from_secs(30));
     }
 }

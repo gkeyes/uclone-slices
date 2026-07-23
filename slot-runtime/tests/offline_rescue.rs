@@ -8,6 +8,8 @@
 mod drift;
 #[path = "offline_rescue/isolation.rs"]
 mod isolation;
+#[path = "offline_rescue/recovery_targets.rs"]
+mod recovery_targets;
 #[path = "offline_rescue/resume.rs"]
 mod resume;
 #[path = "offline_rescue/support.rs"]

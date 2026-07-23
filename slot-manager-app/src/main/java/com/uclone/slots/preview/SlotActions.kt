@@ -1,6 +1,7 @@
 package com.uclone.slots.preview
 
 import com.uclone.slots.preview.model.Destination
+import com.uclone.slots.preview.model.InstalledApp
 import com.uclone.slots.preview.runtime.RuntimePayload
 import com.uclone.slots.preview.runtime.RuntimeResult
 import com.uclone.slots.preview.runtime.isAck
@@ -14,14 +15,15 @@ fun SlotsViewModel.createSlot(packageName: String, name: String, blank: Boolean)
         when (val result = runtime.createSlot(packageName, trimmed, blank)) {
             is RuntimeResult.Success -> {
                 val switched = result.payload as? RuntimePayload.Switch
-                if (switched?.packageName != packageName) {
+                if (switched?.packageName != packageName || switched.slotId == "base") {
                     return@launchOperation handleFailure(
-                        RuntimeResult.Unknown("mismatched package"),
+                        RuntimeResult.Unknown("mismatched create result"),
                         packageName,
                     )
                 }
-                if (confirmAndRefresh(packageName, switched.slotId, launchApp = false)) {
+                if (confirmAndRefresh(packageName, switched.slotId)) {
                     record("已创建空间：$trimmed")
+                    finishConfirmedLaunch(packageName, switched.slotId)
                 }
             }
             else -> handleFailure(result, packageName)
@@ -30,11 +32,7 @@ fun SlotsViewModel.createSlot(packageName: String, name: String, blank: Boolean)
 
 fun SlotsViewModel.switchAndOpen(packageName: String, slotId: String) =
     launchOperation("切换数据空间", "暂停 App 并切换 CE + DE") {
-        if (selectedStatus?.packageName == packageName && selectedStatus?.activeSlot == slotId) {
-            confirmAndRefresh(packageName, slotId, launchApp = true)
-            return@launchOperation
-        }
-        when (val result = runtime.switch(packageName, slotId)) {
+        when (val result = runtime.switchSlot(packageName, slotId)) {
             is RuntimeResult.Success -> {
                 val switched = result.payload as? RuntimePayload.Switch
                 if (switched?.packageName != packageName || switched.slotId != slotId) {
@@ -43,7 +41,8 @@ fun SlotsViewModel.switchAndOpen(packageName: String, slotId: String) =
                         packageName,
                     )
                 }
-                confirmAndRefresh(packageName, slotId, launchApp = true)
+                if (!confirmAndRefresh(packageName, slotId)) return@launchOperation
+                finishConfirmedLaunch(packageName, slotId)
             }
             else -> handleFailure(result, packageName)
         }
@@ -80,12 +79,43 @@ fun SlotsViewModel.reconcile(packageName: String) = launchOperation("重新确�
 fun SlotsViewModel.rescue(packageName: String) = launchOperation("安全退回 Base") {
     when (val result = runtime.rescue(packageName)) {
         is RuntimeResult.Success -> if (result.isAck("rescue_to_base")) {
+            apps.forgetManaged(packageName)
+            managedApps = managedApps.withoutPackage(packageName)
+            if (selectedStatus?.packageName == packageName) {
+                selectedStatus = null
+                selectedSlots = emptyList()
+            }
             record("已安全退回 Base")
             navigate(Destination.Apps)
             refreshRuntime()
         } else handleFailure(RuntimeResult.Unknown("invalid rescue result"), packageName)
         else -> handleFailure(result, packageName)
     }
+}
+
+private suspend fun SlotsViewModel.finishConfirmedLaunch(packageName: String, slotId: String) {
+    operation = operation?.copy(phase = "启动已确认的数据空间")
+    when (val result = runtime.launchCurrent(packageName, slotId)) {
+        is RuntimeResult.Success -> {
+            val launched = result.payload as? RuntimePayload.Launch
+            if (launched?.packageName == packageName && launched.slotId == slotId) {
+                message = launchStatusMessage(launched.launchStatus)
+            } else {
+                handleFailure(RuntimeResult.Unknown("mismatched launch result"), packageName)
+            }
+        }
+        is RuntimeResult.Unknown -> {
+            message = "数据空间已提交；启动请求结果未知，请查看 App 当前状态"
+        }
+        is RuntimeResult.Rejected -> handleFailure(result, packageName)
+    }
+}
+
+fun SlotsViewModel.selectRescueTarget(app: InstalledApp) {
+    managedApps = managedApps.withRecoveryTarget(app)
+    selectedStatus = null
+    selectedSlots = emptyList()
+    destination = Destination.Detail(app.packageName)
 }
 
 fun SlotsViewModel.clearMessage() {
@@ -96,27 +126,18 @@ fun SlotsViewModel.dismissEnrollmentReview() {
     enrollmentReview = null
 }
 
-fun SlotsViewModel.completePendingLaunch(packageName: String, launched: Boolean) {
-    if (pendingLaunchPackage != packageName) return
-    pendingLaunchPackage = null
-    if (!launched) message = "没有找到可启动入口"
-}
-
-fun SlotsViewModel.cancelPendingLaunch(packageName: String) {
-    if (pendingLaunchPackage != packageName) return
-    pendingLaunchPackage = null
-    message = "界面已离开目标 App，已取消自动打开"
-}
-
-fun SlotsViewModel.setManagerVisible(visible: Boolean) {
-    managerVisible = visible
-    if (!visible) pendingLaunchPackage?.let(::cancelPendingLaunch)
-}
-
 internal fun SlotsViewModel.reject(text: String) {
     message = text
 }
 
 internal fun SlotsViewModel.record(text: String) {
     taskHistory = (listOf(text) + taskHistory).take(20)
+}
+
+internal fun launchStatusMessage(status: String): String? = when (status) {
+    "launched" -> null
+    "entry_not_found" -> "数据空间已提交，但目标 App 没有可启动入口"
+    "gate_blocked" -> "数据空间已提交，但 App 原本不可启动，已保留原状态"
+    "failed" -> "数据空间已提交，但系统启动请求失败，请手动打开"
+    else -> "数据空间已提交，但 Runtime 返回了未知启动结果"
 }

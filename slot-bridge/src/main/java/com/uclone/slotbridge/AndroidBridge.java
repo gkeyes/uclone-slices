@@ -36,13 +36,37 @@ final class AndroidBridge {
     }
 
     void setEnabled(String packageName, EnabledState state) throws BridgeFailure {
+        if (state != EnabledState.DISABLED_USER) {
+            throw new BridgeFailure("set-enabled", ErrorCode.INVALID_REQUEST);
+        }
         PackageReader reader = reader(packageName);
-        new PackageMutator(services.packageManager(), reader).setEnabled(state);
+        new PackageMutator(services.packageManager(), reader).disableUser();
     }
 
-    void setSuspended(String packageName, boolean suspended) throws BridgeFailure {
+    void launchPackage(String packageName, ExpectedPackageIdentity expectedIdentity)
+            throws BridgeFailure {
         PackageReader reader = reader(packageName);
-        new PackageMutator(services.packageManager(), reader).setSuspended(suspended);
+        new PackageLauncher(
+                services.packageManager(), services.activityTaskManager(), reader)
+                .launch(expectedIdentity);
+    }
+
+    void restoreEnabled(
+            String packageName,
+            EnabledState state,
+            ExpectedPackageIdentity expectedIdentity) throws BridgeFailure {
+        PackageReader reader = reader(packageName);
+        new PackageMutator(services.packageManager(), reader)
+                .restoreEnabled(state, expectedIdentity);
+    }
+
+    void restoreSuspended(
+            String packageName,
+            boolean suspended,
+            ExpectedPackageIdentity expectedIdentity) throws BridgeFailure {
+        PackageReader reader = reader(packageName);
+        new PackageMutator(services.packageManager(), reader)
+                .restoreSuspended(suspended, expectedIdentity);
     }
 
     private PackageReader reader(String packageName) throws BridgeFailure {

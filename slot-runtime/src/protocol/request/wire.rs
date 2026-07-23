@@ -81,6 +81,7 @@ const fn fields(command: &Command) -> Fields<'_> {
             ("inspect_package", Some(package), None, None, None, None)
         }
         Command::ListManagedApps => ("list_managed_apps", None, None, None, None, None),
+        Command::ListRecoveryTargets => ("list_recovery_targets", None, None, None, None, None),
         Command::EnrollPackage {
             package,
             accept_direct_boot_conditional,
@@ -94,6 +95,9 @@ const fn fields(command: &Command) -> Fields<'_> {
         ),
         Command::StatusPackage { package } => {
             ("status_package", Some(package), None, None, None, None)
+        }
+        Command::PackageSnapshot { package } => {
+            ("package_snapshot", Some(package), None, None, None, None)
         }
         Command::CreateSlot {
             package,
@@ -111,6 +115,17 @@ const fn fields(command: &Command) -> Fields<'_> {
         Command::Switch { package, slot } => {
             ("switch", Some(package), Some(slot), None, None, None)
         }
+        Command::LaunchCurrent {
+            package,
+            expected_slot,
+        } => (
+            "launch_current",
+            Some(package),
+            Some(expected_slot),
+            None,
+            None,
+            None,
+        ),
         Command::RenameSlot {
             package,
             slot,
@@ -149,6 +164,7 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
             validation::package_only(&wire, |package| Command::InspectPackage { package })?
         }
         "list_managed_apps" => validation::no_fields(&wire, Command::ListManagedApps)?,
+        "list_recovery_targets" => validation::no_fields(&wire, Command::ListRecoveryTargets)?,
         "enroll_package" => {
             validation::validate(&wire, validation::WireSchema::ENROLL)?;
             Command::EnrollPackage {
@@ -160,6 +176,9 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
         }
         "status_package" => {
             validation::package_only(&wire, |package| Command::StatusPackage { package })?
+        }
+        "package_snapshot" => {
+            validation::package_only(&wire, |package| Command::PackageSnapshot { package })?
         }
         "create_slot" => {
             validation::validate(&wire, validation::WireSchema::CREATE)?;
@@ -177,6 +196,12 @@ pub(super) fn from_wire(wire: WireRequest) -> Result<Request, ProtocolError> {
         "list_slots" => validation::package_only(&wire, |package| Command::ListSlots { package })?,
         "switch" => {
             validation::package_slot(&wire, |package, slot| Command::Switch { package, slot })?
+        }
+        "launch_current" => {
+            validation::package_slot(&wire, |package, expected_slot| Command::LaunchCurrent {
+                package,
+                expected_slot,
+            })?
         }
         "rename_slot" => {
             validation::validate(&wire, validation::WireSchema::RENAME)?;

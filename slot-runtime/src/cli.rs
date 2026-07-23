@@ -13,7 +13,6 @@ use crate::protocol::{ErrorCode, ProtocolError, Request, RequestId, Response, Un
 mod command;
 mod direct;
 mod execute;
-mod fallback;
 mod rpc;
 mod timeout;
 
@@ -80,6 +79,11 @@ impl UnixTransport {
         UnixClient::connect(RuntimeLayout::socket()).map(|client| Self { client })
     }
 
+    fn connect_socket_only() -> Result<Self, ProtocolError> {
+        let stream = UnixStream::connect(RuntimeLayout::socket())?;
+        Ok(Self::from_stream(stream))
+    }
+
     /// Wraps an injected protocol client for host-side tests.
     pub const fn from_client(client: UnixClient) -> Self {
         Self { client }
@@ -114,7 +118,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Ok(request) => request,
         Err(error) => return fail(error, &mut diagnostics),
     };
-    let mut transport = match UnixTransport::connect() {
+    let mut transport = match UnixTransport::connect_socket_only() {
         Ok(transport) => transport,
         Err(_error) if matches!(cli.command, CliCommand::Rescue { .. }) => {
             return direct::run(&request, &mut output, &mut diagnostics);
@@ -124,7 +128,8 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
     if let Err(error) = transport.set_timeout(timeout::for_command(&cli.command)) {
         return fail(CliError::Protocol(error), &mut diagnostics);
     }
-    let mut transport = fallback::RescueFallback::new(&mut transport, direct::direct_response);
+    // A failed exchange may have mutated runtime state before its result became unknown.
+    // Direct rescue is therefore safe only when the socket connection itself failed above.
     execute_request(&request, &mut transport, &mut output, &mut diagnostics)
 }
 

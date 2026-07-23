@@ -74,6 +74,13 @@ pub enum CliCommand {
         /// Runtime-issued slot identifier.
         slot: String,
     },
+    /// Open an already-confirmed active slot without changing the data view.
+    LaunchCurrent {
+        /// Managed package name.
+        package: String,
+        /// Client-confirmed active slot identifier.
+        expected_slot: String,
+    },
     /// Change a slot's display-only label.
     Rename {
         /// Managed package name.
@@ -150,6 +157,13 @@ impl CliCommand {
             Self::Switch { package, slot } => Command::Switch {
                 package: parse_package(package)?,
                 slot: parse_slot(slot)?,
+            },
+            Self::LaunchCurrent {
+                package,
+                expected_slot,
+            } => Command::LaunchCurrent {
+                package: parse_package(package)?,
+                expected_slot: parse_slot(expected_slot)?,
             },
             Self::Rename {
                 package,

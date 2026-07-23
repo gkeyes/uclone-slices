@@ -37,13 +37,19 @@ where
                 managed.identity().version_code(),
             )
             .map_err(|_| ServiceError::RecoveryRequired)?;
-        let gate = self.do_capture_gate(key)?;
-        self.do_hold_gate(key)
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        self.do_quiesce(key)
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        let target = self.do_materialize(&managed, &slot, seed_mode)?;
-        self.do_switch(&managed, &target, Some(gate))
+        let result = (|| {
+            let gate = self.do_capture_gate(key)?;
+            self.do_hold_gate(key)
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            self.do_quiesce(key)
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            let target = self.do_materialize(&managed, &slot, seed_mode)?;
+            self.do_switch(&managed, &target, Some(gate))
+        })();
+        if result.is_err() {
+            self.do_contain(&managed, ServiceError::RecoveryRequired)?;
+        }
+        result
     }
 
     pub(super) fn do_rename_slot(
@@ -87,34 +93,40 @@ where
         if record.state() != SlotRecordState::Ready {
             return Err(ServiceError::Conflict);
         }
-        let gate = self.do_capture_gate(key)?;
-        self.do_hold_gate(key)
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        self.do_quiesce(key)
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        let mut faults = NoFault;
-        MaterializationCoordinator::new(&mut self.materializer, &mut faults)
-            .cleanup_interrupted(&managed, slot)
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        self.stores
-            .slot_metadata
-            .update(
-                key.package_name(),
-                slot,
-                record.display_name().clone(),
-                SlotRecordState::Deleted,
-                managed.identity().version_code(),
-            )
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        self.runtime
-            .verify_native_base(&managed)
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        self.runtime
-            .restore_gate(&managed, gate)
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        self.runtime
-            .retire_gate_lease(&managed)
-            .map_err(|_| ServiceError::RecoveryRequired)
+        let result = (|| {
+            let gate = self.do_capture_gate(key)?;
+            self.do_hold_gate(key)
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            self.do_quiesce(key)
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            self.stores
+                .slot_metadata
+                .update(
+                    key.package_name(),
+                    slot,
+                    record.display_name().clone(),
+                    SlotRecordState::Deleted,
+                    managed.identity().version_code(),
+                )
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            let mut faults = NoFault;
+            MaterializationCoordinator::new(&mut self.materializer, &mut faults)
+                .cleanup_interrupted(&managed, slot)
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            self.runtime
+                .verify_native_base(&managed)
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            self.runtime
+                .restore_gate(&managed, gate)
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            self.runtime
+                .retire_gate_lease(&managed)
+                .map_err(|_| ServiceError::RecoveryRequired)
+        })();
+        if result.is_err() {
+            self.do_contain(&managed, ServiceError::RecoveryRequired)?;
+        }
+        result
     }
 
     fn ready_record_or_adopt_legacy(

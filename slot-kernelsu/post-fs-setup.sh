@@ -55,15 +55,42 @@ write_runtime_version() {
         [ "$("$TOYBOX_BIN" cat "$version_file" 2>/dev/null)" = "$RUNTIME_VERSION" ]
 }
 
+read_safe_version() {
+    path="$1"
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    [ "$("$TOYBOX_BIN" stat -c '%u:%g:%a' "$path" 2>/dev/null)" = "0:0:600" ] ||
+        return 1
+    value="$("$TOYBOX_BIN" cat "$path" 2>/dev/null)" || return 1
+    case "$value" in *[!0-9]*|'') return 1 ;; esac
+    printf '%s\n' "$value"
+}
+
+recover_version_temporary() {
+    version_file="$1"
+    temporary=$RUNTIME_ROOT/.version.new
+    [ -e "$temporary" ] || [ -L "$temporary" ] || return 0
+    temporary_version="$(read_safe_version "$temporary")" || return 1
+    [ "$temporary_version" = "$RUNTIME_VERSION" ] || return 1
+    if [ -e "$version_file" ] || [ -L "$version_file" ]; then
+        current_version="$(read_safe_version "$version_file")" || return 1
+        version_transition_allowed "$current_version" "$RUNTIME_VERSION" || return 1
+        if [ "$current_version" = "$RUNTIME_VERSION" ]; then
+            "$TOYBOX_BIN" rm -f "$temporary" 2>/dev/null || return 1
+            return 0
+        fi
+    fi
+    "$TOYBOX_BIN" mv "$temporary" "$version_file" 2>/dev/null || return 1
+    [ "$(read_safe_version "$version_file")" = "$RUNTIME_VERSION" ]
+}
+
 ensure_version() {
     version_file=$RUNTIME_ROOT/version
+    recover_version_temporary "$version_file" || return 1
     if [ -L "$version_file" ] || { [ -e "$version_file" ] && [ ! -f "$version_file" ]; }; then
         return 1
     fi
     if [ -f "$version_file" ]; then
-        [ "$("$TOYBOX_BIN" stat -c '%u:%g:%a' "$version_file" 2>/dev/null)" = "0:0:600" ] ||
-            return 1
-        current_version="$("$TOYBOX_BIN" cat "$version_file" 2>/dev/null)" || return 1
+        current_version="$(read_safe_version "$version_file")" || return 1
         version_transition_allowed "$current_version" "$RUNTIME_VERSION" || return 1
         [ "$current_version" = "$RUNTIME_VERSION" ] && return 0
     fi

@@ -3,6 +3,7 @@ use crate::domain::{PackageKey, SlotId};
 use crate::lifecycle::LifecycleState;
 use crate::materializer::MaterializationBackend;
 use crate::reconcile::RecoveryBackend;
+use crate::rescue::RescueStatus;
 use crate::service::{ManagedAppInfo, PackageInspection, PackageState, ServiceError, SlotInfo};
 use crate::slot_metadata::{SlotDisplayName, SlotMetadata, SlotRecordState, SlotSeedMode};
 
@@ -34,42 +35,59 @@ where
     }
 
     pub(super) fn do_list_managed(&self) -> Result<Vec<ManagedAppInfo>, ServiceError> {
-        let enrolled = self
-            .stores
-            .enrollment
-            .list()
-            .map_err(|_| ServiceError::RecoveryRequired)?;
+        let packages = super::managed_names::discover(&self.stores)?;
         let mut probe = self
             .probe
             .try_borrow_mut()
             .map_err(|_| ServiceError::Busy)?;
-        enrolled
-            .into_iter()
-            .map(|package| {
-                let key = PackageKey::new(package.package_name().clone(), package.user_id());
-                let (active, lifecycle) = match super::state::load(&self.stores, &mut *probe, &key)?
-                {
-                    PackageState::Ready(snapshot) => (
+        let mut rows = Vec::with_capacity(packages.len());
+        for package_name in &packages {
+            let key = PackageKey::new(package_name.clone(), crate::domain::UserId::PRIMARY);
+            if self.recovery_overridden(&key) {
+                rows.push(ManagedAppInfo::new(
+                    package_name.clone(),
+                    SlotId::base(),
+                    LifecycleState::RecoveryRequired,
+                ));
+                continue;
+            }
+            let rescue = super::rescue::rescue_status(&key);
+            if rescue == Ok(Some(RescueStatus::BaseRetired)) {
+                continue;
+            }
+            let enrolled_package = self.stores.enrollment.load(package_name);
+            let enrollment_valid = matches!(enrolled_package, Ok(Some(_)));
+            let (active, lifecycle) = if rescue == Ok(None) && enrollment_valid {
+                match super::state::load(&self.stores, &mut *probe, &key) {
+                    Err(_) => (SlotId::base(), LifecycleState::RecoveryRequired),
+                    Ok(PackageState::Ready(snapshot)) => (
                         snapshot.managed().active_slot().clone(),
                         snapshot.managed().lifecycle_state(),
                     ),
-                    PackageState::RecoveryRequired => {
+                    Ok(PackageState::RecoveryRequired) => {
                         (SlotId::base(), LifecycleState::RecoveryRequired)
                     }
-                    PackageState::Quarantined => (SlotId::base(), LifecycleState::Quarantined),
-                    PackageState::Absent => return Err(ServiceError::RecoveryRequired),
-                };
-                Ok(ManagedAppInfo::new(
-                    package.package_name().clone(),
-                    active,
-                    lifecycle,
-                ))
-            })
-            .collect()
+                    Ok(PackageState::Quarantined) => (SlotId::base(), LifecycleState::Quarantined),
+                    Ok(PackageState::Absent) => (SlotId::base(), LifecycleState::RecoveryRequired),
+                }
+            } else {
+                (SlotId::base(), LifecycleState::RecoveryRequired)
+            };
+            rows.push(ManagedAppInfo::new(package_name.clone(), active, lifecycle));
+        }
+        Ok(rows)
     }
 
     pub(super) fn do_list_slots(&self, key: &PackageKey) -> Result<Vec<SlotInfo>, ServiceError> {
         let snapshot = self.ready_snapshot(key)?;
+        self.do_list_slots_for_snapshot(key, &snapshot)
+    }
+
+    pub(super) fn do_list_slots_for_snapshot(
+        &self,
+        key: &PackageKey,
+        snapshot: &crate::service::PackageSnapshot,
+    ) -> Result<Vec<SlotInfo>, ServiceError> {
         let managed = snapshot.managed();
         let metadata = self
             .stores
@@ -133,6 +151,12 @@ where
         &self,
         key: &PackageKey,
     ) -> Result<Box<crate::service::PackageSnapshot>, ServiceError> {
+        if self.recovery_overridden(key) {
+            return Err(ServiceError::RecoveryRequired);
+        }
+        if super::rescue::rescue_status(key)?.is_some() {
+            return Err(ServiceError::RecoveryRequired);
+        }
         let mut probe = self
             .probe
             .try_borrow_mut()

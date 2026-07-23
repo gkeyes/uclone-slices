@@ -1,12 +1,13 @@
 package com.uclone.slots.preview.runtime
 
 import com.uclone.slots.preview.BuildConfig
-import com.uclone.slots.preview.model.PackageSupport
 import com.uclone.slots.preview.model.PackageLifecycle
+import com.uclone.slots.preview.model.PackageSupport
 import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -44,11 +45,49 @@ class RuntimeProtocolTest {
     }
 
     @Test
+    fun packageSnapshotRequiresOneReadyActiveSlotMatchingStatus() {
+        val valid = """{"schema_version":2,"request_id":"test","status":"ok","payload":{"kind":"package_snapshot","data":{"status":{"package":"com.example.app","slot":"work","lifecycle":"normal","enabled":true,"suspended":false},"slots":{"package":"com.example.app","slots":[{"slot":"work","display_name":"Work","seed_mode":"blank","state":"ready","active":true,"created_version_code":1,"last_opened_version_code":1,"inodes":{"ce":101,"de":202}}]}}}}"""
+        val payload = assertIs<RuntimePayload.PackageSnapshot>(
+            assertIs<RuntimeResult.Success>(RuntimeProtocol.decode(valid)).payload,
+        )
+        assertEquals("work", payload.status.activeSlot)
+
+        val mismatched = valid.replace("\"slot\":\"work\",\"lifecycle\"", "\"slot\":\"base\",\"lifecycle\"")
+        assertFailsWith<IllegalArgumentException> { RuntimeProtocol.decode(mismatched) }
+    }
+
+    @Test
     fun preservesFailClosedErrorCode() {
         val result = RuntimeProtocol.decode(
             """{"schema_version":2,"request_id":"test","status":"error","error_code":"recovery_required"}""",
         )
         assertEquals("recovery_required", assertIs<RuntimeResult.Rejected>(result).code)
+    }
+
+    @Test
+    fun parsesTypedRecoveryTargetsWithoutInventingAnActiveSlot() {
+        val result = RuntimeProtocol.decode(
+            """{"schema_version":2,"request_id":"test","status":"ok","payload":{"kind":"recovery_targets","data":{"targets":["com.example.one","com.example.two"]}}}""",
+        )
+
+        val targets = assertIs<RuntimePayload.RecoveryTargets>(
+            assertIs<RuntimeResult.Success>(result).payload,
+        )
+        assertEquals(listOf("com.example.one", "com.example.two"), targets.packageNames)
+    }
+
+    @Test
+    fun parsesLaunchOutcomeSeparatelyFromCommittedSwitch() {
+        val result = RuntimeProtocol.decode(
+            """{"schema_version":2,"request_id":"test","status":"ok","payload":{"kind":"launch_result","data":{"package":"com.example.app","slot":"work","launch_status":"entry_not_found"}}}""",
+        )
+
+        val payload = assertIs<RuntimePayload.Launch>(
+            assertIs<RuntimeResult.Success>(result).payload,
+        )
+        assertEquals("com.example.app", payload.packageName)
+        assertEquals("work", payload.slotId)
+        assertEquals("entry_not_found", payload.launchStatus)
     }
 
     @Test
@@ -69,6 +108,18 @@ class RuntimeProtocolTest {
         )
         assertEquals("0.3.0-preview.7", probe.runtimeVersion)
         assertEquals("abc123", probe.buildId)
+    }
+
+    @Test
+    fun parsesExplicitRecoveryOnlyProbeMode() {
+        val result = RuntimeProtocol.decode(
+            """{"schema_version":2,"request_id":"test","status":"ok","payload":{"kind":"probe_report","data":{"ready":false,"user_unlocked":false,"ce_de_supported":true,"runtime_version":"0.3.0-preview.7","build_id":"abc123","recovery_only":true}}}""",
+        )
+
+        val probe = assertIs<RuntimePayload.Probe>(
+            assertIs<RuntimeResult.Success>(result).payload,
+        )
+        assertEquals(true, probe.recoveryOnly)
     }
 
     @Test

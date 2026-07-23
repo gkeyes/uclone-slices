@@ -25,3 +25,14 @@ pub enum RescueStartup {
     #[doc = "Startup failed and package execution could not be proved contained."]
     ContainmentFailed,
 }
+
+/// Result of the pre-store package execution gate acquisition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StartupGateOutcome {
+    /// No trusted management evidence was found for this package.
+    NotManaged,
+    /// Management evidence was valid and the gate is held.
+    Held,
+    /// Evidence could not be attributed completely; the gate is held fail-closed.
+    HeldRecovery,
+}

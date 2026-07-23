@@ -54,6 +54,7 @@ fun RuntimeBanner(health: RuntimeHealth, onClick: () -> Unit) {
         RuntimeHealth.UserLocked -> "请先解锁主用户" to WarningOrange
         RuntimeHealth.RecoveryRequired -> "有应用需要安全恢复" to MaterialTheme.colorScheme.error
         RuntimeHealth.ModuleMissing -> "尚未安装 KernelSU Runtime" to WarningOrange
+        RuntimeHealth.PairMismatch -> "APK 与 Runtime 需要成对更新" to WarningOrange
         RuntimeHealth.DaemonOffline -> "Runtime 当前离线" to WarningOrange
         RuntimeHealth.Unsupported -> "当前设备未通过兼容性检测" to MaterialTheme.colorScheme.error
         RuntimeHealth.Ready -> return

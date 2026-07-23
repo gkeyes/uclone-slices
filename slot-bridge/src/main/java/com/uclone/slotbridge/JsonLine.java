@@ -140,8 +140,10 @@ final class JsonLine {
         if ("device".equals(requestId)
                 || "package".equals(requestId)
                 || "gate".equals(requestId)
+                || "launch-package".equals(requestId)
                 || "set-enabled".equals(requestId)
-                || "set-suspended".equals(requestId)) {
+                || "restore-enabled".equals(requestId)
+                || "restore-suspended".equals(requestId)) {
             return requestId;
         }
         return "request";

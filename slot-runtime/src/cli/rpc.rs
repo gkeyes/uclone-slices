@@ -21,7 +21,7 @@ where
         );
     }
     let request = decode_request(&frame).map_err(CliError::Protocol)?;
-    let mut transport = match UnixTransport::connect() {
+    let mut transport = match UnixTransport::connect_socket_only() {
         Ok(transport) => transport,
         Err(_) if matches!(request.command(), Command::RescueToBase { .. }) => {
             return super::direct::run(&request, output, diagnostics);
@@ -31,7 +31,6 @@ where
     transport
         .set_timeout(timeout::for_request(request.command()))
         .map_err(CliError::Protocol)?;
-    let mut transport =
-        super::fallback::RescueFallback::new(&mut transport, super::direct::direct_response);
+    // Once connected, preserve request timeout/I/O as an outcome-unknown protocol error.
     execute_request(&request, &mut transport, output, diagnostics)
 }

@@ -8,10 +8,24 @@ use uclone_slot_runtime::bridge::{
     APP_PROCESS_PATH, AppProcessRunner, BRIDGE_CLASSPATH, BRIDGE_MAIN_CLASS, BridgeCommand,
     PackageEnabledState,
 };
-use uclone_slot_runtime::domain::PackageName;
+use uclone_slot_runtime::domain::{AppIdentity, DataInodes, PackageName};
 
 fn package() -> PackageName {
     PackageName::parse("com.example.dynamic").unwrap()
+}
+
+fn identity() -> AppIdentity {
+    AppIdentity::new(
+        10_321,
+        &"ab".repeat(32),
+        7,
+        "/data/app/com.example.dynamic/base.apk",
+    )
+    .unwrap()
+}
+
+fn base_inodes() -> DataInodes {
+    DataInodes::new(101, 202).unwrap()
 }
 
 #[test]
@@ -31,8 +45,24 @@ fn every_command_argv_is_fixed_and_shell_free() {
         BridgeCommand::DeviceStatus,
         BridgeCommand::PackageStatus(package()),
         BridgeCommand::GateStatus(package()),
-        BridgeCommand::SetEnabled(package(), PackageEnabledState::Enabled),
-        BridgeCommand::SetSuspended(package(), false),
+        BridgeCommand::SetEnabled(package(), PackageEnabledState::DisabledUser),
+        BridgeCommand::RestoreEnabled {
+            package: package(),
+            state: PackageEnabledState::Default,
+            expected_identity: identity(),
+            expected_base_inodes: base_inodes(),
+        },
+        BridgeCommand::RestoreSuspended {
+            package: package(),
+            suspended: false,
+            expected_identity: identity(),
+            expected_base_inodes: base_inodes(),
+        },
+        BridgeCommand::LaunchPackage {
+            package: package(),
+            expected_identity: identity(),
+            expected_base_inodes: base_inodes(),
+        },
     ];
     for command in commands {
         let argv = command.argv();

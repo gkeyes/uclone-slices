@@ -23,7 +23,7 @@ pub struct SystemPackageProbe<R = AppProcessRunner, E = StdProcessExecutor, F = 
     bridge: BridgeClient<R>,
     executor: E,
     facts: F,
-    cached_package: Option<PackageSnapshot>,
+    cached_package: Option<(PackageName, UserId, PackageSnapshot)>,
 }
 
 impl SystemPackageProbe<AppProcessRunner, StdProcessExecutor, StdSystemFacts> {
@@ -154,8 +154,13 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor, F: SystemFacts> PackageProbe
     ) -> Result<u32, ProbeError> {
         require_target(package, user_id)?;
         let snapshot = match self.cached_package.as_ref() {
-            Some(snapshot) => snapshot.clone(),
+            Some((cached_package, cached_user, snapshot))
+                if cached_package == package && *cached_user == user_id =>
+            {
+                snapshot.clone()
+            }
             None => self.refresh_package_snapshot(package, user_id)?,
+            Some(_) => self.refresh_package_snapshot(package, user_id)?,
         };
         let processes = self
             .facts
@@ -227,7 +232,7 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor, F: SystemFacts> SystemPackagePr
         {
             return Err(ProbeError::InvalidResponse);
         }
-        self.cached_package = Some(snapshot.clone());
+        self.cached_package = Some((package.clone(), user_id, snapshot.clone()));
         Ok(snapshot)
     }
 }

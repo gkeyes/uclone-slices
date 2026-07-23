@@ -24,7 +24,7 @@ impl<B: RecoveryBackend> Reconciler<B> {
         if let Err(reason) = self.prove_release_ready(&desired, &view) {
             return self.require_recovery(held, reason);
         }
-        if !self.restore_gate(held) {
+        if !self.restore_gate(held, &desired) {
             return self.require_recovery(held, ReconcileReason::GateRestoreFailed);
         }
         if let Some(outcome) = self.retire_gate_or_recover(held)? {

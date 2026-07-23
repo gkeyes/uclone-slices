@@ -21,6 +21,18 @@ where
         package: &ManagedPackage,
         class: ServiceError,
     ) -> Result<(), ServiceError> {
+        self.do_contain_exact(package)?;
+        if class == ServiceError::Quarantined {
+            self.mark_package_quarantined(package)
+        } else {
+            self.mark_package_recovery(package)
+        }
+    }
+
+    pub(super) fn do_contain_exact(
+        &mut self,
+        package: &ManagedPackage,
+    ) -> Result<(), ServiceError> {
         if self.runtime.capture_gate_snapshot(package).is_err() {
             self.runtime
                 .emergency_gate(package.package_name())
@@ -30,12 +42,7 @@ where
             .acquire_gate(package)
             .and_then(|()| self.runtime.verify_gate_held(package))
             .and_then(|()| self.runtime.quiesce_processes(package))
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        if class == ServiceError::Quarantined {
-            self.mark_package_quarantined(package)
-        } else {
-            self.mark_package_recovery(package)
-        }
+            .map_err(|_| ServiceError::RecoveryRequired)
     }
 
     pub(super) fn mark_package_recovery(

@@ -8,12 +8,13 @@
 use std::cell::RefCell;
 
 use uclone_slot_runtime::domain::{
-    ManagedPackage, PackageCompatibility, PackageKey, SlotId, SlotView,
+    AppIdentity, ManagedPackage, PackageCompatibility, PackageKey, PackageName, SlotId, SlotView,
 };
+use uclone_slot_runtime::launch::LaunchDisposition;
 use uclone_slot_runtime::reconcile::ReconcileOutcome;
 use uclone_slot_runtime::service::{
-    CapabilitySnapshot, PackageSnapshot, PackageState, RescueExecution, ServiceError,
-    SwitchExecution,
+    CapabilitySnapshot, ManagedAppInfo, PackageSnapshot, PackageState, RescueExecution,
+    ServiceError, SwitchExecution,
 };
 
 mod fixtures;
@@ -42,8 +43,10 @@ pub(crate) enum FailurePoint {
     Contain,
     Materialize,
     Switch,
+    VerifyCurrent,
     Reconcile,
     Rescue,
+    Launch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,8 +73,10 @@ pub(crate) enum Call {
     Contain(ServiceError),
     Materialize,
     Switch { slot: SlotId, prepared: bool },
+    VerifyCurrent,
     Reconcile,
     Rescue,
+    Launch,
 }
 
 #[derive(Debug)]
@@ -83,8 +88,13 @@ pub(crate) struct FakePlatform {
     switch_execution: Option<SwitchExecution>,
     rescue_execution: Option<RescueExecution>,
     reconcile_outcome: ReconcileOutcome,
+    reconcile_outcomes: Vec<(PackageName, Result<ReconcileOutcome, ServiceError>)>,
+    reconciled_packages: RefCell<Vec<PackageName>>,
+    managed_apps: Option<Vec<ManagedAppInfo>>,
     inspection_compatibility: PackageCompatibility,
     capability: CapabilitySnapshot,
+    launch_disposition: LaunchDisposition,
+    launched_identities: RefCell<Vec<AppIdentity>>,
 }
 
 impl Default for FakePlatform {
@@ -97,8 +107,13 @@ impl Default for FakePlatform {
             switch_execution: None,
             rescue_execution: None,
             reconcile_outcome: ReconcileOutcome::RestoredBase,
+            reconcile_outcomes: Vec::new(),
+            reconciled_packages: RefCell::new(Vec::new()),
+            managed_apps: None,
             inspection_compatibility: PackageCompatibility::compatible(),
-            capability: CapabilitySnapshot::new(true, true, true),
+            capability: CapabilitySnapshot::new(true, true, true, false),
+            launch_disposition: LaunchDisposition::Launched,
+            launched_identities: RefCell::new(Vec::new()),
         }
     }
 }
@@ -131,6 +146,20 @@ impl FakePlatform {
         self
     }
 
+    pub(crate) fn with_package_reconcile(
+        mut self,
+        package: PackageName,
+        outcome: Result<ReconcileOutcome, ServiceError>,
+    ) -> Self {
+        self.reconcile_outcomes.push((package, outcome));
+        self
+    }
+
+    pub(crate) fn with_managed_apps(mut self, apps: Vec<ManagedAppInfo>) -> Self {
+        self.managed_apps = Some(apps);
+        self
+    }
+
     pub(crate) const fn with_inspection_compatibility(
         mut self,
         compatibility: PackageCompatibility,
@@ -144,8 +173,21 @@ impl FakePlatform {
         self
     }
 
+    pub(crate) const fn with_launch_disposition(mut self, disposition: LaunchDisposition) -> Self {
+        self.launch_disposition = disposition;
+        self
+    }
+
     pub(crate) fn calls(&self) -> Vec<Call> {
         self.calls.borrow().clone()
+    }
+
+    pub(crate) fn reconciled_packages(&self) -> Vec<PackageName> {
+        self.reconciled_packages.borrow().clone()
+    }
+
+    pub(crate) fn launched_identities(&self) -> Vec<AppIdentity> {
+        self.launched_identities.borrow().clone()
     }
 
     pub(crate) fn clear_calls(&self) {

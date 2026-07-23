@@ -9,6 +9,9 @@ import org.junit.Test;
 
 public final class CommandParserTest {
     private static final String PACKAGE = "com.example.one";
+    private static final String SIGNATURE =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    private static final String CODE_PATH = "/data/app/example/base.apk";
 
     @Test
     public void parsesEveryFixedCommandWhenArgumentsAreExact() throws BridgeFailure {
@@ -17,15 +20,21 @@ public final class CommandParserTest {
         ParsedCommand device = CommandParser.parse(new String[] {"probe-device"});
         ParsedCommand probe = CommandParser.parse(new String[] {"probe-package", packageName});
         ParsedCommand gate = CommandParser.parse(new String[] {"probe-gate", packageName});
+        ParsedCommand launch = CommandParser.parse(contract("launch-package", packageName));
         ParsedCommand enabled = CommandParser.parse(
                 new String[] {"set-enabled", packageName, "disabled_user"});
+        ParsedCommand restoredEnabled = CommandParser.parse(
+                contractWithValue("restore-enabled", packageName, "default"));
         ParsedCommand suspended = CommandParser.parse(
-                new String[] {"set-suspended", packageName, "false"});
+                contractWithValue("restore-suspended", packageName, "false"));
 
         assertEquals(CommandKind.PROBE_DEVICE, device.kind());
         assertEquals(CommandKind.PROBE_PACKAGE, probe.kind());
         assertEquals(CommandKind.PROBE_GATE, gate.kind());
+        assertEquals(CommandKind.LAUNCH_PACKAGE, launch.kind());
+        assertEquals("launch-package", launch.requestId());
         assertEquals(EnabledState.DISABLED_USER, enabled.enabledState());
+        assertEquals(EnabledState.DEFAULT, restoredEnabled.enabledState());
         assertFalse(suspended.suspended());
     }
 
@@ -50,6 +59,39 @@ public final class CommandParserTest {
     }
 
     @Test
+    public void launchRequiresPackageAndCanonicalExpectedIdentity() throws BridgeFailure {
+        ParsedCommand launch = CommandParser.parse(
+                contract("launch-package", "org.example.launchable"));
+
+        assertEquals("org.example.launchable", launch.packageName());
+        assertTrue(launch.expectedIdentity() != null);
+        assertFailure(
+                new String[] {"launch-package", "org.example.launchable"},
+                ErrorCode.INVALID_REQUEST);
+        assertFailure(
+                contract("launch-package", "/data/user/0/org.example.launchable"),
+                ErrorCode.PACKAGE_NOT_ALLOWED);
+        String[] nonCanonicalUid = contract("launch-package", "org.example.launchable");
+        nonCanonicalUid[2] = "010123";
+        assertFailure(
+                nonCanonicalUid,
+                ErrorCode.INVALID_REQUEST);
+        String[] uppercaseSignature = contract("launch-package", "org.example.launchable");
+        uppercaseSignature[3] = SIGNATURE.toUpperCase();
+        assertFailure(
+                uppercaseSignature,
+                ErrorCode.INVALID_REQUEST);
+        String[] zeroVersion = contract("launch-package", "org.example.launchable");
+        zeroVersion[4] = "0";
+        assertFailure(
+                zeroVersion,
+                ErrorCode.INVALID_REQUEST);
+        String[] tabbedCodePath = contract("launch-package", "org.example.launchable");
+        tabbedCodePath[5] = "/data/app/example\tother/base.apk";
+        assertFailure(tabbedCodePath, ErrorCode.INVALID_REQUEST);
+    }
+
+    @Test
     public void rejectsPathShapedPackageWhenCallerSuppliesPath() {
         String[] argv = {"probe-package", "/data/user/0/" + PACKAGE};
 
@@ -64,16 +106,41 @@ public final class CommandParserTest {
     }
 
     @Test
-    public void parsesBooleanOnlyWhenLowercaseAndCanonical() throws BridgeFailure {
+    public void parsesRestoreBooleanOnlyWhenLowercaseAndCanonical() throws BridgeFailure {
         String packageName = PACKAGE;
 
         ParsedCommand trueValue = CommandParser.parse(
-                new String[] {"set-suspended", packageName, "true"});
+                contractWithValue("restore-suspended", packageName, "true"));
 
         assertTrue(trueValue.suspended());
         assertFailure(
-                new String[] {"set-suspended", packageName, "TRUE"},
+                contractWithValue("restore-suspended", packageName, "TRUE"),
                 ErrorCode.INVALID_REQUEST);
+    }
+
+    @Test
+    public void uncheckedEnabledMutationCanOnlyAcquireDisabledUser() {
+        assertFailure(
+                new String[] {"set-enabled", PACKAGE, "enabled"},
+                ErrorCode.INVALID_REQUEST);
+        assertFailure(
+                new String[] {"set-enabled", PACKAGE, "default"},
+                ErrorCode.INVALID_REQUEST);
+    }
+
+    private static String[] contract(String operation, String packageName) {
+        return new String[] {
+            operation, packageName, "10123", SIGNATURE, "7", CODE_PATH, "111", "222"
+        };
+    }
+
+    private static String[] contractWithValue(
+            String operation, String packageName, String value) {
+        String[] contract = contract(operation, packageName);
+        String[] result = new String[contract.length + 1];
+        System.arraycopy(contract, 0, result, 0, contract.length);
+        result[result.length - 1] = value;
+        return result;
     }
 
     private static void assertFailure(String[] argv, ErrorCode expected) {

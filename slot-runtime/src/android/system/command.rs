@@ -9,13 +9,12 @@ use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 use crate::android::{AndroidCommand, CommandError, CommandKind, CommandRunner, DataDomain};
-use crate::bridge::{
-    ALLOWED_USER_ID, AppProcessRunner, BridgeClient, BridgeCommandRunner, BridgeErrorCode,
-};
+use crate::bridge::{ALLOWED_USER_ID, AppProcessRunner, BridgeClient, BridgeCommandRunner};
 use crate::domain::{PackageEnabledState, PackageName, SlotId};
 use crate::layout::RuntimeLayout;
 
-use super::executor::{ProcessExecutor, ProcessFailure, ProcessInvocation, StdProcessExecutor};
+use super::error_map;
+use super::executor::{ProcessExecutor, ProcessInvocation, StdProcessExecutor};
 
 const AM_PATH: &str = "/system/bin/am";
 const MOUNT_PATH: &str = "/system/bin/mount";
@@ -70,17 +69,45 @@ impl<R: BridgeCommandRunner, E: ProcessExecutor> CommandRunner for SystemCommand
             }
             CommandKind::RestoreEnabled(state) => {
                 require_no_paths(command)?;
-                self.set_enabled(command.package_name(), state)
+                let expected = command.expected_package().ok_or(CommandError::Rejected)?;
+                self.bridge
+                    .restore_enabled(
+                        command.package_name().as_str(),
+                        ALLOWED_USER_ID,
+                        state,
+                        expected.identity(),
+                        expected.base_inodes(),
+                    )
+                    .map_err(|error| error_map::contract_bridge(&error))
             }
             CommandKind::RestoreSuspended(suspended) => {
                 require_no_paths(command)?;
+                let expected = command.expected_package().ok_or(CommandError::Rejected)?;
                 self.bridge
-                    .set_suspended(command.package_name().as_str(), ALLOWED_USER_ID, suspended)
-                    .map_err(|error| map_bridge_error(&error))
+                    .restore_suspended(
+                        command.package_name().as_str(),
+                        ALLOWED_USER_ID,
+                        suspended,
+                        expected.identity(),
+                        expected.base_inodes(),
+                    )
+                    .map_err(|error| error_map::contract_bridge(&error))
             }
             CommandKind::ForceStop => {
                 require_no_paths(command)?;
                 self.execute(&force_stop_invocation(command.package_name()))
+            }
+            CommandKind::LaunchPackage => {
+                require_no_paths(command)?;
+                let expected = command.expected_package().ok_or(CommandError::Rejected)?;
+                self.bridge
+                    .launch_package(
+                        command.package_name().as_str(),
+                        ALLOWED_USER_ID,
+                        expected.identity(),
+                        expected.base_inodes(),
+                    )
+                    .map_err(|error| error_map::launch_bridge(&error))
             }
             CommandKind::Bind(domain) | CommandKind::Unmount(domain) => {
                 let invocation = mount_invocation(command, domain)?;
@@ -98,7 +125,7 @@ impl<R: BridgeCommandRunner, E> SystemCommandRunner<R, E> {
     ) -> Result<(), CommandError> {
         self.bridge
             .set_enabled(package.as_str(), ALLOWED_USER_ID, state)
-            .map_err(|error| map_bridge_error(&error))
+            .map_err(|error| error_map::bridge(&error))
     }
 }
 
@@ -107,7 +134,7 @@ impl<R, E: ProcessExecutor> SystemCommandRunner<R, E> {
         let output = self
             .executor
             .execute(invocation)
-            .map_err(|error| map_process_error(&error))?;
+            .map_err(|error| error_map::process(&error))?;
         if output.exit_code() == Some(0) {
             Ok(())
         } else {
@@ -210,20 +237,5 @@ const fn domain_path<'a>(domain: DataDomain, ce: &'a Path, de: &'a Path) -> &'a 
     match domain {
         DataDomain::Ce => ce,
         DataDomain::De => de,
-    }
-}
-
-fn map_bridge_error(error: &crate::bridge::BridgeError) -> CommandError {
-    if error.code() == BridgeErrorCode::RunnerUnavailable {
-        CommandError::StartFailed
-    } else {
-        CommandError::Rejected
-    }
-}
-
-const fn map_process_error(error: &ProcessFailure) -> CommandError {
-    match error {
-        ProcessFailure::Io(_) => CommandError::StartFailed,
-        ProcessFailure::TimedOut | ProcessFailure::OutputTooLarge { .. } => CommandError::Rejected,
     }
 }

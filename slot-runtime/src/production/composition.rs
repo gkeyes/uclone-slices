@@ -1,10 +1,12 @@
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 use crate::android::PackageProbe;
-use crate::domain::{GateSnapshot, ManagedPackage, PackageKey, SlotView};
+use crate::domain::{GateSnapshot, ManagedPackage, PackageKey, PackageName, SlotView};
+use crate::launch::{AppLaunchBackend, LaunchDisposition};
 use crate::materializer::MaterializationBackend;
 use crate::reconcile::{NativeBaseRecoveryBackend, ReconcileOutcome, RecoveryBackend};
-use crate::rescue::{RescueExecution, RescueJournalStore, RescueMetadataSource, RescueStartup};
+use crate::rescue::{RescueExecution, RescueMetadataSource};
 use crate::service::{
     CapabilitySnapshot, EnrollmentPublicationError, PackageState, ServiceError, ServicePlatform,
     SwitchExecution,
@@ -21,6 +23,7 @@ pub struct ProductionPlatform<B, M, Q, T> {
     pub(super) probe: RefCell<Q>,
     pub(super) metadata: T,
     pub(super) stores: ProductionStores,
+    pub(super) recovery_overrides: BTreeSet<PackageName>,
 }
 
 impl<B, M, Q, T> ProductionPlatform<B, M, Q, T> {
@@ -37,6 +40,7 @@ impl<B, M, Q, T> ProductionPlatform<B, M, Q, T> {
             probe: RefCell::new(probe),
             metadata,
             stores: ProductionStores::open_fixed()?,
+            recovery_overrides: BTreeSet::new(),
         })
     }
 
@@ -53,7 +57,7 @@ impl<B, M, Q, T> ProductionPlatform<B, M, Q, T> {
 
 impl<B, M, Q, T> ServicePlatform for ProductionPlatform<B, M, Q, T>
 where
-    B: RecoveryBackend + NativeBaseRecoveryBackend,
+    B: RecoveryBackend + NativeBaseRecoveryBackend + AppLaunchBackend,
     M: MaterializationBackend,
     Q: PackageProbe,
     T: MetadataSource + RescueMetadataSource,
@@ -75,6 +79,14 @@ where
 
     fn list_slots(&self, key: &PackageKey) -> Result<Vec<crate::service::SlotInfo>, ServiceError> {
         self.do_list_slots(key)
+    }
+
+    fn list_slots_for_snapshot(
+        &self,
+        key: &PackageKey,
+        snapshot: &crate::service::PackageSnapshot,
+    ) -> Result<Vec<crate::service::SlotInfo>, ServiceError> {
+        self.do_list_slots_for_snapshot(key, snapshot)
     }
 
     fn create_slot(
@@ -104,14 +116,11 @@ where
     }
 
     fn package_state(&self, key: &PackageKey) -> Result<PackageState, ServiceError> {
-        let rescue = RescueJournalStore::fixed_for(key.package_name())
-            .map_err(|_| ServiceError::RecoveryRequired)?;
-        if rescue
-            .load()
-            .map_err(|_| ServiceError::RecoveryRequired)?
-            .is_some()
-        {
+        if self.recovery_overridden(key) {
             return Ok(PackageState::RecoveryRequired);
+        }
+        if let Some(state) = super::rescue::package_state(super::rescue::rescue_status(key)?) {
+            return Ok(state);
         }
         let mut probe = self
             .probe
@@ -214,19 +223,23 @@ where
         self.do_switch(package, target, prepared_gate)
     }
 
+    fn verify_current_view_for_launch(
+        &mut self,
+        package: &ManagedPackage,
+        target: &SlotView,
+    ) -> Result<(), ServiceError> {
+        self.do_verify_current_view_for_launch(package, target)
+    }
+
+    fn launch_package(&mut self, package: &ManagedPackage) -> LaunchDisposition {
+        self.runtime.launch_package(package)
+    }
+
     fn reconcile_two_phase(&mut self, key: &PackageKey) -> Result<ReconcileOutcome, ServiceError> {
-        match self.do_rescue_startup(key) {
-            RescueStartup::OpenOrdinary => self.do_reconcile(key),
-            RescueStartup::BaseRetired => Ok(ReconcileOutcome::RestoredBase),
-            RescueStartup::RecoveryRequired => Ok(ReconcileOutcome::RecoveryRequired(
-                crate::reconcile::ReconcileReason::JournalMetadata,
-            )),
-            RescueStartup::Quarantined => Ok(ReconcileOutcome::Quarantined),
-            RescueStartup::ContainmentFailed => Err(ServiceError::Internal),
-        }
+        self.reconcile_with_rescue(key)
     }
 
     fn rescue_to_base(&mut self, key: &PackageKey) -> Result<RescueExecution, ServiceError> {
-        Ok(self.do_rescue_to_base(key))
+        self.do_rescue_to_base(key)
     }
 }

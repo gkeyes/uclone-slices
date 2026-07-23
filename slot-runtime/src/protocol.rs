@@ -10,9 +10,10 @@ mod response;
 
 pub use client::{DEFAULT_CLIENT_TIMEOUT, UnixClient, read_response, write_request};
 pub use payload::{
-    Ack, AckOperation, ManagedAppSummary, ManagedAppsReport, PackageInspectionReport,
-    PackageStatus, ProbeReport, ReconcileOutcome, ReconcileReport, ResponsePayload, SlotSummary,
-    SlotsReport, SwitchResult,
+    Ack, AckOperation, LaunchResult, LaunchStatus, ManagedAppSummary, ManagedAppsReport,
+    PackageInspectionReport, PackageSnapshotReport, PackageStatus, ProbeReport, ReconcileOutcome,
+    ReconcileReport, RecoveryTargetsReport, ResponsePayload, SlotSummary, SlotsReport,
+    SwitchResult,
 };
 pub use request::{Command, Request, RequestId, decode_request, encode_request};
 pub use response::{ErrorCode, Response, ResponseStatus, decode_response, encode_response};

@@ -15,9 +15,20 @@ final class PackageMutator {
         this.reader = reader;
     }
 
-    void setEnabled(EnabledState state) throws BridgeFailure {
+    void disableUser() throws BridgeFailure {
         String requestId = "set-enabled";
         reader.requireInstalled(requestId);
+        writeEnabled(EnabledState.DISABLED_USER, requestId);
+    }
+
+    void restoreEnabled(EnabledState state, ExpectedPackageIdentity expected)
+            throws BridgeFailure {
+        String requestId = "restore-enabled";
+        requireExpected(expected, requestId);
+        writeEnabled(state, requestId);
+    }
+
+    private void writeEnabled(EnabledState state, String requestId) throws BridgeFailure {
         BinderInvoke.call(
                 packageManager,
                 requestId,
@@ -34,9 +45,10 @@ final class PackageMutator {
         }
     }
 
-    void setSuspended(boolean suspended) throws BridgeFailure {
-        String requestId = "set-suspended";
-        reader.requireInstalled(requestId);
+    void restoreSuspended(boolean suspended, ExpectedPackageIdentity expected)
+            throws BridgeFailure {
+        String requestId = "restore-suspended";
+        requireExpected(expected, requestId);
         Object value = BinderInvoke.call(
                 packageManager,
                 requestId,
@@ -59,6 +71,20 @@ final class PackageMutator {
         if (reader.suspended(requestId) != suspended) {
             throw new BridgeFailure(requestId, ErrorCode.COMMAND_FAILED);
         }
+    }
+
+    private void requireExpected(ExpectedPackageIdentity expected, String requestId)
+            throws BridgeFailure {
+        if (expected == null) {
+            throw new BridgeFailure(requestId, ErrorCode.INVALID_REQUEST);
+        }
+        PackageSnapshot actual;
+        try {
+            actual = reader.read();
+        } catch (BridgeFailure failure) {
+            throw new BridgeFailure(requestId, ErrorCode.PACKAGE_STATE_CHANGED);
+        }
+        expected.requireMatches(actual, requestId);
     }
 
     @SuppressLint("PrivateApi")

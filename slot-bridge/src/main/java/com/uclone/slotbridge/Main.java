@@ -47,11 +47,23 @@ public final class Main {
                 return JsonLine.packageSnapshot(bridge.probePackage(command.packageName()));
             case PROBE_GATE:
                 return JsonLine.gate(bridge.probeGate(command.packageName()));
+            case LAUNCH_PACKAGE:
+                bridge.launchPackage(command.packageName(), command.expectedIdentity());
+                return JsonLine.ack(command.requestId());
             case SET_ENABLED:
                 bridge.setEnabled(command.packageName(), command.enabledState());
                 return JsonLine.ack(command.requestId());
-            case SET_SUSPENDED:
-                bridge.setSuspended(command.packageName(), command.suspended());
+            case RESTORE_ENABLED:
+                bridge.restoreEnabled(
+                        command.packageName(),
+                        command.enabledState(),
+                        command.expectedIdentity());
+                return JsonLine.ack(command.requestId());
+            case RESTORE_SUSPENDED:
+                bridge.restoreSuspended(
+                        command.packageName(),
+                        command.suspended(),
+                        command.expectedIdentity());
                 return JsonLine.ack(command.requestId());
             default:
                 return INTERNAL_ERROR;

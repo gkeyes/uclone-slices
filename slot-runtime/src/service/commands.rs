@@ -1,6 +1,7 @@
-use crate::domain::{PackageName, SlotId, SlotView};
+use crate::domain::PackageName;
 use crate::protocol::{
-    Ack, AckOperation, PackageStatus, ProbeReport, ResponsePayload, SwitchResult,
+    Ack, AckOperation, PackageSnapshotReport, PackageStatus, ProbeReport, ResponsePayload,
+    SlotSummary, SlotsReport,
 };
 
 use super::outcome;
@@ -16,6 +17,7 @@ impl<P: ServicePlatform> PreviewService<P> {
             capabilities.ready(),
             capabilities.user_unlocked(),
             capabilities.ce_de_supported(),
+            capabilities.recovery_only(),
         )))
     }
 
@@ -34,6 +36,39 @@ impl<P: ServicePlatform> PreviewService<P> {
             gate.enabled(),
             gate.suspended(),
         )))
+    }
+
+    pub(super) fn package_snapshot_command(
+        &self,
+        package: &PackageName,
+    ) -> Result<ResponsePayload, ServiceError> {
+        let capability = self.platform.probe()?;
+        if !capability.user_unlocked() {
+            return Err(ServiceError::UserLocked);
+        }
+        if !capability.ready() || !capability.ce_de_supported() {
+            return Err(ServiceError::UnsupportedDevice);
+        }
+        let key = validation::package_key(package);
+        let snapshot = validation::snapshot(&key, self.platform.package_state(&key)?)?;
+        validation::reportable(snapshot.managed())?;
+        let gate = snapshot.gate();
+        let status = PackageStatus::new(
+            package.clone(),
+            snapshot.managed().active_slot().clone(),
+            snapshot.managed().lifecycle_state(),
+            gate.enabled(),
+            gate.suspended(),
+        );
+        let slots = self
+            .platform
+            .list_slots_for_snapshot(&key, &snapshot)?
+            .into_iter()
+            .map(SlotSummary::from)
+            .collect();
+        let report = PackageSnapshotReport::new(status, SlotsReport::new(package.clone(), slots))
+            .map_err(|_| ServiceError::RecoveryRequired)?;
+        Ok(ResponsePayload::PackageSnapshot(report))
     }
 
     pub(super) fn enroll_command(
@@ -102,53 +137,6 @@ impl<P: ServicePlatform> PreviewService<P> {
         Ok(enroll_ack())
     }
 
-    pub(super) fn switch_command(
-        &mut self,
-        package: &PackageName,
-        requested: &SlotId,
-    ) -> Result<ResponsePayload, ServiceError> {
-        let key = validation::package_key(package);
-        let snapshot = validation::snapshot(&key, self.platform.package_state(&key)?)?;
-        let managed = snapshot.managed();
-        validation::switchable(managed)?;
-        if managed.active_slot() == requested {
-            return Ok(ResponsePayload::SwitchResult(SwitchResult::new(
-                package.clone(),
-                managed.active_slot().clone(),
-            )));
-        }
-        let (target, prepared_gate) = if requested.is_base() {
-            (SlotView::new(SlotId::base(), managed.base_inodes()), None)
-        } else {
-            if !managed.active_slot().is_base() {
-                return Err(ServiceError::RecoveryRequired);
-            }
-            match snapshot.slot(requested) {
-                Some(target) => (target.clone(), None),
-                None => self.prepare_first_switch(&key, managed, requested)?,
-            }
-        };
-        if !target.slot_id().is_base() {
-            validation::preview_target(managed, &target)?;
-        }
-        let execution = self
-            .platform
-            .switch_view(managed, &target, prepared_gate)
-            .map_err(|error| {
-                if prepared_gate.is_some() {
-                    error.after_gate()
-                } else {
-                    error
-                }
-            })?;
-        if matches!(&execution, super::SwitchExecution::Committed(proved) if proved != &target) {
-            self.platform
-                .contain_failure(managed, ServiceError::RecoveryRequired)
-                .map_err(|_| ServiceError::RecoveryRequired)?;
-        }
-        outcome::switched(package, &target, execution)
-    }
-
     pub(super) fn rescue_command(
         &mut self,
         package: &PackageName,
@@ -199,27 +187,6 @@ impl<P: ServicePlatform> PreviewService<P> {
         self.platform
             .mark_recovery_required(managed)
             .map_err(ServiceError::after_gate)
-    }
-
-    fn prepare_first_switch(
-        &mut self,
-        key: &crate::domain::PackageKey,
-        managed: &crate::domain::ManagedPackage,
-        slot: &SlotId,
-    ) -> Result<(SlotView, Option<crate::domain::GateSnapshot>), ServiceError> {
-        let gate = self.platform.capture_gate(key)?;
-        self.platform
-            .hold_gate(key)
-            .map_err(ServiceError::after_gate)?;
-        self.platform
-            .quiesce(key)
-            .map_err(ServiceError::after_gate)?;
-        let target = self
-            .platform
-            .materialize_slot(managed, slot, crate::slot_metadata::SlotSeedMode::CloneBase)
-            .map_err(ServiceError::after_gate)?;
-        validation::preview_target(managed, &target).map_err(ServiceError::after_gate)?;
-        Ok((target, Some(gate)))
     }
 }
 

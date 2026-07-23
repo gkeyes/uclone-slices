@@ -2,7 +2,7 @@ use crate::domain::SlotView;
 use crate::journal::{JournalEvent, TransactionSpec};
 use crate::registry::RegistryError;
 
-use super::{REASON_JOURNAL_FAILURE, SwitchCoordinator};
+use super::{REASON_JOURNAL_FAILURE, REASON_PLATFORM_FAILURE, SwitchCoordinator};
 use crate::runtime::RuntimeError;
 use crate::runtime::{PlatformError, RecoveryCause, RuntimeBackend, SwitchOutcome};
 
@@ -15,6 +15,27 @@ impl<B: RuntimeBackend> SwitchCoordinator<B> {
         spec: &TransactionSpec,
         original: PlatformError,
     ) -> Result<SwitchOutcome, RuntimeError> {
+        let transaction = match self.stores.journal().load(spec.transaction_id()) {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                return self.require_recovery_before_applying(
+                    spec,
+                    RecoveryCause::Journal(error),
+                    REASON_JOURNAL_FAILURE,
+                );
+            }
+        };
+        if !transaction
+            .steps()
+            .iter()
+            .any(|step| matches!(step.event(), JournalEvent::Applying))
+        {
+            return self.require_recovery_before_applying(
+                spec,
+                RecoveryCause::Platform(original),
+                REASON_PLATFORM_FAILURE,
+            );
+        }
         if let Err(error) = self.append(spec, JournalEvent::RollingBack) {
             return self.require_recovery(
                 spec,
@@ -47,9 +68,18 @@ impl<B: RuntimeBackend> SwitchCoordinator<B> {
                 REASON_JOURNAL_FAILURE,
             );
         }
+        let Some(release_package) = super::package_for_view(spec, &previous) else {
+            return self.require_recovery(
+                spec,
+                RecoveryCause::Platform(PlatformError::view_verification(
+                    "previous release contract invalid",
+                )),
+                REASON_ROLLBACK_FAILURE,
+            );
+        };
         if let Err(error) = self
             .backend
-            .restore_gate(spec.managed_package(), spec.gate_snapshot())
+            .restore_gate(&release_package, spec.gate_snapshot())
         {
             return self.require_recovery(
                 spec,
@@ -85,6 +115,22 @@ impl<B: RuntimeBackend> SwitchCoordinator<B> {
         Ok(SwitchOutcome::RolledBack { cause: original })
     }
 
+    pub(super) fn require_recovery_before_applying(
+        &mut self,
+        spec: &TransactionSpec,
+        cause: RecoveryCause,
+        reason: &str,
+    ) -> Result<SwitchOutcome, RuntimeError> {
+        if let Err(containment) = self
+            .backend
+            .acquire_gate(spec.managed_package())
+            .and_then(|()| self.backend.verify_gate_held(spec.managed_package()))
+        {
+            return Err(RuntimeError::ContainmentFailed { cause, containment });
+        }
+        self.persist_recovery_required(spec, cause, reason)
+    }
+
     pub(super) fn registry_recovery(
         &mut self,
         spec: &TransactionSpec,
@@ -111,6 +157,15 @@ impl<B: RuntimeBackend> SwitchCoordinator<B> {
         {
             return Err(RuntimeError::ContainmentFailed { cause, containment });
         }
+        self.persist_recovery_required(spec, cause, reason)
+    }
+
+    fn persist_recovery_required(
+        &self,
+        spec: &TransactionSpec,
+        cause: RecoveryCause,
+        reason: &str,
+    ) -> Result<SwitchOutcome, RuntimeError> {
         if let Err(source) = self.append(
             spec,
             JournalEvent::RecoveryRequired {

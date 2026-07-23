@@ -1,9 +1,11 @@
 use crate::domain::{GateSnapshot, ManagedPackage, PackageKey, SlotView};
+use crate::launch::LaunchDisposition;
 use crate::reconcile::ReconcileOutcome;
 use crate::rescue::RescueExecution;
 
 use super::{
-    CapabilitySnapshot, EnrollmentPublicationError, PackageState, ServiceError, SwitchExecution,
+    CapabilitySnapshot, EnrollmentPublicationError, PackageSnapshot, PackageState, ServiceError,
+    SwitchExecution,
 };
 
 /// Minimal injected platform composition required by [`super::PreviewService`].
@@ -25,9 +27,23 @@ pub trait ServicePlatform: core::fmt::Debug {
         Err(ServiceError::InvalidRequest)
     }
 
+    /// Lists fixed-root user-zero packages accepted by recovery-only rescue.
+    fn list_recovery_targets(&self) -> Result<Vec<crate::domain::PackageName>, ServiceError> {
+        Err(ServiceError::InvalidRequest)
+    }
+
     /// Lists Base and verified non-base slots for one managed package.
     fn list_slots(&self, _key: &PackageKey) -> Result<Vec<super::SlotInfo>, ServiceError> {
         Err(ServiceError::InvalidRequest)
+    }
+
+    /// Lists slots using the exact package snapshot already validated by the caller.
+    fn list_slots_for_snapshot(
+        &self,
+        key: &PackageKey,
+        _snapshot: &PackageSnapshot,
+    ) -> Result<Vec<super::SlotInfo>, ServiceError> {
+        self.list_slots(key)
     }
 
     /// Creates a runtime-named slot, materializes it, and switches transactionally.
@@ -145,6 +161,23 @@ pub trait ServicePlatform: core::fmt::Debug {
         target: &SlotView,
         prepared_gate: Option<GateSnapshot>,
     ) -> Result<SwitchExecution, ServiceError>;
+
+    /// Gates and quiesces the package, then proves the complete current view.
+    fn verify_current_view_for_launch(
+        &mut self,
+        _package: &ManagedPackage,
+        _target: &SlotView,
+    ) -> Result<(), ServiceError> {
+        Err(ServiceError::RecoveryRequired)
+    }
+
+    /// Opens the validated package's system-resolved user-zero launcher entry.
+    ///
+    /// The default is fail-closed so fake or recovery-only compositions cannot
+    /// accidentally claim that an app was opened.
+    fn launch_package(&mut self, _package: &ManagedPackage) -> LaunchDisposition {
+        LaunchDisposition::Failed
+    }
 
     /// Runs early-boot hold followed by user-unlocked two-phase reconciliation,
     /// including root-level enrollment-attempt anchors that have no enrollment.

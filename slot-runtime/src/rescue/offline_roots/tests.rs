@@ -69,6 +69,47 @@ fn ordinary_transaction_journal_is_a_management_artifact() {
 }
 
 #[test]
+fn unattributed_ordinary_journal_corruption_is_not_assigned_to_an_arbitrary_package() {
+    let (root, roots, _key) = fixture();
+    let arbitrary = PackageKey::new(
+        PackageName::parse("com.example.arbitrary").unwrap(),
+        UserId::PRIMARY,
+    );
+    let journal_root = root.path().join("journal");
+    JournalStore::new(&journal_root).unwrap();
+    fs::create_dir(journal_root.join("transactions/corrupt-published")).unwrap();
+    fs::create_dir_all(
+        roots
+            .enrollment
+            .join("packages")
+            .join(arbitrary.package_name().as_str()),
+    )
+    .unwrap();
+
+    assert!(management_artifacts_present(&roots, &arbitrary).is_err());
+}
+
+#[test]
+fn weak_package_artifact_does_not_hide_global_journal_corruption() {
+    let (root, roots, key) = fixture();
+    let journal_root = root.path().join("journal");
+    JournalStore::new(&journal_root).unwrap();
+    fs::create_dir(journal_root.join("transactions/corrupt-published")).unwrap();
+    fs::create_dir_all(roots.enrollment.join("packages").join(ALLOWED_PACKAGE)).unwrap();
+    fs::write(
+        roots
+            .enrollment
+            .join("packages")
+            .join(ALLOWED_PACKAGE)
+            .join("enrollment.json"),
+        b"not-a-valid-enrollment",
+    )
+    .unwrap();
+
+    assert!(management_artifacts_present(&roots, &key).is_err());
+}
+
+#[test]
 fn enrollment_attempt_uses_the_real_attempts_directory() {
     let (root, roots, key) = fixture();
     fs::create_dir_all(

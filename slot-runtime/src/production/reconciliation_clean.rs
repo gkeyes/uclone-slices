@@ -39,16 +39,12 @@ where
             .latest(key.package_name())
             .map_err(|_| ServiceError::RecoveryRequired)?
             .is_none();
-        let no_journal = !self
+        let no_journal = self
             .stores
             .journal
-            .list()
+            .list_for_package(key)
             .map_err(|_| ServiceError::RecoveryRequired)?
-            .iter()
-            .any(|transaction| {
-                transaction.spec().package_name() == key.package_name()
-                    && transaction.spec().user_id() == key.user_id()
-            });
+            .is_empty();
         let no_policy = self
             .stores
             .compatibility_policy

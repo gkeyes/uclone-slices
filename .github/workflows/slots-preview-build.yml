@@ -77,6 +77,8 @@ jobs:
           :slot-manager-app:lintRelease
 
       - name: Validate Runtime and boot safety
+        env:
+          UCLONE_TARGET_PROFILE: generic
         run: |
           install -d -m 0700 "$RUNNER_TEMP/uclone-rust-tests"
           export TMPDIR="$RUNNER_TEMP/uclone-rust-tests"
@@ -86,7 +88,10 @@ jobs:
           cargo +1.95.0 doc --manifest-path slot-runtime/Cargo.toml --locked --no-deps --all-features
           tools/test-target-profiles.sh --adversarial
           tools/test-kernelsu-profile-loader.sh
+          tools/test-post-fs-setup-migration.sh
           tools/test-generic-emergency-once.sh
+          tools/test-emergency-containment.sh --profile generic
+          tools/test-inert-history-containment.sh
           tools/test-generic-rescue.sh
           tools/test-kernelsu-boot-flow.sh --profile generic
           tools/test-kernelsu-upgrade-gate.sh
@@ -127,8 +132,12 @@ jobs:
       - name: Package paired KernelSU Runtime
         run: |
           PACKAGE_ROOT="$RUNNER_TEMP/kernelsu-package"
+          REPRO_ROOT="$RUNNER_TEMP/kernelsu-package-repro"
           tools/package-kernelsu-preview.sh --profile generic --output "$PACKAGE_ROOT"
+          tools/package-kernelsu-preview.sh --profile generic --output "$REPRO_ROOT"
           test -f "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip"
+          cmp "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" "$REPRO_ROOT/uclone-slices-preview-kernelsu.zip"
+          cmp "$PACKAGE_ROOT/manifest.txt" "$REPRO_ROOT/manifest.txt"
           unzip -p "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" module.prop | grep -F -x "version=$PREVIEW_VERSION_NAME"
           PACKAGE_ZIP="$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" python3 - <<'PY'
           import os, zipfile
@@ -152,7 +161,6 @@ jobs:
           install -d unsigned-dist
           install -m 0644 "$PACKAGE_ROOT/uclone-slices-preview-kernelsu.zip" unsigned-dist/uclone-slices-preview-kernelsu.zip
           install -m 0644 "$PACKAGE_ROOT/manifest.txt" unsigned-dist/KERNELSU-MANIFEST.txt
-          install -m 0644 slot-kernelsu/prepare-upgrade.sh unsigned-dist/uclone-prepare-upgrade.sh
 
       - name: Assemble unsigned paired APK
         run: >-
@@ -269,8 +277,7 @@ jobs:
           install -m 0644 unsigned-dist/uclone-slices-preview-kernelsu.zip signed-dist/uclone-slices-preview-kernelsu.zip
           install -m 0644 unsigned-dist/KERNELSU-MANIFEST.txt signed-dist/KERNELSU-MANIFEST.txt
           install -m 0644 unsigned-dist/PAIRING-MANIFEST.json signed-dist/PAIRING-MANIFEST.json
-          install -m 0644 unsigned-dist/uclone-prepare-upgrade.sh signed-dist/uclone-prepare-upgrade.sh
-          (cd signed-dist && sha256sum uclone-slots-preview.apk uclone-slices-preview-kernelsu.zip uclone-prepare-upgrade.sh PAIRING-MANIFEST.json > SHA256SUMS)
+          (cd signed-dist && sha256sum uclone-slots-preview.apk uclone-slices-preview-kernelsu.zip PAIRING-MANIFEST.json > SHA256SUMS)
 
       - name: Destroy isolated release key
         if: always()
@@ -310,7 +317,6 @@ jobs:
             "$TAG" \
             dist/uclone-slots-preview.apk \
             dist/uclone-slices-preview-kernelsu.zip \
-            dist/uclone-prepare-upgrade.sh \
             dist/SHA256SUMS \
             dist/APK-SIGNATURE.txt \
             dist/APK-BADGING.txt \
@@ -321,7 +327,7 @@ jobs:
             --prerelease \
             --draft \
             --title "UClone Slices Preview 0.3 build ${GITHUB_RUN_NUMBER}" \
-            --notes "Paired APK and KernelSU Runtime from commit ${GITHUB_SHA}. Protocol v2 rejects mixed-version installation. Reboot testing still requires explicit user confirmation."
+            --notes "Paired APK and KernelSU Runtime from commit ${GITHUB_SHA}. A managed-App upgrade proves Base, freezes the old Runtime, and keeps it offline until reboot activates the staged pair. Protocol v2 rejects mixed versions. Reboot testing still requires explicit user confirmation."
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort > "$RUNNER_TEMP/assets.actual"
           printf '%s\n' \
             APK-BADGING.txt \
@@ -329,7 +335,6 @@ jobs:
             KERNELSU-MANIFEST.txt \
             PAIRING-MANIFEST.json \
             SHA256SUMS \
-            uclone-prepare-upgrade.sh \
             uclone-slices-preview-kernelsu.zip \
             uclone-slots-preview.apk | sort > "$RUNNER_TEMP/assets.expected"
           diff -u "$RUNNER_TEMP/assets.expected" "$RUNNER_TEMP/assets.actual"
@@ -342,7 +347,6 @@ jobs:
             KERNELSU-MANIFEST.txt \
             PAIRING-MANIFEST.json \
             SHA256SUMS \
-            uclone-prepare-upgrade.sh \
             uclone-slices-preview-kernelsu.zip \
             uclone-slots-preview.apk
           do

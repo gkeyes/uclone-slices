@@ -40,6 +40,7 @@ fn final_candidate_recheck_rejects_install_that_starts_after_base_capture() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::pending_after_capture(captured)),
         metadata: SystemMetadataSource::new(),
         stores,
+        recovery_overrides: Default::default(),
     };
 
     let result = platform.do_enroll(&key, false);

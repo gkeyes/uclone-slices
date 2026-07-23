@@ -78,6 +78,7 @@ fn catalog_only_legacy_slot_can_be_deleted_after_returning_to_base() {
         probe: std::cell::RefCell::new(probe::NativeBaseProbe::new()),
         metadata: SystemMetadataSource::new(),
         stores,
+        recovery_overrides: Default::default(),
     };
     let preview = SlotId::parse("preview").unwrap();
 

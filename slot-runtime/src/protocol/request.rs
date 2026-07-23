@@ -59,6 +59,8 @@ pub enum Command {
     },
     #[doc = "List all durable managed-app enrollments."]
     ListManagedApps,
+    #[doc = "List only fixed-root packages eligible for recovery-only Base rescue."]
+    ListRecoveryTargets,
     #[doc = "Publish one package's immutable base enrollment."]
     EnrollPackage {
         #[doc = "Installed Android package selected by `PackageManager`."]
@@ -68,6 +70,11 @@ pub enum Command {
     },
     #[doc = "Read one package's committed view and lifecycle status."]
     StatusPackage {
+        #[doc = "Durably enrolled Android package."]
+        package: PackageName,
+    },
+    #[doc = "Read one coherent package status and slot snapshot."]
+    PackageSnapshot {
         #[doc = "Durably enrolled Android package."]
         package: PackageName,
     },
@@ -91,6 +98,13 @@ pub enum Command {
         package: PackageName,
         #[doc = "Runtime-issued slot identifier, including the reserved Base id."]
         slot: SlotId,
+    },
+    #[doc = "Open the already-committed slot only after an explicit client confirmation."]
+    LaunchCurrent {
+        #[doc = "Durably enrolled Android package."]
+        package: PackageName,
+        #[doc = "Client-confirmed active slot; a mismatch is rejected without launching."]
+        expected_slot: SlotId,
     },
     #[doc = "Change only a slot's display label."]
     RenameSlot {

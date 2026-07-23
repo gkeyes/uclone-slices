@@ -161,38 +161,14 @@ impl JournalStore {
 
     #[doc = "Enumerates and verifies every transaction directory in identifier order."]
     pub fn list(&self) -> Result<Vec<Transaction>, JournalError> {
-        self.validate_store()?;
-        let entries = fs::read_dir(&self.transactions).map_err(|source| {
-            JournalError::io("read transactions directory", &self.transactions, source)
-        })?;
-        let mut transaction_ids = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|source| {
-                JournalError::io("read transaction artifact", &self.transactions, source)
-            })?;
-            let name = entry.file_name();
-            let name = name.to_str().ok_or_else(|| {
-                JournalError::Corrupt("unexpected transaction artifact".to_owned())
-            })?;
-            let transaction_id = TransactionId::parse(name).map_err(|_| {
-                JournalError::Corrupt(format!("unexpected transaction artifact {name}"))
-            })?;
-            let file_type = entry.file_type().map_err(|source| {
-                JournalError::io("inspect transaction artifact", &entry.path(), source)
-            })?;
-            if !file_type.is_dir() {
-                return Err(JournalError::Corrupt(format!(
-                    "unexpected transaction artifact {name}"
-                )));
-            }
-            validate_transaction_directory(&entry.path(), self.owner_uid)?;
-            transaction_ids.push(transaction_id);
-        }
-        transaction_ids.sort();
-        transaction_ids
+        self.transaction_ids()?
             .into_iter()
             .map(|transaction_id| self.load(&transaction_id))
             .collect()
+    }
+
+    pub(super) fn transaction_ids(&self) -> Result<Vec<TransactionId>, JournalError> {
+        Ok(super::artifact_scan::scan(self)?.published)
     }
 
     #[doc = "Returns the validated transaction directory path."]
@@ -218,6 +194,14 @@ impl JournalStore {
     #[doc = "Returns the journal root."]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub(super) const fn owner_uid(&self) -> u32 {
+        self.owner_uid
+    }
+
+    pub(super) fn transactions_root(&self) -> &Path {
+        &self.transactions
     }
 
     fn validate_store(&self) -> Result<(), JournalError> {

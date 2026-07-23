@@ -7,6 +7,7 @@ mod management_commands;
 mod model;
 mod outcome;
 mod platform;
+mod switch_commands;
 mod validation;
 
 pub use error::{EnrollmentPublicationError, ServiceError};
@@ -16,6 +17,9 @@ pub use model::{
 };
 pub use platform::ServicePlatform;
 
+/// Maximum number of validated package targets returned by recovery-only discovery.
+pub const MAX_RECOVERY_TARGETS: usize = 64;
+
 use crate::daemon::MutationGuard;
 
 /// Injected, host-testable handler for all six Preview protocol commands.
@@ -23,6 +27,13 @@ use crate::daemon::MutationGuard;
 pub struct PreviewService<P> {
     platform: P,
     mutations: MutationGuard,
+    mode: ServiceMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServiceMode {
+    Production,
+    RecoveryOnly,
 }
 
 impl<P> PreviewService<P> {
@@ -31,11 +42,21 @@ impl<P> PreviewService<P> {
         Self::with_mutation_guard(platform, MutationGuard::new())
     }
 
+    /// Creates the restricted daemon façade used only for native-base rescue.
+    pub fn new_recovery_only(platform: P) -> Self {
+        Self {
+            platform,
+            mutations: MutationGuard::new(),
+            mode: ServiceMode::RecoveryOnly,
+        }
+    }
+
     /// Creates a service sharing a caller-provided daemon mutation gate.
     pub const fn with_mutation_guard(platform: P, mutations: MutationGuard) -> Self {
         Self {
             platform,
             mutations,
+            mode: ServiceMode::Production,
         }
     }
 
@@ -47,6 +68,10 @@ impl<P> PreviewService<P> {
     /// Returns the shared non-blocking mutation gate.
     pub const fn mutation_guard(&self) -> &MutationGuard {
         &self.mutations
+    }
+
+    pub(super) const fn recovery_only(&self) -> bool {
+        matches!(self.mode, ServiceMode::RecoveryOnly)
     }
 
     /// Consumes the façade and returns its injected platform.

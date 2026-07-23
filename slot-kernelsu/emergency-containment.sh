@@ -1,8 +1,6 @@
 #!/system/bin/sh
-
 set -u
 umask 077
-
 case "$0" in
     /*/*) SCRIPT_DIR=${0%/*} ;;
     *) exit 1 ;;
@@ -25,21 +23,11 @@ TOYBOX_BIN=/system/bin/toybox
 CMD_BIN=/system/bin/cmd
 AM_BIN=/system/bin/am
 RUNTIME_BIN=$SCRIPT_DIR/bin/ucloned
-JOURNAL_PACKAGES=$SCRIPT_DIR/journal-packages.sh
-
-root_has_artifact() {
-    root="$1"
-    if [ -L "$root" ] || { [ -e "$root" ] && [ ! -d "$root" ]; }; then
-        return 0
-    fi
-    [ -d "$root" ] || return 1
-    for entry in "$root"/*; do
-        [ -e "$entry" ] || [ -L "$entry" ] || continue
-        return 0
-    done
-    return 1
-}
-
+RESCUE_PACKAGES=$SCRIPT_DIR/rescue-retired-packages.sh
+COMMAND_TIMEOUT_SECONDS=2
+HELPER_TIMEOUT_SECONDS=4
+RUNTIME_TIMEOUT_SECONDS=8
+CONTAINMENT_REQUEST=$RUNTIME_ROOT/state/emergency-containment.request
 safe_binary() {
     binary="$1"
     [ -f "$binary" ] || return 1
@@ -51,131 +39,62 @@ safe_binary() {
     case "$mode" in *[!0-7]*|'') return 1 ;; esac
     [ $(((mode / 10) % 10 & 2)) -eq 0 ] && [ $((mode % 10 & 2)) -eq 0 ]
 }
-
 management_artifact_present() {
     if [ -L "$RUNTIME_ROOT" ] || { [ -e "$RUNTIME_ROOT" ] && [ ! -d "$RUNTIME_ROOT" ]; }; then
         return 0
     fi
     [ -d "$RUNTIME_ROOT" ] || return 1
-    root_has_artifact "$RUNTIME_ROOT/journal/transactions" && return 0
-    if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
-        for root in \
-            "$RUNTIME_ROOT/enrollment/packages" \
-            "$RUNTIME_ROOT/compatibility-policy/packages" \
-            "$RUNTIME_ROOT/catalog/packages" \
-            "$RUNTIME_ROOT/registry/packages" \
-            "$RUNTIME_ROOT/package-state/packages" \
-            "$RUNTIME_ROOT/slot-metadata/packages" \
-            "$RUNTIME_ROOT/enrollment-attempts/attempts" \
-            "$RUNTIME_ROOT/rescue-journal/packages" \
-            "/data/misc_de/$USER_ID/$UCLONE_MODULE/slots"
-        do
-            root_has_artifact "$root" && return 0
-        done
-        for path in "$RUNTIME_ROOT"/state/*.gate "$RUNTIME_ROOT"/state/.*.gate*; do
-            [ -e "$path" ] || [ -L "$path" ] || continue
-            name=${path##*/}
-            case "$name" in .*.gate.retired) continue ;; esac
-            return 0
-        done
-        return 1
-    fi
-    for path in \
-        "$RUNTIME_ROOT/enrollment/packages/$PACKAGE" \
-        "$RUNTIME_ROOT/compatibility-policy/packages/$PACKAGE" \
-        "$RUNTIME_ROOT/catalog/packages/$PACKAGE" \
-        "$RUNTIME_ROOT/registry/packages/$PACKAGE" \
-        "$RUNTIME_ROOT/package-state/packages/$PACKAGE" \
-        "$RUNTIME_ROOT/slot-metadata/packages/$PACKAGE" \
-        "$RUNTIME_ROOT/enrollment-attempts/attempts/$PACKAGE" \
-        "$RUNTIME_ROOT/rescue-journal/packages/$PACKAGE" \
-        "$RUNTIME_ROOT/state/$PACKAGE.gate" \
-        "$RUNTIME_ROOT/state/.$PACKAGE.gate.retiring" \
-        "/data/misc_ce/$USER_ID/$UCLONE_MODULE/slots/$PACKAGE" \
-        "/data/misc_de/$USER_ID/$UCLONE_MODULE/slots/$PACKAGE"
-    do
-        if [ -e "$path" ] || [ -L "$path" ]; then
-            return 0
-        fi
-    done
-    return 1
+    safe_binary "$RESCUE_PACKAGES" || return 0
+    active_control="$($TOYBOX_BIN timeout -s 9 "$HELPER_TIMEOUT_SECONDS" \
+        "$RESCUE_PACKAGES" --active-control 2>/dev/null)" || return 0
+    [ -n "$active_control" ]
 }
-
 valid_package() {
     [ "${#1}" -le 255 ] || return 1
     printf '%s\n' "$1" |
         "$TOYBOX_BIN" grep -E -x '[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+' \
             >/dev/null 2>&1
 }
-
 discover_packages() {
-    for root in \
-        "$RUNTIME_ROOT/enrollment/packages" \
-        "$RUNTIME_ROOT/compatibility-policy/packages" \
-        "$RUNTIME_ROOT/catalog/packages" \
-        "$RUNTIME_ROOT/registry/packages" \
-        "$RUNTIME_ROOT/package-state/packages" \
-        "$RUNTIME_ROOT/slot-metadata/packages" \
-        "$RUNTIME_ROOT/enrollment-attempts/attempts" \
-        "$RUNTIME_ROOT/rescue-journal/packages" \
-        "/data/misc_de/$USER_ID/$UCLONE_MODULE/slots"
-    do
-        [ -d "$root" ] && [ ! -L "$root" ] || continue
-        for entry in "$root"/*; do
-            [ -e "$entry" ] || [ -L "$entry" ] || continue
-            candidate=${entry##*/}
-            valid_package "$candidate" && printf '%s\n' "$candidate"
-        done
-    done
-    for entry in "$RUNTIME_ROOT"/state/*.gate "$RUNTIME_ROOT"/state/.*.gate*; do
-        [ -e "$entry" ] || [ -L "$entry" ] || continue
-        name=${entry##*/}
-        case "$name" in .*.gate.retired) continue ;; esac
-        candidate=${entry##*/}
-        candidate=${candidate#.}
-        candidate=${candidate%%.gate*}
-        valid_package "$candidate" && printf '%s\n' "$candidate"
-    done
-    safe_binary "$JOURNAL_PACKAGES" || return 1
-    "$JOURNAL_PACKAGES"
+    "$TOYBOX_BIN" timeout -s 9 "$HELPER_TIMEOUT_SECONDS" \
+        "$RESCUE_PACKAGES" --active-control || return 1
 }
-
 package_is_disabled() {
     package="$1"
-    disabled_packages="$("$CMD_BIN" package list packages -d --user "$USER_ID" 2>/dev/null)" ||
+    disabled_packages="$("$TOYBOX_BIN" timeout -s 9 "$COMMAND_TIMEOUT_SECONDS" \
+        "$CMD_BIN" package list packages -d --user "$USER_ID" 2>/dev/null)" ||
         return 1
     printf '%s\n' "$disabled_packages" |
         "$TOYBOX_BIN" grep -F -x "package:$package" >/dev/null 2>&1
 }
-
 package_is_quiesced() {
     package="$1"
-    processes="$("$TOYBOX_BIN" ps -A -o NAME 2>/dev/null)" || return 1
+    processes="$("$TOYBOX_BIN" timeout -s 9 "$COMMAND_TIMEOUT_SECONDS" \
+        "$TOYBOX_BIN" ps -A -o NAME 2>/dev/null)" || return 1
     while IFS= read -r process; do
-        case "$process" in
-            "$package"|"$package":*) return 1 ;;
-        esac
+        case "$process" in "$package"|"$package":*) return 1 ;; esac
     done <<EOF
 $processes
 EOF
     return 0
 }
-
 contain_once() {
     package="$1"
     safe_binary "$TOYBOX_BIN" || return 1
     safe_binary "$CMD_BIN" || return 1
     safe_binary "$AM_BIN" || return 1
-    "$CMD_BIN" package disable-user --user "$USER_ID" "$package" >/dev/null 2>&1 || return 1
-    "$AM_BIN" force-stop --user "$USER_ID" "$package" >/dev/null 2>&1 || return 1
+    "$TOYBOX_BIN" timeout -s 9 "$COMMAND_TIMEOUT_SECONDS" \
+        "$CMD_BIN" package disable-user --user "$USER_ID" "$package" \
+        >/dev/null 2>&1 || return 1
+    "$TOYBOX_BIN" timeout -s 9 "$COMMAND_TIMEOUT_SECONDS" \
+        "$AM_BIN" force-stop --user "$USER_ID" "$package" \
+        >/dev/null 2>&1 || return 1
     package_is_disabled "$package" && package_is_quiesced "$package"
 }
-
 contain_discovered() {
     packages="$(discover_packages)"
     status=$?
-    [ "$status" -eq 0 ] || return 1
-    [ -n "$packages" ] || return 1
+    packages="$(printf '%s\n' "$packages" | "$TOYBOX_BIN" sort -u)" || return 1
     result=0
     while IFS= read -r package; do
         [ -n "$package" ] || continue
@@ -183,26 +102,38 @@ contain_discovered() {
     done <<EOF
 $packages
 EOF
-    [ "$result" -eq 0 ]
+    [ "$result" -eq 0 ] || return 1
+    [ "$status" -eq 0 ] || return 1
+    [ -n "$packages" ] || return 2
 }
-
 contain_with_runtime() {
     safe_binary "$RUNTIME_BIN" || return 1
-    result="$("$TOYBOX_BIN" timeout -s 9 8 "$TOYBOX_BIN" nsenter -t 1 -m -- \
+    result="$("$TOYBOX_BIN" timeout -s 9 "$RUNTIME_TIMEOUT_SECONDS" \
+        "$TOYBOX_BIN" nsenter -t 1 -m -- \
         "$RUNTIME_BIN" --startup-gate 2>/dev/null)" || return 1
-    [ "$result" = held ]
+    case "$result" in held) return 0 ;; not-managed) return 2 ;; *) return 1 ;; esac
 }
-
 attempt_once() {
     if ! management_artifact_present; then
         printf '%s\n' not-managed
         return 0
     fi
     if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
-        contain_discovered || contain_with_runtime || {
-            printf '%s\n' recovery-required
-            return 1
-        }
+        contain_with_runtime
+        runtime_status=$?
+        case "$runtime_status" in
+            0) ;;
+            2) printf '%s\n' not-managed; return 0 ;;
+            *)
+                contain_discovered
+                fallback_status=$?
+                case "$fallback_status" in
+                    0) ;;
+                    2) printf '%s\n' not-managed; return 0 ;;
+                    *) printf '%s\n' recovery-required; return 1 ;;
+                esac
+                ;;
+        esac
     elif ! contain_once "$PACKAGE"; then
         printf '%s\n' recovery-required
         return 1
@@ -214,23 +145,25 @@ attempt_once() {
     printf '%s\n' not-managed
     return 0
 }
-
 case "${1:-}" in
-    --once)
-        [ -z "${2:-}" ] || exit 2
-        attempt_once
-        ;;
+    --once) [ -z "${2:-}" ] || exit 2; attempt_once ;;
     --watch)
         [ -z "${2:-}" ] || exit 2
-        while management_artifact_present; do
-            attempt_once >/dev/null 2>&1 || :
+        while :; do
+            result="$(attempt_once 2>/dev/null)"
+            status=$?
+            if [ "$status" -eq 0 ] && [ "$result" = not-managed ]; then
+                if [ -f "$CONTAINMENT_REQUEST" ] && [ ! -L "$CONTAINMENT_REQUEST" ]; then
+                    "$TOYBOX_BIN" rm -f "$CONTAINMENT_REQUEST" >/dev/null 2>&1 || :
+                fi
+                exit 0
+            fi
             if safe_binary "$TOYBOX_BIN"; then
                 "$TOYBOX_BIN" sleep 2
             else
                 /system/bin/sleep 2 2>/dev/null || exit 1
             fi
         done
-        exit 0
         ;;
     *)
         exit 2

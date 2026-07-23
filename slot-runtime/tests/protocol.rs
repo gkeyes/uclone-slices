@@ -7,10 +7,10 @@
 use uclone_slot_runtime::domain::{PackageName, SlotId};
 use uclone_slot_runtime::lifecycle::LifecycleState;
 use uclone_slot_runtime::protocol::{
-    ALLOWED_PACKAGE, Ack, AckOperation, Command, ErrorCode, MAX_FRAME_SIZE, PackageStatus,
-    ProbeReport, ProtocolError, ReconcileOutcome, ReconcileReport, Request, RequestId, Response,
-    ResponsePayload, ResponseStatus, SCHEMA_VERSION, SwitchResult, decode_request, decode_response,
-    encode_request, encode_response,
+    ALLOWED_PACKAGE, Ack, AckOperation, Command, ErrorCode, LaunchResult, LaunchStatus,
+    MAX_FRAME_SIZE, PackageStatus, ProbeReport, ProtocolError, ReconcileOutcome, ReconcileReport,
+    RecoveryTargetsReport, Request, RequestId, Response, ResponsePayload, ResponseStatus,
+    SCHEMA_VERSION, SwitchResult, decode_request, decode_response, encode_request, encode_response,
 };
 use uclone_slot_runtime::reconcile::ReconcileReason;
 use uclone_slot_runtime::slot_metadata::{SlotDisplayName, SlotSeedMode};
@@ -36,11 +36,13 @@ fn all_fixed_commands_round_trip_as_strict_json_lines() {
         Command::Probe,
         Command::InspectPackage { package: allowed() },
         Command::ListManagedApps,
+        Command::ListRecoveryTargets,
         Command::EnrollPackage {
             package: allowed(),
             accept_direct_boot_conditional: false,
         },
         Command::StatusPackage { package: allowed() },
+        Command::PackageSnapshot { package: allowed() },
         Command::CreateSlot {
             package: allowed(),
             display_name: label.clone(),
@@ -50,6 +52,10 @@ fn all_fixed_commands_round_trip_as_strict_json_lines() {
         Command::Switch {
             package: allowed(),
             slot: slot.clone(),
+        },
+        Command::LaunchCurrent {
+            package: allowed(),
+            expected_slot: slot.clone(),
         },
         Command::RenameSlot {
             package: allowed(),
@@ -138,9 +144,22 @@ fn response_round_trip_has_typed_status_and_error_code() {
 }
 
 #[test]
+fn probe_defaults_legacy_runtime_mode_to_ordinary() {
+    let legacy = br#"{"schema_version":2,"request_id":"r1","status":"ok","payload":{"kind":"probe_report","data":{"ready":true,"user_unlocked":true,"ce_de_supported":true,"runtime_version":"0.3.0-preview.0","build_id":"development"}}}
+"#;
+
+    let decoded = decode_response(legacy).unwrap();
+
+    assert!(matches!(
+        decoded.payload(),
+        Some(ResponsePayload::ProbeReport(report)) if !report.recovery_only()
+    ));
+}
+
+#[test]
 fn success_payloads_are_typed_bounded_and_round_trip() {
     let payloads = [
-        ResponsePayload::ProbeReport(ProbeReport::new(true, true, true)),
+        ResponsePayload::ProbeReport(ProbeReport::new(true, true, true, false)),
         ResponsePayload::PackageStatus(PackageStatus::new(
             allowed(),
             SlotId::base(),
@@ -152,6 +171,12 @@ fn success_payloads_are_typed_bounded_and_round_trip() {
             allowed(),
             SlotId::parse("slot_a").unwrap(),
         )),
+        ResponsePayload::LaunchResult(LaunchResult::new(
+            allowed(),
+            SlotId::parse("slot_a").unwrap(),
+            LaunchStatus::EntryNotFound,
+        )),
+        ResponsePayload::RecoveryTargets(RecoveryTargetsReport::new(vec![allowed()])),
         ResponsePayload::ReconcileReport(ReconcileReport::new(
             allowed(),
             ReconcileOutcome::RecoveryRequired {
@@ -163,10 +188,37 @@ fn success_payloads_are_typed_bounded_and_round_trip() {
 
     for (index, payload) in payloads.into_iter().enumerate() {
         let response = Response::ok(id(&format!("payload-{index}")), payload).unwrap();
-        let decoded = decode_response(&encode_response(&response).unwrap()).unwrap();
+        let frame = encode_response(&response).unwrap();
+        if index == 0 {
+            assert!(
+                std::str::from_utf8(&frame)
+                    .unwrap()
+                    .contains(r#""recovery_only":false"#)
+            );
+        }
+        let decoded = decode_response(&frame).unwrap();
         assert_eq!(decoded, response);
         assert!(decoded.payload().is_some());
     }
+}
+
+#[test]
+fn recovery_targets_are_bounded_and_reject_path_shaped_values() {
+    let targets = (0..65)
+        .map(|index| package(&format!("com.example.app{index}")))
+        .collect();
+    let oversized = ResponsePayload::RecoveryTargets(RecoveryTargetsReport::new(targets));
+    assert!(matches!(
+        Response::ok(id("too-many-targets"), oversized),
+        Err(ProtocolError::InvalidResponse)
+    ));
+
+    let unsafe_target = br#"{"schema_version":2,"request_id":"r1","status":"ok","payload":{"kind":"recovery_targets","data":{"targets":["../../data"]}}}
+"#;
+    assert!(matches!(
+        decode_response(unsafe_target),
+        Err(ProtocolError::Json(_))
+    ));
 }
 
 #[test]

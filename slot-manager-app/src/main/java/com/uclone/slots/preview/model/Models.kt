@@ -108,10 +108,38 @@ enum class RuntimeHealth {
     Checking,
     Ready,
     ModuleMissing,
+    PairMismatch,
     DaemonOffline,
     UserLocked,
     Unsupported,
-    RecoveryRequired,
+    RecoveryRequired;
+
+    companion object {
+        fun fromProbe(
+            recoveryOnly: Boolean,
+            userUnlocked: Boolean,
+            ready: Boolean,
+            ceDeSupported: Boolean,
+        ): RuntimeHealth = when {
+            recoveryOnly -> RecoveryRequired
+            !userUnlocked -> UserLocked
+            ready && ceDeSupported -> Ready
+            else -> Unsupported
+        }
+    }
+}
+
+enum class RuntimeMode {
+    Ordinary,
+    RecoveryOnly;
+
+    val allowsReconcile: Boolean get() = this == Ordinary
+    val allowsBaseRescue: Boolean get() = true
+
+    companion object {
+        fun fromProbe(recoveryOnly: Boolean): RuntimeMode =
+            if (recoveryOnly) RecoveryOnly else Ordinary
+    }
 }
 
 sealed interface Destination {
@@ -120,6 +148,7 @@ sealed interface Destination {
     data object Settings : Destination
     data object Runtime : Destination
     data object AddApp : Destination
+    data object RescueApp : Destination
     data class Detail(val packageName: String) : Destination
 }
 

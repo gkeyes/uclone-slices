@@ -2,7 +2,10 @@
 #![allow(clippy::doc_markdown)]
 
 mod client;
+mod client_validation;
 mod device;
+mod error;
+mod launch_command;
 mod payload;
 mod protocol;
 mod response;
@@ -11,15 +14,15 @@ mod validation;
 
 pub use client::BridgeClient;
 pub use device::DeviceSnapshot;
+pub use error::{BridgeError, BridgeErrorCode};
 pub use payload::{AckPayload, BridgeGateSnapshot, BridgePayload};
 pub use protocol::PackageSnapshot;
 pub use response::{BridgeResponse, decode_response};
 pub use runner::{AppProcessRunner, BridgeCommandRunner, BridgeRunnerError};
 
-use std::fmt;
-
 pub use crate::domain::PackageEnabledState;
 use crate::domain::PackageName;
+use crate::domain::{AppIdentity, DataInodes};
 
 /// Current bridge response schema.
 pub const BRIDGE_SCHEMA_VERSION: u32 = 1;
@@ -46,10 +49,39 @@ pub enum BridgeCommand {
     PackageStatus(PackageName),
     /// Read only a validated package's enabled and suspended state.
     GateStatus(PackageName),
+    /// Open only the enrolled identity's system-resolved launcher activity.
+    LaunchPackage {
+        /// Validated package identifier.
+        package: PackageName,
+        /// Enrolled UID, signing digest, and version checked immediately before start.
+        expected_identity: AppIdentity,
+        /// Immutable native Base CE/DE inode anchors checked immediately before start.
+        expected_base_inodes: DataInodes,
+    },
     /// Set a validated package's enabled-state enum for user 0.
     SetEnabled(PackageName, PackageEnabledState),
-    /// Set a validated package's suspension state for user 0.
-    SetSuspended(PackageName, bool),
+    /// Restore enabled state only while the complete enrolled contract still matches.
+    RestoreEnabled {
+        /// Validated package identifier.
+        package: PackageName,
+        /// Exact enabled state captured before gate acquisition.
+        state: PackageEnabledState,
+        /// Enrolled UID, signing digest, version, and code path.
+        expected_identity: AppIdentity,
+        /// Immutable native Base CE/DE inode anchors.
+        expected_base_inodes: DataInodes,
+    },
+    /// Restore suspension only while the complete enrolled contract still matches.
+    RestoreSuspended {
+        /// Validated package identifier.
+        package: PackageName,
+        /// Exact suspension state captured before gate acquisition.
+        suspended: bool,
+        /// Enrolled UID, signing digest, version, and code path.
+        expected_identity: AppIdentity,
+        /// Immutable native Base CE/DE inode anchors.
+        expected_base_inodes: DataInodes,
+    },
 }
 
 impl BridgeCommand {
@@ -59,6 +91,11 @@ impl BridgeCommand {
             Self::DeviceStatus => fixed_args("probe-device"),
             Self::PackageStatus(package) => package_args("probe-package", package),
             Self::GateStatus(package) => package_args("probe-gate", package),
+            Self::LaunchPackage {
+                package,
+                expected_identity,
+                expected_base_inodes,
+            } => launch_command::launch_args(package, expected_identity, *expected_base_inodes),
             Self::SetEnabled(package, state) => vec![
                 "/system/bin".into(),
                 BRIDGE_MAIN_CLASS.into(),
@@ -66,13 +103,28 @@ impl BridgeCommand {
                 package.as_str().into(),
                 enabled_state_arg(*state).into(),
             ],
-            Self::SetSuspended(package, suspended) => vec![
-                "/system/bin".into(),
-                BRIDGE_MAIN_CLASS.into(),
-                "set-suspended".into(),
-                package.as_str().into(),
-                if *suspended { "true" } else { "false" }.into(),
-            ],
+            Self::RestoreEnabled {
+                package,
+                state,
+                expected_identity,
+                expected_base_inodes,
+            } => launch_command::restore_enabled_args(
+                package,
+                *state,
+                expected_identity,
+                *expected_base_inodes,
+            ),
+            Self::RestoreSuspended {
+                package,
+                suspended,
+                expected_identity,
+                expected_base_inodes,
+            } => launch_command::restore_suspended_args(
+                package,
+                *suspended,
+                expected_identity,
+                *expected_base_inodes,
+            ),
         }
     }
 
@@ -94,8 +146,10 @@ impl BridgeCommand {
             Self::DeviceStatus => "device",
             Self::PackageStatus(_) => "package",
             Self::GateStatus(_) => "gate",
+            Self::LaunchPackage { .. } => "launch-package",
             Self::SetEnabled(_, _) => "set-enabled",
-            Self::SetSuspended(_, _) => "set-suspended",
+            Self::RestoreEnabled { .. } => "restore-enabled",
+            Self::RestoreSuspended { .. } => "restore-suspended",
         }
     }
 
@@ -105,7 +159,10 @@ impl BridgeCommand {
             Self::DeviceStatus => "device",
             Self::PackageStatus(_) => "package",
             Self::GateStatus(_) => "gate",
-            Self::SetEnabled(_, _) | Self::SetSuspended(_, _) => "ack",
+            Self::LaunchPackage { .. } => "ack",
+            Self::SetEnabled(_, _)
+            | Self::RestoreEnabled { .. }
+            | Self::RestoreSuspended { .. } => "ack",
         }
     }
 }
@@ -127,7 +184,7 @@ fn package_args(operation: &str, package: &PackageName) -> Vec<String> {
     ]
 }
 
-const fn enabled_state_arg(state: PackageEnabledState) -> &'static str {
+pub(super) const fn enabled_state_arg(state: PackageEnabledState) -> &'static str {
     match state {
         PackageEnabledState::Default => "default",
         PackageEnabledState::Enabled => "enabled",
@@ -135,94 +192,4 @@ const fn enabled_state_arg(state: PackageEnabledState) -> &'static str {
         PackageEnabledState::DisabledUser => "disabled_user",
         PackageEnabledState::DisabledUntilUsed => "disabled_until_used",
     }
-}
-
-/// Stable machine-readable bridge failure code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BridgeErrorCode {
-    /// A locally supplied package, user, or command request was rejected.
-    InvalidRequest,
-    /// The package is outside the fixed allowlist.
-    PackageNotAllowed,
-    /// The user is outside the fixed user-0 boundary.
-    UserNotAllowed,
-    /// The response was not valid bridge JSON or failed semantic validation.
-    InvalidResponse,
-    /// The response request id did not match the fixed command.
-    RequestMismatch,
-    /// The child emitted more than the 16 KiB response budget.
-    ResponseTooLarge,
-    /// The fixed app_process could not be started or read.
-    RunnerUnavailable,
-    /// The fixed app_process exited unsuccessfully.
-    CommandFailed,
-    /// The fixed app_process exceeded its execution deadline.
-    TimedOut,
-    /// The device is credential locked for a command that requires unlock.
-    DeviceLocked,
-    /// PackageManager did not report the allowlisted package.
-    PackageNotFound,
-    /// PackageManager reported a pending install session.
-    PendingSession,
-    /// The bridge reported an otherwise unclassified failure.
-    Internal,
-}
-
-impl BridgeErrorCode {
-    /// Returns the stable wire spelling of this code.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::InvalidRequest => "invalid_request",
-            Self::PackageNotAllowed => "package_not_allowed",
-            Self::UserNotAllowed => "user_not_allowed",
-            Self::InvalidResponse => "invalid_response",
-            Self::RequestMismatch => "request_mismatch",
-            Self::ResponseTooLarge => "response_too_large",
-            Self::RunnerUnavailable => "runner_unavailable",
-            Self::CommandFailed => "command_failed",
-            Self::TimedOut => "timed_out",
-            Self::DeviceLocked => "device_locked",
-            Self::PackageNotFound => "package_not_found",
-            Self::PendingSession => "pending_session",
-            Self::Internal => "internal",
-        }
-    }
-}
-
-impl fmt::Display for BridgeErrorCode {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Error returned by the typed bridge client.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{code}: {message}")]
-pub struct BridgeError {
-    code: BridgeErrorCode,
-    message: String,
-}
-
-impl BridgeError {
-    pub(crate) fn new(code: BridgeErrorCode, message: impl Into<String>) -> Self {
-        Self {
-            code,
-            message: message.into(),
-        }
-    }
-
-    /// Returns the stable machine-readable code.
-    pub const fn code(&self) -> BridgeErrorCode {
-        self.code
-    }
-
-    /// Returns a human-readable diagnostic without exposing child shell text.
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-pub(crate) fn invalid_response(message: impl Into<String>) -> BridgeError {
-    BridgeError::new(BridgeErrorCode::InvalidResponse, message)
 }

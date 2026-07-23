@@ -78,6 +78,10 @@ final class PackageReader {
         packageInfo(0, requestId);
     }
 
+    String packageName() {
+        return packageName;
+    }
+
     void flushRestrictions(String requestId) throws BridgeFailure {
         BinderInvoke.call(
                 packageManager,
@@ -235,9 +239,5 @@ final class PackageReader {
 
     private static ErrorCode remoteFailure(String requestId) {
         return "package".equals(requestId) ? ErrorCode.INTERNAL : ErrorCode.COMMAND_FAILED;
-    }
-
-    String packageName() {
-        return packageName;
     }
 }

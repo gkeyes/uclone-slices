@@ -11,6 +11,7 @@ use super::EnrollmentError;
 pub struct EnrollmentNameScan {
     package_names: Vec<PackageName>,
     corrupt_artifact: bool,
+    unattributed_corruption: bool,
 }
 
 impl EnrollmentNameScan {
@@ -22,6 +23,11 @@ impl EnrollmentNameScan {
     #[doc = "Returns whether any unrecognizable directory artifact was observed."]
     pub const fn corrupt_artifact(&self) -> bool {
         self.corrupt_artifact
+    }
+
+    /// Returns whether an invalid artifact had no recognizable package owner.
+    pub const fn unattributed_corruption(&self) -> bool {
+        self.unattributed_corruption
     }
 }
 
@@ -67,14 +73,17 @@ pub(super) fn scan_package_names(
         .map_err(|source| EnrollmentError::io("read enrollment packages", root, source))?;
     let mut package_names = Vec::new();
     let mut corrupt_artifact = false;
+    let mut unattributed_corruption = false;
     for entry in entries {
         let Ok(entry) = entry else {
             corrupt_artifact = true;
+            unattributed_corruption = true;
             continue;
         };
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             corrupt_artifact = true;
+            unattributed_corruption = true;
             continue;
         };
         match PackageName::parse(name) {
@@ -86,7 +95,10 @@ pub(super) fn scan_package_names(
                 }
                 package_names.push(package_name);
             }
-            Err(_) => corrupt_artifact = true,
+            Err(_) => {
+                corrupt_artifact = true;
+                unattributed_corruption = true;
+            }
         }
     }
     package_names.sort();
@@ -94,6 +106,7 @@ pub(super) fn scan_package_names(
     Ok(EnrollmentNameScan {
         package_names,
         corrupt_artifact,
+        unattributed_corruption,
     })
 }
 

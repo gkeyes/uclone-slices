@@ -19,11 +19,19 @@ where
     F: RescueFaultInjector,
 {
     fn probe(&self) -> Result<CapabilitySnapshot, ServiceError> {
-        Ok(CapabilitySnapshot::new(false, false, true))
+        Ok(CapabilitySnapshot::new(false, false, true, true))
     }
 
-    fn package_state(&self, _key: &PackageKey) -> Result<PackageState, ServiceError> {
-        Ok(PackageState::RecoveryRequired)
+    fn package_state(&self, key: &PackageKey) -> Result<PackageState, ServiceError> {
+        if self.accepts_recovery_target(key) {
+            Err(ServiceError::RecoveryRequired)
+        } else {
+            Err(ServiceError::NotFound)
+        }
+    }
+
+    fn list_recovery_targets(&self) -> Result<Vec<crate::domain::PackageName>, ServiceError> {
+        Ok(self.recovery_targets())
     }
 
     fn capture_gate(&mut self, _key: &PackageKey) -> Result<GateSnapshot, ServiceError> {
@@ -116,6 +124,9 @@ where
     }
 
     fn reconcile_two_phase(&mut self, key: &PackageKey) -> Result<ReconcileOutcome, ServiceError> {
+        if !self.accepts_recovery_target(key) {
+            return Err(ServiceError::NotFound);
+        }
         Ok(match self.reconcile_startup(key) {
             RescueStartup::BaseRetired => ReconcileOutcome::RestoredBase,
             RescueStartup::Quarantined => ReconcileOutcome::Quarantined,
@@ -129,6 +140,9 @@ where
     }
 
     fn rescue_to_base(&mut self, key: &PackageKey) -> Result<RescueExecution, ServiceError> {
+        if !self.accepts_recovery_target(key) {
+            return Err(ServiceError::NotFound);
+        }
         Ok(Self::rescue_to_base(self, key))
     }
 }

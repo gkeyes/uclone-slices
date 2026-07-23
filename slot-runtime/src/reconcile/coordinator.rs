@@ -67,6 +67,12 @@ impl<B: RecoveryBackend> Reconciler<B> {
             return Ok(ReconcileReport::new(results));
         }
         let scan = self.enrollment.package_names()?;
+        if matches!(&self.scope, ReconcileScope::Package(_)) && scan.unattributed_corruption() {
+            return Err(crate::enrollment::EnrollmentError::Corrupt(
+                "unattributed enrollment artifact".to_owned(),
+            )
+            .into());
+        }
         let mut package_names = scan.package_names().to_vec();
         package_names.extend(
             self.backend
@@ -79,11 +85,20 @@ impl<B: RecoveryBackend> Reconciler<B> {
             package_names.retain(|candidate| candidate == package);
         }
         let snapshots = self.emergency_gate_discovered(&package_names)?;
-        let mut packages = self.enrollment.list()?;
-        if let ReconcileScope::Package(package) = &self.scope {
-            packages.retain(|candidate| candidate.package_name() == package);
-        }
-        let transactions = self.journal.list().ok();
+        let packages = match &self.scope {
+            ReconcileScope::All => self.enrollment.list()?,
+            ReconcileScope::Package(package) => {
+                self.enrollment.load(package)?.into_iter().collect()
+            }
+        };
+        let transactions = match &self.scope {
+            ReconcileScope::All => self.journal.list().ok(),
+            ReconcileScope::Package(package) => {
+                let key =
+                    crate::domain::PackageKey::new(package.clone(), crate::domain::UserId::PRIMARY);
+                self.journal.list_for_package(&key).ok()
+            }
+        };
         self.orphaned = snapshots
             .keys()
             .filter(|name| {

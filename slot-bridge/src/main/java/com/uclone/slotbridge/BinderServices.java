@@ -7,19 +7,27 @@ import java.lang.reflect.Method;
 final class BinderServices {
     private final Object packageManager;
     private final Object userManager;
+    private final Connector connector;
+    private Object activityTaskManager;
 
-    private BinderServices(Object packageManager, Object userManager) {
+    private BinderServices(Object packageManager, Object userManager, Connector connector) {
         this.packageManager = packageManager;
         this.userManager = userManager;
+        this.connector = connector;
     }
 
     static BinderServices connect() throws BridgeFailure {
+        return connect(BinderServices::connectService);
+    }
+
+    static BinderServices connect(Connector connector) throws BridgeFailure {
         return new BinderServices(
-                connectService(
+                connector.connect(
                         "package",
                         "android.content.pm.IPackageManager$Stub",
                         "package"),
-                connectService("user", "android.os.IUserManager$Stub", "device"));
+                connector.connect("user", "android.os.IUserManager$Stub", "device"),
+                connector);
     }
 
     Object packageManager() {
@@ -28,6 +36,21 @@ final class BinderServices {
 
     Object userManager() {
         return userManager;
+    }
+
+    Object activityTaskManager() throws BridgeFailure {
+        if (activityTaskManager == null) {
+            activityTaskManager = connector.connect(
+                    "activity_task",
+                    "android.app.IActivityTaskManager$Stub",
+                    "launch-package");
+        }
+        return activityTaskManager;
+    }
+
+    interface Connector {
+        Object connect(String serviceName, String stubName, String requestId)
+                throws BridgeFailure;
     }
 
     @SuppressLint("PrivateApi")

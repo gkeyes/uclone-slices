@@ -55,6 +55,14 @@ public final class JsonLineTest {
     }
 
     @Test
+    public void launchAcknowledgementUsesItsFixedRequestId() throws BridgeFailure {
+        assertEquals(
+                "{\"schemaVersion\":1,\"requestId\":\"launch-package\",\"ok\":true,"
+                        + "\"payload\":{\"type\":\"ack\"}}\n",
+                JsonLine.ack("launch-package"));
+    }
+
+    @Test
     public void rejectsFrameWhenUtf8OutputExceedsBudget() throws BridgeFailure {
         PackageSnapshot snapshot = fixture("x".repeat(JsonLine.MAX_OUTPUT_BYTES));
 

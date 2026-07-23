@@ -15,10 +15,12 @@ class RuntimeRepository(private val client: RpcClient = RootRpcClient()) : Runti
         }
     }
     override suspend fun inspect(packageName: String) =
-        pairedCall(RuntimeRequest("inspect_package", packageName), READ_TIMEOUT)
+        client.call(RuntimeRequest("inspect_package", packageName), READ_TIMEOUT)
     override suspend fun listManaged() =
-        pairedCall(RuntimeRequest("list_managed_apps"), READ_TIMEOUT)
-    override suspend fun enroll(packageName: String, acceptDirectBootConditional: Boolean) = pairedCall(
+        client.call(RuntimeRequest("list_managed_apps"), READ_TIMEOUT)
+    override suspend fun listRecoveryTargets() =
+        client.call(RuntimeRequest("list_recovery_targets"), READ_TIMEOUT)
+    override suspend fun enroll(packageName: String, acceptDirectBootConditional: Boolean) = client.call(
         RuntimeRequest(
             command = "enroll_package",
             packageName = packageName,
@@ -27,11 +29,13 @@ class RuntimeRepository(private val client: RpcClient = RootRpcClient()) : Runti
         MUTATION_TIMEOUT,
     )
     override suspend fun status(packageName: String) =
-        pairedCall(RuntimeRequest("status_package", packageName), READ_TIMEOUT)
+        client.call(RuntimeRequest("status_package", packageName), READ_TIMEOUT)
     override suspend fun listSlots(packageName: String) =
-        pairedCall(RuntimeRequest("list_slots", packageName), READ_TIMEOUT)
+        client.call(RuntimeRequest("list_slots", packageName), READ_TIMEOUT)
+    override suspend fun packageSnapshot(packageName: String) =
+        client.call(RuntimeRequest("package_snapshot", packageName), READ_TIMEOUT)
 
-    override suspend fun createSlot(packageName: String, name: String, blank: Boolean) = pairedCall(
+    override suspend fun createSlot(packageName: String, name: String, blank: Boolean) = client.call(
         RuntimeRequest(
             command = "create_slot",
             packageName = packageName,
@@ -41,39 +45,30 @@ class RuntimeRepository(private val client: RpcClient = RootRpcClient()) : Runti
         CREATE_TIMEOUT,
     )
 
-    override suspend fun switch(packageName: String, slotId: String) = pairedCall(
+    override suspend fun switchSlot(packageName: String, slotId: String) = client.call(
         RuntimeRequest("switch", packageName, slotId),
         MUTATION_TIMEOUT,
     )
 
-    override suspend fun rename(packageName: String, slotId: String, name: String) = pairedCall(
+    override suspend fun launchCurrent(packageName: String, expectedSlot: String) = client.call(
+        RuntimeRequest("launch_current", packageName, expectedSlot),
+        MUTATION_TIMEOUT,
+    )
+
+    override suspend fun rename(packageName: String, slotId: String, name: String) = client.call(
         RuntimeRequest("rename_slot", packageName, slotId, name),
         MUTATION_TIMEOUT,
     )
 
-    override suspend fun delete(packageName: String, slotId: String) = pairedCall(
+    override suspend fun delete(packageName: String, slotId: String) = client.call(
         RuntimeRequest("delete_slot", packageName, slotId),
         MUTATION_TIMEOUT,
     )
 
     override suspend fun reconcile(packageName: String) =
-        pairedCall(RuntimeRequest("reconcile_package", packageName), MUTATION_TIMEOUT)
+        client.call(RuntimeRequest("reconcile_package", packageName), MUTATION_TIMEOUT)
     override suspend fun rescue(packageName: String) =
         client.call(RuntimeRequest("rescue_to_base", packageName), RESCUE_TIMEOUT)
-
-    private suspend fun pairedCall(
-        request: RuntimeRequest,
-        timeout: Long,
-    ): RuntimeResult {
-        val pairing = probe()
-        val report = (pairing as? RuntimeResult.Success)?.payload as? RuntimePayload.Probe
-            ?: return pairing
-        if (!report.userUnlocked) return RuntimeResult.Rejected("user_locked")
-        if (!report.ready || !report.ceDeSupported) {
-            return RuntimeResult.Rejected("unsupported_device")
-        }
-        return client.call(request, timeout)
-    }
 
     private companion object {
         const val READ_TIMEOUT = 30_000L

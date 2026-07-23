@@ -47,6 +47,7 @@ object RuntimeProtocol {
                 data.getBoolean("ce_de_supported"),
                 data.getString("runtime_version"),
                 data.getString("build_id"),
+                data.optBoolean("recovery_only", false),
             )
             "package_inspection" -> RuntimePayload.Inspection(parseInspection(data))
             "managed_apps" -> RuntimePayload.ManagedApps(
@@ -62,6 +63,11 @@ object RuntimeProtocol {
                     }
                 },
             )
+            "recovery_targets" -> RuntimePayload.RecoveryTargets(
+                data.getJSONArray("targets").let { array ->
+                    List(array.length()) { index -> array.getString(index) }
+                },
+            )
             "slots" -> RuntimePayload.Slots(
                 data.getString("package"),
                 data.getJSONArray("slots").let { array ->
@@ -69,9 +75,15 @@ object RuntimeProtocol {
                 },
             )
             "package_status" -> RuntimePayload.Status(parseStatus(data))
+            "package_snapshot" -> parsePackageSnapshot(data)
             "switch_result" -> RuntimePayload.Switch(
                 data.getString("package"),
                 data.getString("slot"),
+            )
+            "launch_result" -> RuntimePayload.Launch(
+                data.getString("package"),
+                data.getString("slot"),
+                data.getString("launch_status"),
             )
             "reconcile_report" -> RuntimePayload.Reconcile(
                 data.getString("package"),
@@ -110,6 +122,22 @@ object RuntimeProtocol {
             inodes.getLong("ce"),
             inodes.getLong("de"),
         )
+    }
+
+    private fun parseSlots(data: JSONObject): List<SlotSpace> =
+        data.getJSONArray("slots").let { array ->
+            List(array.length()) { parseSlot(array.getJSONObject(it)) }
+        }
+
+    private fun parsePackageSnapshot(data: JSONObject): RuntimePayload.PackageSnapshot {
+        val status = parseStatus(data.getJSONObject("status"))
+        val slotsData = data.getJSONObject("slots")
+        val slots = parseSlots(slotsData)
+        require(slotsData.getString("package") == status.packageName)
+        require(slots.map { it.id }.distinct().size == slots.size)
+        require(slots.count { it.active } == 1)
+        require(slots.single { it.active }.let { it.id == status.activeSlot && it.state == "ready" })
+        return RuntimePayload.PackageSnapshot(status, slots)
     }
 
     private const val SCHEMA_VERSION = 2

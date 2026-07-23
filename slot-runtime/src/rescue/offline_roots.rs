@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
+use super::anchors::RescueAnchors;
+use super::{RescueError, RescueJournalStore};
 use crate::domain::{PackageKey, UserId};
 use crate::journal::JournalStore;
 use crate::layout::RuntimeLayout;
@@ -45,7 +47,7 @@ pub(super) fn management_artifacts_present(
     roots: &RescueRoots,
     key: &PackageKey,
 ) -> Result<bool, crate::rescue::RescueError> {
-    if ordinary_journal_mentions_package(roots, key) {
+    if ordinary_journal_mentions_package(roots, key)? {
         return Ok(true);
     }
     let package = key.package_name().as_str();
@@ -117,25 +119,62 @@ pub(super) fn management_artifacts_present(
     Ok(false)
 }
 
-fn ordinary_journal_mentions_package(roots: &RescueRoots, key: &PackageKey) -> bool {
+pub(super) fn typed_target_evidence(
+    roots: &RescueRoots,
+    key: &PackageKey,
+) -> Result<bool, RescueError> {
+    let rescue = match RescueJournalStore::for_package(&roots.journal, key.package_name())
+        .and_then(|store| store.load())
+    {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(error) => {
+            if RescueAnchors::load(&roots.enrollment, &roots.catalog, key).is_ok() {
+                return Ok(true);
+            }
+            return Err(error);
+        }
+    };
+    if rescue || RescueAnchors::load(&roots.enrollment, &roots.catalog, key).is_ok() {
+        return Ok(true);
+    }
+    match ordinary_journal_mentions_package(roots, key) {
+        Ok(_) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+pub(super) fn ordinary_journal_mentions_package(
+    roots: &RescueRoots,
+    key: &PackageKey,
+) -> Result<bool, crate::rescue::RescueError> {
     let journal_root = roots.management.join("journal");
     let transactions = journal_root.join("transactions");
     match fs::symlink_metadata(&transactions) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return false,
-        Err(_) => return true,
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => return true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(crate::rescue::RescueError::io(
+                "inspect ordinary journal transactions",
+                &transactions,
+                error,
+            ));
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(crate::rescue::RescueError::Corrupt(
+                "ordinary journal transactions is not a trusted directory".to_owned(),
+            ));
+        }
         Ok(_) => {}
     }
-    let Ok(store) = JournalStore::new(&journal_root) else {
-        return true;
-    };
-    let Ok(transactions) = store.list() else {
-        return true;
-    };
-    transactions.iter().any(|transaction| {
-        transaction.spec().package_name() == key.package_name()
-            && transaction.spec().user_id() == key.user_id()
-    })
+    let store = JournalStore::new(&journal_root).map_err(|error| {
+        crate::rescue::RescueError::Corrupt(format!("ordinary journal validation failed: {error}"))
+    })?;
+    let transactions = store.list_for_package(key).map_err(|error| {
+        crate::rescue::RescueError::Corrupt(format!(
+            "ordinary journal package attribution failed: {error}"
+        ))
+    })?;
+    Ok(!transactions.is_empty())
 }
 
 pub(super) fn supported(key: &PackageKey) -> bool {

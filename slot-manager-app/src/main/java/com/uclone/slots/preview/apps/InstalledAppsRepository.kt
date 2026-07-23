@@ -7,9 +7,11 @@ import android.content.pm.PackageManager
 import com.uclone.slots.preview.model.InstalledApp
 
 class InstalledAppsRepository(private val context: Context) {
-    fun launcherApps(): List<InstalledApp> {
+    fun launcherApps(includeDisabled: Boolean = false): List<InstalledApp> {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        return context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+        val flags = PackageManager.MATCH_ALL or
+            if (includeDisabled) PackageManager.MATCH_DISABLED_COMPONENTS else 0
+        return context.packageManager.queryIntentActivities(intent, flags)
             .asSequence()
             .mapNotNull { it.activityInfo?.applicationInfo }
             .filter { it.packageName != context.packageName }
@@ -35,6 +37,11 @@ class InstalledAppsRepository(private val context: Context) {
     fun rememberManaged(packageNames: Collection<String>) {
         val safe = packageNames.asSequence().filter(::isSafePackage).take(MAX_MANAGED).toSet()
         preferences.edit().putStringSet(MANAGED_PACKAGES, safe).apply()
+    }
+
+    fun forgetManaged(packageName: String) {
+        val updated = cachedManaged().filterNot { it == packageName }.toSet()
+        preferences.edit().putStringSet(MANAGED_PACKAGES, updated).apply()
     }
 
     fun cachedManaged(): List<String> = preferences

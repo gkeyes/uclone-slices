@@ -5,15 +5,19 @@ mod containment;
 mod enrollment;
 mod enrollment_capability;
 mod enrollment_ops;
+mod launch_verification;
+mod managed_names;
 mod management;
 mod mapping;
 mod metadata;
 mod reconciliation;
 mod reconciliation_clean;
+mod reconciliation_flow;
 mod reconciliation_pending;
 mod reconciliation_policy;
 mod reconciliation_safety;
 mod reconciliation_validation;
+mod recovery_overrides;
 mod rescue;
 mod slot_lifecycle;
 mod state;
@@ -26,11 +30,18 @@ pub use metadata::{MetadataSource, SystemMetadataSource};
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "validated production test fixtures")]
 mod tests {
+    mod active_slot_metadata;
     mod direct_boot_reconcile;
+    mod dynamic_slot_reconcile;
     mod enrollment_recheck;
     mod legacy_slot_lifecycle;
+    mod multi_app_isolation;
     mod orphan_gate;
     mod publication_digest;
+    mod registry_journal_isolation;
+    mod rescue_state;
+    mod slot_failure_recovery;
+    mod slot_lifecycle_support;
 
     use std::fs;
     use std::os::unix::fs::PermissionsExt as _;
@@ -82,6 +93,7 @@ mod tests {
             probe: std::cell::RefCell::new(SystemPackageProbe::new()),
             metadata: SystemMetadataSource::new(),
             stores,
+            recovery_overrides: Default::default(),
         };
         let package = PackageName::parse(ALLOWED_PACKAGE).unwrap();
         let key = PackageKey::new(package, UserId::PRIMARY);

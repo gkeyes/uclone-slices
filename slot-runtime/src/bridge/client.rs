@@ -1,8 +1,12 @@
+use super::client_validation::{
+    map_runner_error, payload_name, require_ack, require_package, require_user,
+    validate_package_snapshot,
+};
 use super::{
     ALLOWED_USER_ID, BridgeCommand, BridgeError, BridgeErrorCode, BridgePayload, BridgeResponse,
-    BridgeRunnerError, DeviceSnapshot, MAX_OUTPUT_BYTES, PackageEnabledState, PackageSnapshot,
+    DeviceSnapshot, MAX_OUTPUT_BYTES, PackageEnabledState, PackageSnapshot,
 };
-use crate::domain::PackageName;
+use crate::domain::{AppIdentity, DataInodes};
 
 /// Typed client that validates every request and response around an injected runner.
 #[derive(Debug)]
@@ -82,29 +86,80 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
         }
     }
 
-    /// Sets the fixed package's enabled-state enum for user 0.
+    /// Acquires the user-zero gate by setting only `DisabledUser`.
     pub fn set_enabled(
         &mut self,
         package: &str,
         user_id: u32,
         state: PackageEnabledState,
     ) -> Result<(), BridgeError> {
+        if state != PackageEnabledState::DisabledUser {
+            return Err(BridgeError::new(
+                BridgeErrorCode::InvalidRequest,
+                "unchecked enabled mutation may only acquire DisabledUser",
+            ));
+        }
         let package = require_package(package)?;
         require_user(user_id)?;
         let payload = self.execute(&BridgeCommand::SetEnabled(package, state))?;
         require_ack(&payload)
     }
 
-    /// Sets the fixed package's suspended state for user 0.
-    pub fn set_suspended(
+    /// Restores enabled state only when the complete enrolled contract still matches.
+    pub fn restore_enabled(
+        &mut self,
+        package: &str,
+        user_id: u32,
+        state: PackageEnabledState,
+        expected_identity: &AppIdentity,
+        expected_base_inodes: DataInodes,
+    ) -> Result<(), BridgeError> {
+        let package = require_package(package)?;
+        require_user(user_id)?;
+        let payload = self.execute(&BridgeCommand::RestoreEnabled {
+            package,
+            state,
+            expected_identity: expected_identity.clone(),
+            expected_base_inodes,
+        })?;
+        require_ack(&payload)
+    }
+
+    /// Restores suspension only when the complete enrolled contract still matches.
+    pub fn restore_suspended(
         &mut self,
         package: &str,
         user_id: u32,
         suspended: bool,
+        expected_identity: &AppIdentity,
+        expected_base_inodes: DataInodes,
     ) -> Result<(), BridgeError> {
         let package = require_package(package)?;
         require_user(user_id)?;
-        let payload = self.execute(&BridgeCommand::SetSuspended(package, suspended))?;
+        let payload = self.execute(&BridgeCommand::RestoreSuspended {
+            package,
+            suspended,
+            expected_identity: expected_identity.clone(),
+            expected_base_inodes,
+        })?;
+        require_ack(&payload)
+    }
+
+    /// Opens the validated package through its system-resolved user-zero launcher entry.
+    pub fn launch_package(
+        &mut self,
+        package: &str,
+        user_id: u32,
+        expected_identity: &AppIdentity,
+        expected_base_inodes: DataInodes,
+    ) -> Result<(), BridgeError> {
+        let package = require_package(package)?;
+        require_user(user_id)?;
+        let payload = self.execute(&BridgeCommand::LaunchPackage {
+            package,
+            expected_identity: expected_identity.clone(),
+            expected_base_inodes,
+        })?;
         require_ack(&payload)
     }
 
@@ -148,81 +203,5 @@ impl<R: super::BridgeCommandRunner> BridgeClient<R> {
             ));
         }
         Ok(payload)
-    }
-}
-
-fn require_package(package: &str) -> Result<PackageName, BridgeError> {
-    PackageName::parse(package).map_err(|_| {
-        BridgeError::new(
-            BridgeErrorCode::PackageNotAllowed,
-            "package identifier is not valid",
-        )
-    })
-}
-
-fn require_user(user_id: u32) -> Result<(), BridgeError> {
-    if user_id == ALLOWED_USER_ID {
-        Ok(())
-    } else {
-        Err(BridgeError::new(
-            BridgeErrorCode::UserNotAllowed,
-            "only Android user 0 is supported",
-        ))
-    }
-}
-
-fn validate_package_snapshot(
-    snapshot: PackageSnapshot,
-    expected: &PackageName,
-) -> Result<PackageSnapshot, BridgeError> {
-    let observed = require_package(snapshot.package_name())?;
-    if &observed != expected {
-        return Err(BridgeError::new(
-            BridgeErrorCode::RequestMismatch,
-            "package response does not match request",
-        ));
-    }
-    require_user(snapshot.user_id())?;
-    Ok(snapshot)
-}
-
-fn require_ack(payload: &BridgePayload) -> Result<(), BridgeError> {
-    if matches!(payload, BridgePayload::Ack(_)) {
-        Ok(())
-    } else {
-        Err(BridgeError::new(
-            BridgeErrorCode::InvalidResponse,
-            "mutation returned the wrong payload type",
-        ))
-    }
-}
-
-const fn payload_name(payload: &BridgePayload) -> &'static str {
-    match payload {
-        BridgePayload::Device(_) => "device",
-        BridgePayload::Package(_) => "package",
-        BridgePayload::Gate(_) => "gate",
-        BridgePayload::Ack(_) => "ack",
-    }
-}
-
-fn map_runner_error(error: &BridgeRunnerError) -> BridgeError {
-    match error {
-        BridgeRunnerError::Io(_) => BridgeError::new(
-            BridgeErrorCode::RunnerUnavailable,
-            "fixed app_process could not be executed",
-        ),
-        BridgeRunnerError::NonZeroExit { .. } => BridgeError::new(
-            BridgeErrorCode::CommandFailed,
-            "fixed app_process returned a non-zero status",
-        ),
-        BridgeRunnerError::TimedOut => BridgeError::new(
-            BridgeErrorCode::TimedOut,
-            "fixed app_process exceeded the five-second deadline",
-        ),
-        BridgeRunnerError::OutputTooLarge { size } => BridgeError::new(
-            BridgeErrorCode::ResponseTooLarge,
-            format!("fixed app_process response is {size} bytes"),
-        ),
     }
 }

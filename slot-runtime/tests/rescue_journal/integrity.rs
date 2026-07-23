@@ -7,7 +7,9 @@ use std::fs;
 use std::os::unix::fs::{PermissionsExt as _, symlink};
 
 use tempfile::TempDir;
+use uclone_slot_runtime::domain::PackageName;
 use uclone_slot_runtime::rescue::RescueEvent;
+use uclone_slot_runtime::rescue::RescueJournalStore;
 
 use super::support;
 
@@ -83,4 +85,22 @@ fn rejects_unknown_fields_and_accepts_another_valid_user_zero_package() {
     fs::write(&first, serde_json::to_vec(&json).unwrap()).unwrap();
     let error = store.load().unwrap_err();
     assert!(error.to_string().contains("unknown field"));
+}
+
+#[test]
+fn rejects_valid_other_package_journal_copied_under_this_package_path() {
+    let root = TempDir::new().unwrap();
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let package_a = PackageName::parse("com.uclone.slotprobe").unwrap();
+    let package_b = PackageName::parse("com.example.other").unwrap();
+    let store_a = RescueJournalStore::for_package(root.path(), &package_a).unwrap();
+    let store_b = RescueJournalStore::for_package(root.path(), &package_b).unwrap();
+    store_a.begin(&support::spec()).unwrap();
+    let spec_b = support::spec_for_package(package_b.as_str()).unwrap();
+    store_b.begin(&spec_b).unwrap();
+    fs::copy(store_b.step_path(1), store_a.step_path(1)).unwrap();
+
+    let error = store_a.load().unwrap_err();
+
+    assert!(error.to_string().contains("path identity mismatch"));
 }

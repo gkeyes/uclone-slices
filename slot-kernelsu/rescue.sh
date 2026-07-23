@@ -23,6 +23,9 @@ PACKAGE=
 USER_ID=$UCLONE_TARGET_USER
 SLOTCTL_BIN="$SCRIPT_DIR/bin/slotctl"
 TOYBOX_BIN=/system/bin/toybox
+SYSTEM_SHELL=/system/bin/sh
+FD_ROOT=/proc/self/fd
+FD_EXEC_INTERPRETER=
 CMD_BIN=/system/bin/cmd
 AM_BIN=/system/bin/am
 LOG_DIR="$RUNTIME_ROOT/logs"
@@ -41,6 +44,47 @@ safe_binary() {
     other=$((mode % 10))
     group=$(((mode / 10) % 10))
     [ $((other & 2)) -eq 0 ] && [ $((group & 2)) -eq 0 ]
+}
+
+file_digest() {
+    line="$($TOYBOX_BIN sha256sum "$1" 2>/dev/null)" || return 1
+    digest=${line%% *}
+    [ "${#digest}" -eq 64 ] || return 1
+    case "$digest" in *[!0-9a-f]*|'') return 1 ;; esac
+    printf '%s\n' "$digest"
+}
+
+pid1_mount_namespace() {
+    current="$($TOYBOX_BIN stat -L -c '%d:%i' /proc/self/ns/mnt 2>/dev/null)" || return 1
+    pid1="$($TOYBOX_BIN stat -L -c '%d:%i' /proc/1/ns/mnt 2>/dev/null)" || return 1
+    case "$current" in *[!0-9:]*|:*|*:|*:*:*) return 1 ;; esac
+    case "$pid1" in *[!0-9:]*|:*|*:|*:*:*) return 1 ;; esac
+    [ "$current" = "$pid1" ]
+}
+
+exec_trusted_binary() {
+    binary=$1
+    shift
+    safe_binary "$binary" || return 1
+    exec 9<"$binary" || return 1
+    descriptor=$FD_ROOT/9
+    [ -f "$descriptor" ] && [ -x "$descriptor" ] || return 1
+    owner="$($TOYBOX_BIN stat -L -c '%u:%g' "$descriptor" 2>/dev/null)" || return 1
+    case "$owner" in 0:*) ;; *) return 1 ;; esac
+    mode="$($TOYBOX_BIN stat -L -c '%a' "$descriptor" 2>/dev/null)" || return 1
+    case "$mode" in *[!0-7]*|'') return 1 ;; esac
+    [ $((mode % 10 & 2)) -eq 0 ] && [ $(((mode / 10) % 10 & 2)) -eq 0 ] || return 1
+    path_node="$($TOYBOX_BIN stat -L -c '%d:%i' "$binary" 2>/dev/null)" || return 1
+    descriptor_node="$($TOYBOX_BIN stat -L -c '%d:%i' "$descriptor" 2>/dev/null)" || return 1
+    case "$descriptor_node" in *[!0-9:]*|:*|*:|*:*:*) return 1 ;; esac
+    [ "$path_node" = "$descriptor_node" ] || return 1
+    path_digest="$(file_digest "$binary")" || return 1
+    descriptor_digest="$(file_digest "$descriptor")" || return 1
+    [ "$path_digest" = "$descriptor_digest" ] || return 1
+    if [ -n "$FD_EXEC_INTERPRETER" ]; then
+        exec "$FD_EXEC_INTERPRETER" "$descriptor" "$@"
+    fi
+    exec "$descriptor" "$@"
 }
 
 valid_package() {
@@ -107,6 +151,19 @@ fail_closed() {
     exit 1
 }
 
+if [ "${1:-}" = --pid1-slotctl ]; then
+    [ "$#" -eq 2 ] || exit 2
+    inner_package=$2
+    safe_binary "$TOYBOX_BIN" || exit 1
+    pid1_mount_namespace || exit 1
+    if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
+        valid_package "$inner_package" || exit 2
+    else
+        [ "$inner_package" = "$UCLONE_TARGET_PACKAGE" ] || exit 2
+    fi
+    exec_trusted_binary "$SLOTCTL_BIN" rescue "$inner_package" --to-base || exit 1
+fi
+
 first_arg="${1:-}"
 second_arg="${2:-}"
 if [ "$UCLONE_TARGET_PROFILE" = generic ]; then
@@ -132,11 +189,8 @@ fi
 if ! safe_binary "$TOYBOX_BIN"; then
     fail_closed "trusted toybox is unavailable"
 fi
-if ! safe_binary "$SLOTCTL_BIN"; then
-    fail_closed "trusted rescue runtime is unavailable"
-fi
-
-if "$TOYBOX_BIN" nsenter -t 1 -m -- "$SLOTCTL_BIN" rescue "$PACKAGE" --to-base >>"$LOG_DIR/rescue.log" 2>&1; then
+if "$TOYBOX_BIN" nsenter -t 1 -m -- "$SYSTEM_SHELL" "$SCRIPT_DIR/rescue.sh" \
+    --pid1-slotctl "$PACKAGE" >>"$LOG_DIR/rescue.log" 2>&1; then
     log "OK: slotctl proved base rescue and exact package state restoration"
     printf '%s\n' "UClone Slots rescue: base view restored; exact package state restored."
     exit 0

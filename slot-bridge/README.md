@@ -39,11 +39,25 @@ probe-package com.uclone.slotprobe
 
 CLASSPATH=/data/adb/uclone-slices-preview/runtime/slot-bridge.apk \
 /system/bin/app_process /system/bin com.uclone.slotbridge.Main \
+launch-package com.uclone.slotprobe 10321 \
+abababababababababababababababababababababababababababababababab 7 \
+/data/app/com.uclone.slotprobe/base.apk 101 202
+
+CLASSPATH=/data/adb/uclone-slices-preview/runtime/slot-bridge.apk \
+/system/bin/app_process /system/bin com.uclone.slotbridge.Main \
 set-enabled com.uclone.slotprobe disabled_user
 
 CLASSPATH=/data/adb/uclone-slices-preview/runtime/slot-bridge.apk \
 /system/bin/app_process /system/bin com.uclone.slotbridge.Main \
-set-suspended com.uclone.slotprobe true
+restore-enabled com.uclone.slotprobe 10321 \
+abababababababababababababababababababababababababababababababab 7 \
+/data/app/com.uclone.slotprobe/base.apk 101 202 default
+
+CLASSPATH=/data/adb/uclone-slices-preview/runtime/slot-bridge.apk \
+/system/bin/app_process /system/bin com.uclone.slotbridge.Main \
+restore-suspended com.uclone.slotprobe 10321 \
+abababababababababababababababababababababababababababababababab 7 \
+/data/app/com.uclone.slotprobe/base.apk 101 202 true
 ```
 
 The enabled enum is exactly one of `default`, `enabled`, `disabled`,
@@ -57,7 +71,9 @@ ADB writes.
 ## Boundary
 
 - Android user is fixed to user 0.
-- Package is fixed to `com.uclone.slotprobe`.
+- Package must be a validated Android identifier selected from Runtime's
+  durable managed-app registry; the bridge never accepts an activity, Intent,
+  URI, user id, or path from the caller.
 - No caller path, flag map, shell fragment, environment-derived package, or
   alternate command is accepted.
 - CE and DE paths are computed as `/data/user/0/<package>` and
@@ -76,13 +92,24 @@ ADB writes.
   cap. No XML path is accepted from argv; a privileged root attacker racing
   parent replacement is outside the app_process bridge trust boundary.
 - The XML parser requires the Android 16 `package-restrictions` root and exactly
-  one direct `pkg` node for `com.uclone.slotprobe`, rejects DTD/entities and
+  one direct `pkg` node for the validated package, rejects DTD/entities and
   malformed UTF-8, and requires nonzero decimal `ceDataInode` and `deDataInode`.
   These are emitted as `packageManagerCeInode` and
   `packageManagerDeInode`; every mismatch fails closed.
-- Enabled mutations set the API 36 `PackageManager.SYNCHRONOUS` value `0x2`.
+- Gate acquisition only accepts `disabled_user`. Gate release receives the full
+  enrolled UID, signer, version, code path, and Base CE/DE inode contract and
+  re-reads PackageManager immediately before mutation. Enabled mutations set
+  the API 36 `PackageManager.SYNCHRONOUS` value `0x2`.
   Suspension has no equivalent flag, so the bridge calls
   `flushPackageRestrictionsAsUser(0)` before reading state back.
+- Launch resolves only the package-scoped `ACTION_MAIN` INFO or LAUNCHER entry,
+  converts it to an explicit component, and asks ActivityTaskManager to start
+  it as user 0. Immediately before that Binder call it re-reads UID, current
+  signer SHA-256, versionCode, code path, Base CE/DE inodes, and pending-install
+  state, then compares them with the enrolled values supplied by Runtime.
+  Identity or package-state uncertainty never starts the
+  App. The ActivityTaskManager Binder is connected lazily only for this command,
+  so early-boot probe and Gate recovery do not depend on it.
 - Every invocation writes exactly one UTF-8 JSON object followed by one LF.
   The complete frame is capped at 16,384 bytes. Failures contain only a fixed
   request ID and stable error code; exception text, stack traces, and paths are

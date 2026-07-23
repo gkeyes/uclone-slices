@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::domain::{PackageEnabledState, PackageName};
+use crate::domain::{ManagedPackage, PackageEnabledState, PackageName};
 
 #[doc = "One Android app-data encryption domain."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +18,8 @@ pub enum CommandKind {
     DisableUser,
     #[doc = "Force-stop the allowlisted package for user zero."]
     ForceStop,
+    #[doc = "Open the system-resolved launcher entry for the validated package."]
+    LaunchPackage,
     #[doc = "Restore the captured per-user enabled setting."]
     RestoreEnabled(PackageEnabledState),
     #[doc = "Restore the captured suspension setting."]
@@ -33,6 +35,13 @@ pub(super) enum CommandSpec {
     Package {
         kind: CommandKind,
         package: PackageName,
+    },
+    Launch {
+        expected: ManagedPackage,
+    },
+    ContractMutation {
+        kind: CommandKind,
+        expected: ManagedPackage,
     },
     Bind {
         domain: DataDomain,
@@ -56,6 +65,26 @@ impl AndroidCommand {
         Self(CommandSpec::Package {
             kind,
             package: package.clone(),
+        })
+    }
+
+    pub(super) fn launch(package: &ManagedPackage) -> Self {
+        Self(CommandSpec::Launch {
+            expected: package.clone(),
+        })
+    }
+
+    pub(super) fn restore_enabled(package: &ManagedPackage, state: PackageEnabledState) -> Self {
+        Self(CommandSpec::ContractMutation {
+            kind: CommandKind::RestoreEnabled(state),
+            expected: package.clone(),
+        })
+    }
+
+    pub(super) fn restore_suspended(package: &ManagedPackage, suspended: bool) -> Self {
+        Self(CommandSpec::ContractMutation {
+            kind: CommandKind::RestoreSuspended(suspended),
+            expected: package.clone(),
         })
     }
 
@@ -89,6 +118,8 @@ impl AndroidCommand {
     pub const fn kind(&self) -> CommandKind {
         match &self.0 {
             CommandSpec::Package { kind, .. } => *kind,
+            CommandSpec::Launch { .. } => CommandKind::LaunchPackage,
+            CommandSpec::ContractMutation { kind, .. } => *kind,
             CommandSpec::Bind { domain, .. } => CommandKind::Bind(*domain),
             CommandSpec::Unmount { domain, .. } => CommandKind::Unmount(*domain),
         }
@@ -100,6 +131,21 @@ impl AndroidCommand {
             CommandSpec::Package { package, .. }
             | CommandSpec::Bind { package, .. }
             | CommandSpec::Unmount { package, .. } => package,
+            CommandSpec::Launch { expected } | CommandSpec::ContractMutation { expected, .. } => {
+                expected.package_name()
+            }
+        }
+    }
+
+    #[doc = "Returns the complete enrolled contract required for release or launch."]
+    pub const fn expected_package(&self) -> Option<&ManagedPackage> {
+        match &self.0 {
+            CommandSpec::Launch { expected } | CommandSpec::ContractMutation { expected, .. } => {
+                Some(expected)
+            }
+            CommandSpec::Package { .. }
+            | CommandSpec::Bind { .. }
+            | CommandSpec::Unmount { .. } => None,
         }
     }
 
@@ -107,7 +153,10 @@ impl AndroidCommand {
     pub fn source(&self) -> Option<&Path> {
         match &self.0 {
             CommandSpec::Bind { source, .. } => Some(source),
-            CommandSpec::Package { .. } | CommandSpec::Unmount { .. } => None,
+            CommandSpec::Package { .. }
+            | CommandSpec::Launch { .. }
+            | CommandSpec::ContractMutation { .. }
+            | CommandSpec::Unmount { .. } => None,
         }
     }
 
@@ -115,7 +164,9 @@ impl AndroidCommand {
     pub fn target(&self) -> Option<&Path> {
         match &self.0 {
             CommandSpec::Bind { target, .. } | CommandSpec::Unmount { target, .. } => Some(target),
-            CommandSpec::Package { .. } => None,
+            CommandSpec::Package { .. }
+            | CommandSpec::Launch { .. }
+            | CommandSpec::ContractMutation { .. } => None,
         }
     }
 }
@@ -129,6 +180,15 @@ pub enum CommandError {
     #[doc = "The fixed executable returned a non-success status."]
     #[error("fixed Android command was rejected")]
     Rejected,
+    #[doc = "The validated package has no enabled launcher entry for user zero."]
+    #[error("validated package has no launcher entry")]
+    LaunchEntryNotFound,
+    #[doc = "PackageManager identity changed before the launcher activity could start."]
+    #[error("validated package identity changed before launch")]
+    IdentityChanged,
+    #[doc = "Package metadata, Base anchors, or install-session state changed."]
+    #[error("validated package state changed before mutation")]
+    PackageStateChanged,
 }
 
 #[doc = "Injected execution boundary for typed Android commands."]

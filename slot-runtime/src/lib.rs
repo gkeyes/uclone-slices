@@ -23,6 +23,8 @@ pub mod enrollment;
 pub mod enrollment_attempt;
 #[doc = "Durable append-only transaction journal and state machine."]
 pub mod journal;
+#[doc = "Typed post-commit Android application launch boundary."]
+pub mod launch;
 #[doc = "Fixed Android Preview control-plane and slot path derivation."]
 pub mod layout;
 #[doc = "Fail-closed package update and inode-drift guard."]

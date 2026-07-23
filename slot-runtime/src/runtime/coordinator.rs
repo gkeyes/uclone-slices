@@ -1,3 +1,4 @@
+use crate::domain::{ManagedPackage, PackageKey, SlotView};
 use crate::journal::{JournalError, JournalEvent, JournalStore, TransactionSpec};
 use crate::lifecycle::{GuardDecision, PackageLifecycleGuard};
 use crate::registry::RegistryStore;
@@ -12,6 +13,17 @@ mod transaction;
 
 pub(super) const REASON_JOURNAL_FAILURE: &str = "journal_failure";
 pub(super) const REASON_PLATFORM_FAILURE: &str = "platform_failure";
+
+pub(super) fn package_for_view(spec: &TransactionSpec, view: &SlotView) -> Option<ManagedPackage> {
+    ManagedPackage::new(
+        PackageKey::new(spec.package_name().clone(), spec.user_id()),
+        spec.identity().clone(),
+        spec.base_inodes(),
+        view.clone(),
+        spec.lifecycle_state(),
+    )
+    .ok()
+}
 
 #[doc = "Fail-closed coordinator for one package's paired CE and DE view transaction."]
 #[derive(Debug)]

@@ -45,6 +45,27 @@ impl GateLeaseStore for FileGateLeaseStore {
         Ok(Some(lease))
     }
 
+    fn load_retired(&mut self, package: &PackageName) -> Result<Option<GateLease>, GateLeaseError> {
+        let Some(root) = existing_gate_root()? else {
+            return Ok(None);
+        };
+        let path = retired_path(&root, package);
+        if !path_present(&path)? {
+            return Ok(None);
+        }
+        match StoredGateLease::parse(&read_secure_lease(&path)?)? {
+            StoredGateLease::Enrolled(lease)
+                if lease.package_name() == package
+                    && lease.user_id() == crate::domain::UserId::PRIMARY =>
+            {
+                Ok(Some(lease))
+            }
+            StoredGateLease::Emergency(_) | StoredGateLease::Enrolled(_) => {
+                Err(GateLeaseError::InvalidArtifact)
+            }
+        }
+    }
+
     fn persist_emergency(&mut self, lease: &EmergencyGateLease) -> Result<(), GateLeaseError> {
         publish_new(lease.package_name(), &lease.bytes())
     }

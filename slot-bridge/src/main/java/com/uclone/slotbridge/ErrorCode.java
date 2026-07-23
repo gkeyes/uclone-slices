@@ -11,6 +11,9 @@ enum ErrorCode {
     COMMAND_FAILED("command_failed"),
     DEVICE_LOCKED("device_locked"),
     PACKAGE_NOT_FOUND("package_not_found"),
+    LAUNCH_ENTRY_NOT_FOUND("launch_entry_not_found"),
+    IDENTITY_CHANGED("identity_changed"),
+    PACKAGE_STATE_CHANGED("package_state_changed"),
     PENDING_SESSION("pending_session"),
     INTERNAL("internal");
 

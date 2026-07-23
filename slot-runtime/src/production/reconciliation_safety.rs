@@ -4,6 +4,7 @@ use crate::lifecycle::{GuardDecision, LifecycleState, PackageLifecycleGuard};
 use crate::materializer::{MaterializationBackend, MaterializationCoordinator, NoFault};
 use crate::reconcile::{ReconcileOutcome, ReconcileReason, RecoveryBackend};
 use crate::service::ServiceError;
+use crate::slot_metadata::SlotRecordState;
 
 use super::composition::ProductionPlatform;
 use super::metadata::MetadataSource;
@@ -51,6 +52,7 @@ where
             .catalog
             .list(key)
             .map_err(|_| ServiceError::RecoveryRequired)?;
+        let repaired_artifacts = self.cleanup_terminal_slots(key, &package)?;
         let Some(state) = state else {
             return self.recovery(&package);
         };
@@ -65,6 +67,7 @@ where
             return self.recovery(&package);
         };
         if !slots.is_empty()
+            && !repaired_artifacts
             && matches!(
                 lifecycle,
                 LifecycleState::RecoveryRequired | LifecycleState::RepairWaiting
@@ -72,7 +75,13 @@ where
         {
             return Ok(None);
         }
-        if lifecycle != LifecycleState::Normal {
+        if lifecycle != LifecycleState::Normal
+            && !(repaired_artifacts
+                && matches!(
+                    lifecycle,
+                    LifecycleState::RecoveryRequired | LifecycleState::RepairWaiting
+                ))
+        {
             return self.recovery(&package);
         }
         if !slots.is_empty() {
@@ -108,6 +117,54 @@ where
         Ok(None)
     }
 
+    fn cleanup_terminal_slots(
+        &mut self,
+        key: &PackageKey,
+        package: &crate::domain::ManagedPackage,
+    ) -> Result<bool, ServiceError> {
+        let records = self
+            .stores
+            .slot_metadata
+            .list(key.package_name())
+            .map_err(|_| ServiceError::RecoveryRequired)?;
+        let active = self
+            .stores
+            .registry
+            .latest(key.package_name())
+            .map_err(|_| ServiceError::RecoveryRequired)?
+            .map_or_else(SlotId::base, |revision| revision.active_slot().clone());
+        let mut repaired = false;
+        for record in records {
+            if !matches!(
+                record.state(),
+                SlotRecordState::Creating | SlotRecordState::Deleted
+            ) {
+                continue;
+            }
+            if record.slot() == &active {
+                return Err(ServiceError::RecoveryRequired);
+            }
+            if record.state() == SlotRecordState::Creating {
+                self.stores
+                    .slot_metadata
+                    .update(
+                        key.package_name(),
+                        record.slot(),
+                        record.display_name().clone(),
+                        SlotRecordState::Deleted,
+                        package.identity().version_code(),
+                    )
+                    .map_err(|_| ServiceError::RecoveryRequired)?;
+            }
+            let mut faults = NoFault;
+            MaterializationCoordinator::new(&mut self.materializer, &mut faults)
+                .cleanup_interrupted(package, record.slot())
+                .map_err(|_| ServiceError::RecoveryRequired)?;
+            repaired = true;
+        }
+        Ok(repaired)
+    }
+
     fn has_committed_history(&self, key: &PackageKey) -> Result<bool, ServiceError> {
         let registry = self
             .stores
@@ -117,7 +174,7 @@ where
         let journal = self
             .stores
             .journal
-            .list()
+            .list_for_package(key)
             .map_err(|_| ServiceError::RecoveryRequired)?;
         Ok(registry.is_some()
             || journal.iter().any(|transaction| {

@@ -43,7 +43,7 @@ fn unix_client_writes_one_frame_and_matches_response_id() {
         );
         let response = Response::ok(
             response_id,
-            ResponsePayload::ProbeReport(ProbeReport::new(true, true, true)),
+            ResponsePayload::ProbeReport(ProbeReport::new(true, true, true, false)),
         )
         .unwrap();
         server_stream
@@ -66,7 +66,7 @@ fn unix_client_rejects_mismatched_response_request_id() {
         assert_eq!(decode_request(&received).unwrap().request_id(), &id("r1"));
         let response = Response::ok(
             id("other"),
-            ResponsePayload::ProbeReport(ProbeReport::new(true, true, true)),
+            ResponsePayload::ProbeReport(ProbeReport::new(true, true, true, false)),
         )
         .unwrap();
         server_stream

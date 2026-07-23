@@ -114,21 +114,25 @@ fn package() -> PackageName {
 }
 
 fn package_response(pm: DataInodes) -> Vec<u8> {
+    package_response_for(pm, "com.uclone.slotprobe", 12345)
+}
+
+fn package_response_for(pm: DataInodes, package: &str, uid: u32) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "schemaVersion": 1,
         "requestId": "package",
         "ok": true,
         "payload": {
             "type": "package",
-            "packageName": "com.uclone.slotprobe",
+            "packageName": package,
             "userId": 0,
-            "uid": 12345,
+            "uid": uid,
             "signatureSha256": "aa".repeat(32),
             "versionCode": 7,
             "versionName": "preview",
-            "codePath": "/data/app/com.uclone.slotprobe/base.apk",
-            "ceDataPath": "/data/user/0/com.uclone.slotprobe",
-            "deDataPath": "/data/user_de/0/com.uclone.slotprobe",
+            "codePath": format!("/data/app/{package}/base.apk"),
+            "ceDataPath": format!("/data/user/0/{package}"),
+            "deDataPath": format!("/data/user_de/0/{package}"),
             "packageManagerCeInode": pm.ce().get(),
             "packageManagerDeInode": pm.de().get(),
             "enabledState": "enabled",
@@ -313,4 +317,124 @@ fn running_process_check_reuses_the_fresh_observation_identity() {
 
     let (bridge, _, _) = probe.into_dependencies();
     assert_eq!(bridge.calls, 1);
+}
+
+#[derive(Debug)]
+struct MultiPackageBridge {
+    responses: Vec<(PackageName, Vec<u8>)>,
+    calls: usize,
+}
+
+impl BridgeCommandRunner for MultiPackageBridge {
+    fn run(&mut self, command: &BridgeCommand) -> Result<Vec<u8>, BridgeRunnerError> {
+        self.calls += 1;
+        let BridgeCommand::PackageStatus(package) = command else {
+            return Err(BridgeRunnerError::Io(io::Error::other(
+                "unexpected bridge command",
+            )));
+        };
+        self.responses
+            .iter()
+            .find(|(candidate, _)| candidate == package)
+            .map(|(_, response)| response.clone())
+            .ok_or_else(|| BridgeRunnerError::Io(io::Error::other("missing package response")))
+    }
+}
+
+#[derive(Debug)]
+struct UidAwareFacts {
+    base: DataInodes,
+    running_uid: u32,
+    process_queries: Vec<(PackageName, u32)>,
+}
+
+impl SystemFacts for UidAwareFacts {
+    fn mount_namespace_ids(&mut self) -> Result<(u64, u64), FactError> {
+        Ok((77, 77))
+    }
+
+    fn canonical_inodes(&mut self, _package: &PackageName) -> Result<DataInodes, FactError> {
+        Ok(self.base)
+    }
+
+    fn mirror_inodes(&mut self, _package: &PackageName) -> Result<DataInodes, FactError> {
+        Ok(self.base)
+    }
+
+    fn canonical_mount_counts(&mut self, _package: &PackageName) -> Result<MountCounts, FactError> {
+        Ok(MountCounts::new(0, 0))
+    }
+
+    fn slot_inodes(
+        &mut self,
+        _package: &PackageName,
+        _slot: &SlotId,
+    ) -> Result<Option<DataInodes>, FactError> {
+        Ok(None)
+    }
+
+    fn package_processes(
+        &mut self,
+        package: &PackageName,
+        uid: u32,
+    ) -> Result<ProcessSet, FactError> {
+        self.process_queries.push((package.clone(), uid));
+        ProcessSet::new(if uid == self.running_uid {
+            vec![91]
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn arm64_zygote_processes(&mut self) -> Result<ProcessSet, FactError> {
+        ProcessSet::new(vec![41])
+    }
+}
+
+#[test]
+fn process_check_never_reuses_another_packages_cached_uid() {
+    let base = DataInodes::new(101, 202).unwrap();
+    let package_a = package();
+    let package_b = PackageName::parse("com.asksky.fitness").unwrap();
+    let uid_a = 12_345;
+    let uid_b = 23_456;
+    let bridge = MultiPackageBridge {
+        responses: vec![
+            (
+                package_a.clone(),
+                package_response_for(base, package_a.as_str(), uid_a),
+            ),
+            (
+                package_b.clone(),
+                package_response_for(base, package_b.as_str(), uid_b),
+            ),
+        ],
+        calls: 0,
+    };
+    let facts = UidAwareFacts {
+        base,
+        running_uid: uid_b,
+        process_queries: Vec::new(),
+    };
+    let mut probe = SystemPackageProbe::with_dependencies(
+        bridge,
+        FakeExecutor {
+            outputs: VecDeque::new(),
+            seen: Vec::new(),
+        },
+        facts,
+    );
+
+    probe.inspect_package(&package_a, UserId::PRIMARY).unwrap();
+    assert_eq!(
+        probe
+            .running_process_count(&package_b, UserId::PRIMARY)
+            .unwrap(),
+        1,
+        "package B must not be declared quiescent using package A's cached UID",
+    );
+
+    let (bridge, _, facts) = probe.into_dependencies();
+    assert_eq!(bridge.calls, 2);
+    assert_eq!(facts.process_queries, vec![(package_b, uid_b)]);
 }

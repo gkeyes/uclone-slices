@@ -35,7 +35,7 @@ fn probe() -> Request {
 fn probe_response(request: &Request) -> Response {
     Response::ok(
         request.request_id().clone(),
-        ResponsePayload::ProbeReport(ProbeReport::new(true, true, true)),
+        ResponsePayload::ProbeReport(ProbeReport::new(true, true, true, false)),
     )
     .unwrap()
 }

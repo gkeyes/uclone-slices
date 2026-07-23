@@ -15,6 +15,29 @@ where
     Q: PackageProbe,
     T: MetadataSource,
 {
+    pub(super) fn contain_reconcile_failure(
+        &mut self,
+        key: &PackageKey,
+        class: ServiceError,
+    ) -> bool {
+        self.add_recovery_override(key);
+        if self.runtime.emergency_gate(key.package_name()).is_err() {
+            return false;
+        }
+        let Ok(Some(package)) = self.stores.enrollment.load(key.package_name()) else {
+            return true;
+        };
+        let _ = if class == ServiceError::Quarantined {
+            self.mark_package_quarantined(&package)
+        } else {
+            self.mark_package_recovery(&package)
+        };
+        if self.runtime.confirm_emergency_gate(&package).is_err() {
+            return false;
+        }
+        self.do_contain_exact(&package).is_ok()
+    }
+
     pub(super) fn do_reconcile(
         &mut self,
         key: &PackageKey,

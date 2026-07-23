@@ -82,8 +82,9 @@ private fun healthText(health: RuntimeHealth) = when (health) {
     RuntimeHealth.Checking -> "正在检测"
     RuntimeHealth.Ready -> "运行正常 · CE + DE 可用"
     RuntimeHealth.ModuleMissing -> "模块未安装"
+    RuntimeHealth.PairMismatch -> "APK 与 Runtime 版本不匹配"
     RuntimeHealth.DaemonOffline -> "daemon 离线"
     RuntimeHealth.UserLocked -> "主用户尚未解锁"
     RuntimeHealth.Unsupported -> "设备不受支持"
-    RuntimeHealth.RecoveryRequired -> "存在需要恢复的应用"
+    RuntimeHealth.RecoveryRequired -> "Runtime 仅开放安全恢复"
 }

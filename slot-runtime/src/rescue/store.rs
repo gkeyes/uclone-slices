@@ -117,6 +117,11 @@ impl RescueJournalStore {
             ));
         };
         spec.validate()?;
+        if spec.package_key().package_name() != &self.package {
+            return Err(RescueError::Corrupt(
+                "rescue journal path identity mismatch".to_owned(),
+            ));
+        }
         verify_step_identity(spec.rescue_id(), &steps)?;
         Ok(Some(RescueTransaction::new(spec.as_ref().clone(), steps)?))
     }

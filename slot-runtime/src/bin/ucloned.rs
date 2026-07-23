@@ -1,32 +1,30 @@
 #![doc = "Fixed-root `UClone` Slots Preview daemon entry point."]
 
 use clap::Parser;
-use std::collections::BTreeMap;
-use std::fs;
+use std::collections::BTreeSet;
 use std::io::{self, Write};
-use std::path::Path;
 use std::process::ExitCode;
 use uclone_slot_runtime::android::{
-    AndroidBackend, AndroidMaterializer, FileGateLeaseStore, GateLeaseStore, SystemCommandRunner,
-    SystemMaterializerExecutor, SystemPackageProbe,
+    AndroidBackend, AndroidMaterializer, SystemCommandRunner, SystemMaterializerExecutor,
+    SystemPackageProbe,
 };
 use uclone_slot_runtime::daemon::{DaemonError, DaemonServer, RuntimeLock, RuntimeLockError};
-use uclone_slot_runtime::domain::{PackageKey, PackageName, UserId};
-use uclone_slot_runtime::enrollment::EnrollmentStore;
-use uclone_slot_runtime::enrollment_attempt::EnrollmentAttemptStore;
-use uclone_slot_runtime::journal::JournalStore;
+use uclone_slot_runtime::domain::{PackageKey, PackageName};
 use uclone_slot_runtime::layout::RuntimeLayout;
 use uclone_slot_runtime::production::{ProductionPlatform, SystemMetadataSource};
-use uclone_slot_runtime::rescue::{OfflineRescuePlatform, RescueStartup};
+use uclone_slot_runtime::reconcile::ReconcileOutcome;
+use uclone_slot_runtime::rescue::{
+    OfflineRescuePlatform, RescueStartup, RescueStatus, StartupGateOutcome,
+};
 use uclone_slot_runtime::service::{PreviewService, ServiceError, ServicePlatform};
 
-/// Errors raised before the fixed root daemon socket can serve requests.
+#[path = "ucloned/discovery.rs"]
+pub(crate) mod discovery;
+use discovery::startup_keys;
 #[derive(Debug, thiserror::Error)]
 enum UclonedError {
-    /// Early-boot and user-unlock reconciliation could not establish a safe state.
     #[error("reconciliation failed closed: {0}")]
     Reconcile(String),
-    /// The fixed 0600 Unix socket could not be prepared or served.
     #[error("daemon socket failed: {0}")]
     Daemon(#[from] DaemonError),
     #[error("production composition failed: {0}")]
@@ -35,21 +33,50 @@ enum UclonedError {
     Lock(#[from] RuntimeLockError),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupPackageOutcome {
+    Ordinary,
+    RecoveryRequired,
+    BaseRetired,
+}
+
+fn record_startup_outcome(
+    key: &PackageKey,
+    outcome: StartupPackageOutcome,
+    ordinary: &mut Vec<PackageKey>,
+    recovery: &mut BTreeSet<PackageName>,
+    retired: &mut BTreeSet<PackageName>,
+) {
+    match outcome {
+        StartupPackageOutcome::Ordinary => ordinary.push(key.clone()),
+        StartupPackageOutcome::RecoveryRequired => {
+            recovery.insert(key.package_name().clone());
+        }
+        StartupPackageOutcome::BaseRetired => {
+            retired.insert(key.package_name().clone());
+        }
+    }
+}
 fn serve_with_lock<P: ServicePlatform>(platform: P, lock: RuntimeLock) -> Result<(), UclonedError> {
     let service = PreviewService::new(platform);
     let mut server = DaemonServer::bind_with_lock(service, lock)?;
     server.run().map_err(UclonedError::Daemon)
 }
+fn serve_recovery_with_lock<P: ServicePlatform>(
+    platform: P,
+    lock: RuntimeLock,
+) -> Result<(), UclonedError> {
+    let service = PreviewService::new_recovery_only(platform);
+    let mut server = DaemonServer::bind_with_lock(service, lock)?;
+    server.run().map_err(UclonedError::Daemon)
+}
 
-/// Parses only the fixed daemon mode or the fixed early-boot gate probe.
 #[derive(Debug, Parser)]
 #[command(name = "ucloned", disable_help_subcommand = true)]
 struct Cli {
-    /// Capture/reuse the exact gate lease and exit without opening ordinary stores.
     #[arg(long)]
     startup_gate: bool,
 }
-
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli.startup_gate) {
@@ -61,7 +88,6 @@ fn main() -> ExitCode {
         }
     }
 }
-
 fn run(startup_gate: bool) -> Result<(), UclonedError> {
     let lock = RuntimeLock::acquire(RuntimeLayout::lock(), "ucloned")?;
     let (keys, corrupt_discovery) = startup_keys();
@@ -70,12 +96,39 @@ fn run(startup_gate: bool) -> Result<(), UclonedError> {
     let metadata = SystemMetadataSource::new();
     let mut rescue = OfflineRescuePlatform::open_fixed(runtime, metadata);
     let mut held = 0_usize;
+    let mut recovery = BTreeSet::new();
+    let mut retired = BTreeSet::new();
     for key in &keys {
-        if rescue
+        let rescue_status = rescue.startup_status(key);
+        if matches!(rescue_status, Ok(Some(RescueStatus::BaseRetired))) {
+            match rescue.reconcile_startup(key) {
+                RescueStartup::BaseRetired => {
+                    retired.insert(key.package_name().clone());
+                    continue;
+                }
+                RescueStartup::RecoveryRequired | RescueStartup::Quarantined => {
+                    recovery.insert(key.package_name().clone());
+                    held += 1;
+                    continue;
+                }
+                RescueStartup::ContainmentFailed => {
+                    return Err(UclonedError::Reconcile(
+                        "retired package containment could not be proved".to_owned(),
+                    ));
+                }
+                RescueStartup::OpenOrdinary => {}
+            }
+        }
+        match rescue
             .hold_startup_gate(key)
             .map_err(|error| UclonedError::Reconcile(error.to_string()))?
         {
-            held += 1;
+            StartupGateOutcome::NotManaged => {}
+            StartupGateOutcome::Held => held += 1,
+            StartupGateOutcome::HeldRecovery => {
+                held += 1;
+                recovery.insert(key.package_name().clone());
+            }
         }
     }
     if startup_gate {
@@ -84,15 +137,37 @@ fn run(startup_gate: bool) -> Result<(), UclonedError> {
             .map_err(|error| UclonedError::Reconcile(error.to_string()))?;
         return Ok(());
     }
+    authorize_only_typed_recovery_targets(&mut rescue, &keys, &retired);
     if corrupt_discovery {
-        return serve_with_lock(rescue, lock);
+        return serve_recovery_with_lock(rescue, lock);
     }
+    let mut ordinary = Vec::with_capacity(keys.len());
     for key in &keys {
+        if retired.contains(key.package_name()) || recovery.contains(key.package_name()) {
+            continue;
+        }
         match rescue.reconcile_startup(key) {
-            RescueStartup::OpenOrdinary => {}
-            RescueStartup::BaseRetired
-            | RescueStartup::RecoveryRequired
-            | RescueStartup::Quarantined => return serve_with_lock(rescue, lock),
+            RescueStartup::OpenOrdinary => record_startup_outcome(
+                key,
+                StartupPackageOutcome::Ordinary,
+                &mut ordinary,
+                &mut recovery,
+                &mut retired,
+            ),
+            RescueStartup::RecoveryRequired | RescueStartup::Quarantined => record_startup_outcome(
+                key,
+                StartupPackageOutcome::RecoveryRequired,
+                &mut ordinary,
+                &mut recovery,
+                &mut retired,
+            ),
+            RescueStartup::BaseRetired => record_startup_outcome(
+                key,
+                StartupPackageOutcome::BaseRetired,
+                &mut ordinary,
+                &mut recovery,
+                &mut retired,
+            ),
             RescueStartup::ContainmentFailed => {
                 return Err(UclonedError::Reconcile(
                     "package containment could not be proved".to_owned(),
@@ -100,9 +175,21 @@ fn run(startup_gate: bool) -> Result<(), UclonedError> {
             }
         }
     }
-    run_ordinary(rescue, &keys, lock)
+    run_ordinary(rescue, &ordinary, &recovery, lock)
 }
 
+fn authorize_only_typed_recovery_targets<B, T, F>(
+    rescue: &mut OfflineRescuePlatform<B, T, F>,
+    keys: &[PackageKey],
+    retired: &BTreeSet<PackageName>,
+) {
+    for key in keys {
+        if retired.contains(key.package_name()) {
+            continue;
+        }
+        let _authorization = rescue.authorize_existing_target(key);
+    }
+}
 fn startup_gate_value(held: usize, corrupt_discovery: bool) -> Result<&'static str, UclonedError> {
     if corrupt_discovery {
         return Err(UclonedError::Reconcile(
@@ -118,6 +205,7 @@ fn run_ordinary(
         SystemMetadataSource,
     >,
     keys: &[PackageKey],
+    recovery: &BTreeSet<PackageName>,
     lock: RuntimeLock,
 ) -> Result<(), UclonedError> {
     let (runtime, metadata, _) = rescue.into_dependencies();
@@ -126,110 +214,22 @@ fn run_ordinary(
     let service_probe = SystemPackageProbe::new();
     let mut production =
         ProductionPlatform::open_fixed(runtime, materializer, service_probe, metadata)?;
-    for key in keys {
-        production
-            .reconcile_two_phase(key)
-            .map_err(|error| UclonedError::Reconcile(error.to_string()))?;
+    for key in discovery::reconciliation_keys(keys, recovery) {
+        reconcile_startup_result(&key, production.reconcile_two_phase(&key))?;
     }
     serve_with_lock(production, lock)
 }
 
-fn startup_keys() -> (Vec<PackageKey>, bool) {
-    let mut packages = BTreeMap::<String, PackageName>::new();
-    let mut corrupt_discovery = false;
-    for root in management_package_roots() {
-        corrupt_discovery |= scan_package_root(&root, &mut packages);
-    }
-    match EnrollmentStore::new(RuntimeLayout::enrollment_root())
-        .and_then(|store| store.package_names())
-    {
-        Ok(scan) => {
-            corrupt_discovery |= scan.corrupt_artifact();
-            for package in scan.package_names() {
-                insert_package(&mut packages, package.clone());
-            }
-        }
-        Err(_) => corrupt_discovery = true,
-    }
-    match EnrollmentAttemptStore::fixed().and_then(|store| store.list()) {
-        Ok(attempts) => {
-            for attempt in attempts {
-                insert_package(&mut packages, attempt.package_key().package_name().clone());
-            }
-        }
-        Err(_) => corrupt_discovery = true,
-    }
-    match JournalStore::new(RuntimeLayout::journal_root()).and_then(|store| store.list()) {
-        Ok(transactions) => {
-            for transaction in transactions {
-                insert_package(&mut packages, transaction.spec().package_name().clone());
-            }
-        }
-        Err(_) => corrupt_discovery = true,
-    }
-    let mut lease_store = FileGateLeaseStore;
-    match lease_store.package_names() {
-        Ok(lease_packages) => {
-            for package in lease_packages {
-                insert_package(&mut packages, package);
-            }
-        }
-        Err(_) => corrupt_discovery = true,
-    }
-    (
-        packages
-            .into_values()
-            .map(|package| PackageKey::new(package, UserId::PRIMARY))
-            .collect(),
-        corrupt_discovery,
-    )
-}
-
-fn management_package_roots() -> Vec<std::path::PathBuf> {
-    vec![
-        RuntimeLayout::enrollment_root().join("packages"),
-        RuntimeLayout::compatibility_policy_root().join("packages"),
-        RuntimeLayout::catalog_root().join("packages"),
-        RuntimeLayout::registry_root().join("packages"),
-        RuntimeLayout::package_state_root().join("packages"),
-        RuntimeLayout::slot_metadata_root().join("packages"),
-        RuntimeLayout::enrollment_attempt_root().join("attempts"),
-        RuntimeLayout::rescue_journal_root().join("packages"),
-        Path::new(uclone_slot_runtime::target::DE_SLOT_ROOT).to_path_buf(),
-    ]
-}
-
-fn scan_package_root(root: &Path, packages: &mut BTreeMap<String, PackageName>) -> bool {
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(_) => return true,
-    };
-    let mut corrupt = false;
-    for entry in entries {
-        let Ok(entry) = entry else {
-            corrupt = true;
-            continue;
-        };
-        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-            corrupt = true;
-            continue;
-        };
-        match PackageName::parse(&name) {
-            Ok(package) => {
-                if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                    corrupt = true;
-                }
-                insert_package(packages, package);
-            }
-            Err(_) => corrupt = true,
-        }
-    }
-    corrupt
-}
-
-fn insert_package(packages: &mut BTreeMap<String, PackageName>, package: PackageName) {
-    packages.insert(package.as_str().to_owned(), package);
+fn reconcile_startup_result(
+    key: &PackageKey,
+    result: Result<ReconcileOutcome, ServiceError>,
+) -> Result<(), UclonedError> {
+    result.map(|_| ()).map_err(|error| {
+        UclonedError::Reconcile(format!(
+            "package {} reconciliation containment failed: {error}",
+            key.package_name()
+        ))
+    })
 }
 
 #[cfg(test)]

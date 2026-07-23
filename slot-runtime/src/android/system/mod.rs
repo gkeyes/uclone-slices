@@ -7,6 +7,7 @@
 )]
 
 mod command;
+mod error_map;
 mod executor;
 mod facts;
 mod filesystem;

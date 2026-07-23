@@ -12,13 +12,19 @@ pub(super) fn switched(
     expected: &SlotView,
     execution: SwitchExecution,
 ) -> Result<ResponsePayload, ServiceError> {
+    let proved = proved_switch(expected, execution)?;
+    Ok(ResponsePayload::SwitchResult(SwitchResult::new(
+        package.clone(),
+        proved.slot_id().clone(),
+    )))
+}
+
+pub(super) fn proved_switch(
+    expected: &SlotView,
+    execution: SwitchExecution,
+) -> Result<SlotView, ServiceError> {
     match execution {
-        SwitchExecution::Committed(proved) if proved == *expected => {
-            Ok(ResponsePayload::SwitchResult(SwitchResult::new(
-                package.clone(),
-                proved.slot_id().clone(),
-            )))
-        }
+        SwitchExecution::Committed(proved) if proved == *expected => Ok(proved),
         SwitchExecution::Committed(_) | SwitchExecution::RecoveryRequired => {
             Err(ServiceError::RecoveryRequired)
         }

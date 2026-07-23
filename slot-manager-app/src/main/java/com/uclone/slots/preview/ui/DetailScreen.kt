@@ -23,8 +23,10 @@ fun DetailScreen(
     label: String,
     status: PackageRuntimeStatus?,
     slots: List<SlotSpace>,
+    recoveryOnly: Boolean,
     enabled: Boolean,
-    recoveryEnabled: Boolean,
+    reconcileEnabled: Boolean,
+    rescueEnabled: Boolean,
     onCreate: (String, Boolean) -> Unit,
     onSwitch: (String) -> Unit,
     onRename: (String, String) -> Unit,
@@ -45,41 +47,47 @@ fun DetailScreen(
                 RecoveryCard(
                     runtimeOffline = status == null,
                     containmentProved = status?.enabled == false,
-                    enabled = recoveryEnabled,
+                    recoveryOnly = recoveryOnly,
+                    reconcileEnabled = reconcileEnabled,
+                    rescueEnabled = rescueEnabled,
                     onReconcile = onReconcile,
                     onRescue = onRescue,
                 )
             }
         }
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("数据空间", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.weight(1f))
-                FilledTonalButton(onClick = { createDialog = true }, enabled = enabled && baseActive) {
-                    Icon(Icons.Outlined.Add, null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("创建空间")
+        if (!recoveryOnly) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("数据空间", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.weight(1f))
+                    FilledTonalButton(
+                        onClick = { createDialog = true },
+                        enabled = canCreateSpace(enabled, baseActive),
+                    ) {
+                        Icon(Icons.Outlined.Add, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("创建空间")
+                    }
                 }
             }
-        }
-        items(slots, key = { it.id }) { slot ->
-            SlotCard(
-                slot = slot,
-                enabled = enabled,
-                baseActive = baseActive,
-                currentSlot = status?.activeSlot,
-                onSwitch = onSwitch,
-                onRename = onRename,
-                onDelete = { pendingDelete = slot },
-            )
-        }
-        item {
-            Text(
-                "文件数据会随空间切换；Keystore、系统账户、通知、权限和外部存储仍由 Android 共享。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 8.dp),
-            )
+            items(slots, key = { it.id }) { slot ->
+                SlotCard(
+                    slot = slot,
+                    enabled = enabled,
+                    baseActive = baseActive,
+                    onSwitch = onSwitch,
+                    onRename = onRename,
+                    onDelete = { pendingDelete = slot },
+                )
+            }
+            item {
+                Text(
+                    "文件数据会随空间切换；Keystore、系统账户、通知、权限和外部存储仍由 Android 共享。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+            }
         }
     }
     if (createDialog) {
@@ -141,7 +149,6 @@ private fun SlotCard(
     slot: SlotSpace,
     enabled: Boolean,
     baseActive: Boolean,
-    currentSlot: String?,
     onSwitch: (String) -> Unit,
     onRename: (String, String) -> Unit,
     onDelete: (String) -> Unit,
@@ -168,7 +175,10 @@ private fun SlotCard(
                     Icon(Icons.Outlined.Edit, "重命名")
                 }
                 if (!slot.active) {
-                    IconButton(onClick = { onDelete(slot.id) }, enabled = enabled && baseActive) {
+                    IconButton(
+                        onClick = { onDelete(slot.id) },
+                        enabled = canDeleteSlot(enabled, baseActive, slot),
+                    ) {
                         Icon(Icons.Outlined.DeleteOutline, "删除")
                     }
                 }
@@ -177,8 +187,7 @@ private fun SlotCard(
         Spacer(Modifier.height(14.dp))
         Button(
             onClick = { onSwitch(slot.id) },
-            enabled = enabled &&
-                (slot.active || slot.isBase || currentSlot == "base"),
+            enabled = canSwitchAndOpen(enabled, slot),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Text(if (slot.active) "打开此空间" else "切换并打开")
@@ -193,11 +202,23 @@ private fun SlotCard(
         )
     }
 }
+
+internal fun canSwitchAndOpen(enabled: Boolean, slot: SlotSpace): Boolean =
+    enabled && slot.state == "ready"
+
+internal fun canCreateSpace(enabled: Boolean, baseActive: Boolean): Boolean =
+    enabled && baseActive
+
+internal fun canDeleteSlot(enabled: Boolean, baseActive: Boolean, slot: SlotSpace): Boolean =
+    enabled && baseActive && !slot.isBase && !slot.active
+
 @Composable
 private fun RecoveryCard(
     runtimeOffline: Boolean,
     containmentProved: Boolean,
-    enabled: Boolean,
+    recoveryOnly: Boolean,
+    reconcileEnabled: Boolean,
+    rescueEnabled: Boolean,
     onReconcile: () -> Unit,
     onRescue: () -> Unit,
 ) {
@@ -210,13 +231,18 @@ private fun RecoveryCard(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                if (runtimeOffline) "Runtime 当前不可用，无法确认门禁状态。独立 Base 救援仍可执行。"
+                if (recoveryOnly) "Runtime 当前仅开放安全恢复；这里只允许退回 Base。"
+                else if (runtimeOffline) "Runtime 当前不可用，无法确认门禁状态。独立 Base 救援仍可执行。"
                 else "Runtime 无法证明当前数据视图。重新检查失败时，请安全退回 Base。",
             )
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedButton(onClick = onReconcile, enabled = enabled) { Text("重新检查") }
-                Button(onClick = onRescue, enabled = enabled) { Text("安全退回 Base") }
+                if (!recoveryOnly) {
+                    OutlinedButton(onClick = onReconcile, enabled = reconcileEnabled) {
+                        Text("重新检查")
+                    }
+                }
+                Button(onClick = onRescue, enabled = rescueEnabled) { Text("安全退回 Base") }
             }
         }
     }

@@ -1,4 +1,5 @@
 use uclone_slot_runtime::domain::{GateSnapshot, ManagedPackage, PackageKey, SlotView};
+use uclone_slot_runtime::launch::LaunchDisposition;
 use uclone_slot_runtime::reconcile::ReconcileOutcome;
 use uclone_slot_runtime::service::{
     CapabilitySnapshot, EnrollmentPublicationError, ManagedAppInfo, PackageInspection,
@@ -224,9 +225,38 @@ impl ServicePlatform for FakePlatform {
         Ok(execution)
     }
 
+    fn verify_current_view_for_launch(
+        &mut self,
+        package: &ManagedPackage,
+        target: &SlotView,
+    ) -> Result<(), ServiceError> {
+        assert_eq!(package.active_slot(), target.slot_id());
+        assert_eq!(package.active_inodes(), target.inodes());
+        self.record(Call::VerifyCurrent);
+        self.fail(FailurePoint::VerifyCurrent)
+    }
+
+    fn launch_package(&mut self, package: &ManagedPackage) -> LaunchDisposition {
+        self.record(Call::Launch);
+        self.launched_identities
+            .borrow_mut()
+            .push(package.identity().clone());
+        self.launch_disposition
+    }
+
     fn reconcile_two_phase(&mut self, key: &PackageKey) -> Result<ReconcileOutcome, ServiceError> {
-        assert_key(key);
         self.record(Call::Reconcile);
+        self.reconciled_packages
+            .borrow_mut()
+            .push(key.package_name().clone());
+        if let Some((_, outcome)) = self
+            .reconcile_outcomes
+            .iter()
+            .find(|(package, _)| package == key.package_name())
+        {
+            return outcome.clone();
+        }
+        assert_key(key);
         self.fail(FailurePoint::Reconcile)?;
         Ok(self.reconcile_outcome.clone())
     }

@@ -188,6 +188,14 @@ pub trait GateLeaseStore: core::fmt::Debug {
     #[doc = "Loads and validates an existing immutable lease when present."]
     fn load(&mut self, package: &PackageName) -> Result<Option<StoredGateLease>, GateLeaseError>;
 
+    #[doc = "Loads the exact retired enrolled lease evidence when it exists."]
+    fn load_retired(
+        &mut self,
+        _package: &PackageName,
+    ) -> Result<Option<GateLease>, GateLeaseError> {
+        Ok(None)
+    }
+
     #[doc = "Atomically publishes a new preliminary zero-anchor lease."]
     fn persist_emergency(&mut self, lease: &EmergencyGateLease) -> Result<(), GateLeaseError>;
 

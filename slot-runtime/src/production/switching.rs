@@ -22,6 +22,9 @@ where
         slot: &SlotId,
         seed_mode: SlotSeedMode,
     ) -> Result<SlotView, ServiceError> {
+        if self.recovery_overridden_name(package.package_name()) {
+            return Err(ServiceError::RecoveryRequired);
+        }
         let record = self.materialization_record(package, slot, seed_mode)?;
         let mut faults = NoFault;
         let Ok(result) = MaterializationCoordinator::new(&mut self.materializer, &mut faults)
@@ -105,6 +108,9 @@ where
         target: &SlotView,
         prepared_gate: Option<GateSnapshot>,
     ) -> Result<SwitchExecution, ServiceError> {
+        if self.recovery_overridden_name(package.package_name()) {
+            return Ok(SwitchExecution::RecoveryRequired);
+        }
         if !target.slot_id().is_base() {
             let metadata = self
                 .stores
@@ -112,7 +118,7 @@ where
                 .latest(package.package_name(), target.slot_id());
             match metadata {
                 Ok(Some(record)) if record.state() == SlotRecordState::Ready => {}
-                Ok(None) => {}
+                Ok(None) => return Err(ServiceError::NotFound),
                 Ok(Some(_)) => return Err(ServiceError::Conflict),
                 Err(_) => {
                     self.do_contain(package, ServiceError::RecoveryRequired)?;

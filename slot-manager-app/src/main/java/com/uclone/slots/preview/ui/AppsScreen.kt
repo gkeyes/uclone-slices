@@ -23,9 +23,12 @@ fun AppsScreen(
     health: RuntimeHealth,
     onRuntime: () -> Unit,
     onAdd: () -> Unit,
+    onRecovery: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
     val runtimeReady = health == RuntimeHealth.Ready
+    val recoveryPicker = canSelectIndependentBaseRescueTarget(health)
+    val detailsEnabled = canOpenManagedAppDetails(health)
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 100.dp),
@@ -33,23 +36,49 @@ fun AppsScreen(
         ) {
                 item { RuntimeBanner(health, onRuntime) }
             if (apps.isEmpty()) {
-                item { EmptyApps(runtimeReady, onAdd) }
+                item { EmptyApps(runtimeReady, recoveryPicker, onAdd, onRecovery) }
             } else {
                 items(apps, key = { it.packageName }) { app ->
-                    ManagedAppCard(app, runtimeReady) { onOpen(app.packageName) }
+                    ManagedAppCard(app, detailsEnabled) { onOpen(app.packageName) }
                 }
             }
         }
-        if (runtimeReady) {
+        if (runtimeReady || recoveryPicker) {
             ExtendedFloatingActionButton(
-                onClick = onAdd,
+                onClick = if (runtimeReady) onAdd else onRecovery,
                 icon = { Icon(Icons.Outlined.Add, null) },
-                text = { Text("添加应用") },
+                text = { Text(if (runtimeReady) "添加应用" else "选择救援目标") },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp),
             )
         }
     }
 }
+
+internal fun canOpenManagedAppDetails(health: RuntimeHealth): Boolean = when (health) {
+    RuntimeHealth.Ready,
+    RuntimeHealth.RecoveryRequired,
+    RuntimeHealth.DaemonOffline,
+    RuntimeHealth.PairMismatch,
+    -> true
+    else -> false
+}
+
+internal fun canUseOrdinarySlotActions(
+    health: RuntimeHealth,
+    busy: Boolean,
+    packageSafe: Boolean,
+): Boolean = !busy && health == RuntimeHealth.Ready && packageSafe
+
+internal fun canUseReconcile(health: RuntimeHealth, busy: Boolean): Boolean =
+    !busy && (health == RuntimeHealth.Ready || health == RuntimeHealth.RecoveryRequired)
+
+internal fun canUseIndependentBaseRescue(health: RuntimeHealth, busy: Boolean): Boolean =
+    !busy && canOpenManagedAppDetails(health)
+
+internal fun canSelectIndependentBaseRescueTarget(health: RuntimeHealth): Boolean =
+    health == RuntimeHealth.DaemonOffline ||
+        health == RuntimeHealth.PairMismatch ||
+        health == RuntimeHealth.RecoveryRequired
 
 @Composable
 private fun ManagedAppCard(app: ManagedApp, enabled: Boolean, onClick: () -> Unit) {
@@ -73,7 +102,11 @@ private fun ManagedAppCard(app: ManagedApp, enabled: Boolean, onClick: () -> Uni
                     HealthDot(app.lifecycle == PackageLifecycle.Normal)
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        if (app.activeSlot == "base") "Base · Android 原生数据" else "活动空间 · ${app.activeSlot}",
+                        when (app.activeSlot) {
+                            "base" -> "Base · Android 原生数据"
+                            "unknown" -> "活动空间未知 · 仅允许安全恢复"
+                            else -> "活动空间 · ${app.activeSlot}"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -85,15 +118,31 @@ private fun ManagedAppCard(app: ManagedApp, enabled: Boolean, onClick: () -> Uni
 }
 
 @Composable
-private fun EmptyApps(enabled: Boolean, onAdd: () -> Unit) {
+private fun EmptyApps(
+    runtimeReady: Boolean,
+    recoveryPicker: Boolean,
+    onAdd: () -> Unit,
+    onRecovery: () -> Unit,
+) {
     SectionCard {
-        Text("还没有受管应用", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+        Text(
+            if (recoveryPicker) "选择需要救援的应用" else "还没有受管应用",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+        )
         Spacer(Modifier.height(8.dp))
         Text(
-            "从已安装应用中选择一个目标，为它建立独立的数据空间。",
+            if (recoveryPicker) {
+                "即使 APK 没有缓存受管列表，也可以从已安装应用中选择目标并请求安全退回 Base。"
+            } else {
+                "从可启动的第三方应用中选择目标，为它建立独立的数据空间。"
+            },
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(18.dp))
-        Button(onClick = onAdd, enabled = enabled) { Text("选择应用") }
+        Button(
+            onClick = if (runtimeReady) onAdd else onRecovery,
+            enabled = runtimeReady || recoveryPicker,
+        ) { Text(if (recoveryPicker) "选择救援目标" else "选择应用") }
     }
 }

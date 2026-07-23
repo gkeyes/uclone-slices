@@ -122,11 +122,9 @@ fn enrollment_lease_retirement_failure_recontains_before_recovery() {
 }
 
 #[test]
-fn materialization_failure_never_runs_switch_or_restores_gate() {
+fn switch_to_unknown_slot_never_acquires_gate_or_materializes() {
     // Given
-    let platform = FakePlatform::with_state(ready_base())
-        .fail_at(FailurePoint::Materialize, ServiceError::UserLocked);
-    let mut service = PreviewService::new(platform);
+    let mut service = PreviewService::new(FakePlatform::with_state(ready_base()));
 
     // When
     let response = service.handle(&request(Command::Switch {
@@ -135,18 +133,8 @@ fn materialization_failure_never_runs_switch_or_restores_gate() {
     }));
 
     // Then
-    assert_eq!(response.error_code(), Some(ErrorCode::RecoveryRequired));
-    assert_eq!(
-        service.platform().calls(),
-        vec![
-            Call::Probe,
-            Call::State,
-            Call::CaptureGate,
-            Call::HoldGate,
-            Call::Quiesce,
-            Call::Materialize,
-        ]
-    );
+    assert_eq!(response.error_code(), Some(ErrorCode::NotFound));
+    assert_eq!(service.platform().calls(), vec![Call::Probe, Call::State]);
 }
 
 #[test]

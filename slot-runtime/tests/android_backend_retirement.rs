@@ -26,53 +26,64 @@ impl CommandRunner for AcceptingRunner {
 }
 
 #[derive(Debug, Default)]
-struct MemoryLeaseStore(Option<StoredGateLease>);
+struct MemoryLeaseStore {
+    active: Option<StoredGateLease>,
+    retired: Option<GateLease>,
+}
 
 impl GateLeaseStore for MemoryLeaseStore {
     fn artifact_exists(&mut self, _package: &PackageName) -> Result<bool, GateLeaseError> {
-        Ok(self.0.is_some())
+        Ok(self.active.is_some())
     }
 
     fn load(&mut self, _package: &PackageName) -> Result<Option<StoredGateLease>, GateLeaseError> {
-        Ok(self.0.clone())
+        Ok(self.active.clone())
+    }
+
+    fn load_retired(
+        &mut self,
+        _package: &PackageName,
+    ) -> Result<Option<GateLease>, GateLeaseError> {
+        Ok(self.retired.clone())
     }
 
     fn persist_emergency(&mut self, lease: &EmergencyGateLease) -> Result<(), GateLeaseError> {
-        self.0 = Some(StoredGateLease::Emergency(lease.clone()));
+        self.active = Some(StoredGateLease::Emergency(lease.clone()));
         Ok(())
     }
 
     fn mark_emergency_held(&mut self, lease: &EmergencyGateLease) -> Result<(), GateLeaseError> {
-        if self.0 != Some(StoredGateLease::Emergency(lease.clone())) {
+        if self.active != Some(StoredGateLease::Emergency(lease.clone())) {
             return Err(GateLeaseError::InvalidArtifact);
         }
-        self.0 = Some(StoredGateLease::Emergency(lease.held()));
+        self.active = Some(StoredGateLease::Emergency(lease.held()));
         Ok(())
     }
 
     fn persist_enrolled(&mut self, lease: &GateLease) -> Result<(), GateLeaseError> {
-        self.0 = Some(StoredGateLease::Enrolled(lease.clone()));
+        self.active = Some(StoredGateLease::Enrolled(lease.clone()));
         Ok(())
     }
 
     fn confirm_enrollment(&mut self, lease: &GateLease) -> Result<(), GateLeaseError> {
         if !matches!(
-            self.0.as_ref(),
+            self.active.as_ref(),
             Some(StoredGateLease::Emergency(existing))
                 if existing.phase() == uclone_slot_runtime::android::EmergencyGatePhase::Held
                     && existing.snapshot() == lease.snapshot()
         ) {
             return Err(GateLeaseError::InvalidArtifact);
         }
-        self.0 = Some(StoredGateLease::Enrolled(lease.clone()));
+        self.active = Some(StoredGateLease::Enrolled(lease.clone()));
         Ok(())
     }
 
     fn retire(&mut self, expected: &GateLease) -> Result<(), GateLeaseError> {
-        if self.0 != Some(StoredGateLease::Enrolled(expected.clone())) {
+        if self.active != Some(StoredGateLease::Enrolled(expected.clone())) {
             return Err(GateLeaseError::InvalidArtifact);
         }
-        self.0 = None;
+        self.active = None;
+        self.retired = Some(expected.clone());
         Ok(())
     }
 }
@@ -177,7 +188,7 @@ fn preliminary_emergency_lease_cannot_be_retired() {
         }
     );
     assert!(matches!(
-        backend.gate_lease_store().0,
+        backend.gate_lease_store().active,
         Some(StoredGateLease::Emergency(_))
     ));
 }
@@ -201,7 +212,7 @@ fn enrolled_lease_with_different_base_anchors_cannot_be_retired() {
         }
     );
     assert!(matches!(
-        backend.gate_lease_store().0,
+        backend.gate_lease_store().active,
         Some(StoredGateLease::Enrolled(_))
     ));
 }
@@ -227,7 +238,21 @@ fn changed_package_state_prevents_retirement_and_preserves_the_lease() {
         }
     );
     assert!(matches!(
-        backend.gate_lease_store().0,
+        backend.gate_lease_store().active,
         Some(StoredGateLease::Enrolled(_))
     ));
+}
+
+#[test]
+fn matching_retired_lease_is_an_idempotent_exact_state_proof() {
+    let package = managed(DataInodes::new(101, 202).unwrap());
+    let original = GateSnapshot::new(PackageEnabledState::Enabled, true);
+    let mut backend = backend(VecDeque::from([original, original, original]));
+    backend.capture_gate_snapshot(&package).unwrap();
+    backend.retire_gate_lease(&package).unwrap();
+
+    backend.retire_gate_lease(&package).unwrap();
+
+    assert!(backend.gate_lease_store().active.is_none());
+    assert!(backend.gate_lease_store().retired.is_some());
 }

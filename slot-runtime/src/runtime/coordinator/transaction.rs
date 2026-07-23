@@ -14,7 +14,11 @@ impl<B: RuntimeBackend> SwitchCoordinator<B> {
         spec: &TransactionSpec,
     ) -> Result<SwitchOutcome, RuntimeError> {
         if let Err(error) = self.backend.quiesce_processes(request.managed_package()) {
-            return self.rollback_platform(spec, error);
+            return self.require_recovery_before_applying(
+                spec,
+                RecoveryCause::Platform(error),
+                REASON_PLATFORM_FAILURE,
+            );
         }
         if let Err(error) = self.append(spec, JournalEvent::ProcessesQuiesced) {
             return self.require_recovery(
@@ -138,9 +142,18 @@ impl<B: RuntimeBackend> SwitchCoordinator<B> {
             );
         }
         self.faults.check(FaultPoint::RegistryCommitted)?;
+        let release_view = request.target_view();
+        let Some(release_package) = super::package_for_view(spec, release_view) else {
+            return self.registry_recovery(
+                spec,
+                crate::registry::RegistryError::InvalidRevision(
+                    "committed target cannot form release contract".to_owned(),
+                ),
+            );
+        };
         if let Err(error) = self
             .backend
-            .restore_gate(request.managed_package(), spec.gate_snapshot())
+            .restore_gate(&release_package, spec.gate_snapshot())
         {
             return self.require_recovery(
                 spec,

@@ -26,7 +26,7 @@ impl PackageStateStore {
             packages,
             owner_uid,
         };
-        store.validate_store()?;
+        store.validate_root()?;
         Ok(store)
     }
 
@@ -36,9 +36,9 @@ impl PackageStateStore {
         package: &PackageKey,
     ) -> Result<PackageStateRevision, PackageStateError> {
         require_primary(package)?;
-        self.validate_store()?;
+        self.validate_root()?;
         let revisions = self.revisions_path(package.package_name());
-        if !storage::load_all(&revisions, package.package_name(), self.owner_uid)?.is_empty() {
+        if storage::load_all(&revisions, package.package_name(), self.owner_uid)?.is_some() {
             return Err(PackageStateError::AlreadyExists(package.clone()));
         }
         let package_directory = self.package_path(package.package_name());
@@ -56,13 +56,13 @@ impl PackageStateStore {
         package: &PackageKey,
     ) -> Result<Option<PackageStateRevision>, PackageStateError> {
         require_primary(package)?;
-        self.validate_store()?;
+        self.validate_root()?;
         Ok(storage::load_all(
             &self.revisions_path(package.package_name()),
             package.package_name(),
             self.owner_uid,
         )?
-        .pop())
+        .and_then(|mut revisions| revisions.pop()))
     }
 
     #[doc = "Appends a legal state transition after the caller's expected state."]
@@ -74,10 +74,10 @@ impl PackageStateStore {
         reason: PackageStateReason,
     ) -> Result<PackageStateRevision, PackageStateError> {
         require_primary(package)?;
-        self.validate_store()?;
+        self.validate_root()?;
         let revisions = self.revisions_path(package.package_name());
         let previous = storage::load_all(&revisions, package.package_name(), self.owner_uid)?
-            .pop()
+            .and_then(|mut revisions| revisions.pop())
             .ok_or_else(|| PackageStateError::NotInitialized(package.clone()))?;
         if previous.package_key() != *package {
             return Err(PackageStateError::Corrupt(
@@ -101,9 +101,10 @@ impl PackageStateStore {
         Ok(revision)
     }
 
-    #[doc = "Enumerates every validated package stream in lexical package order."]
+    #[doc = "Enumerates attributable package entries in lexical order."]
+    #[doc = "Call `latest` for each returned package to validate its isolated stream."]
     pub fn enumerate_packages(&self) -> Result<Vec<PackageName>, PackageStateError> {
-        self.validate_store()?;
+        self.validate_root()?;
         let entries = fs::read_dir(&self.packages).map_err(|source| {
             PackageStateError::io("enumerate package state packages", &self.packages, source)
         })?;
@@ -118,23 +119,9 @@ impl PackageStateStore {
                     "non-UTF-8 package entry".to_owned(),
                 ));
             };
-            let file_type = entry.file_type().map_err(|source| {
-                PackageStateError::io("inspect package state entry", &entry.path(), source)
+            let package = PackageName::parse(name).map_err(|_| {
+                PackageStateError::Corrupt(format!("unexpected package state artifact {name}"))
             })?;
-            if !file_type.is_dir() {
-                return Err(PackageStateError::Corrupt(format!(
-                    "unexpected package state artifact {name}"
-                )));
-            }
-            let package = PackageName::parse(name)
-                .map_err(|_| PackageStateError::Corrupt(format!("invalid package entry {name}")))?;
-            if storage::load_all(&self.revisions_path(&package), &package, self.owner_uid)?
-                .is_empty()
-            {
-                return Err(PackageStateError::Corrupt(
-                    "package state stream has no revisions".to_owned(),
-                ));
-            }
             packages.push(package);
         }
         packages.sort();
@@ -152,7 +139,7 @@ impl PackageStateStore {
             .join(storage::revision_file_name(generation))
     }
 
-    fn validate_store(&self) -> Result<(), PackageStateError> {
+    fn validate_root(&self) -> Result<(), PackageStateError> {
         storage::validate_directory(&self.root, self.owner_uid)?;
         let entries = fs::read_dir(&self.root).map_err(|source| {
             PackageStateError::io("read package state root", &self.root, source)
@@ -183,40 +170,6 @@ impl PackageStateStore {
             return Err(PackageStateError::Corrupt(
                 "package state root is missing packages".to_owned(),
             ));
-        }
-        let entries = fs::read_dir(&self.packages).map_err(|source| {
-            PackageStateError::io("read package state packages", &self.packages, source)
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|source| {
-                PackageStateError::io("read package state entry", &self.packages, source)
-            })?;
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                return Err(PackageStateError::Corrupt(
-                    "non-UTF-8 package entry".to_owned(),
-                ));
-            };
-            if !entry
-                .file_type()
-                .map_err(|source| {
-                    PackageStateError::io("inspect package state entry", &entry.path(), source)
-                })?
-                .is_dir()
-            {
-                return Err(PackageStateError::Corrupt(format!(
-                    "unexpected package state artifact {name}"
-                )));
-            }
-            let package = PackageName::parse(name)
-                .map_err(|_| PackageStateError::Corrupt(format!("invalid package entry {name}")))?;
-            if storage::load_all(&self.revisions_path(&package), &package, self.owner_uid)?
-                .is_empty()
-            {
-                return Err(PackageStateError::Corrupt(
-                    "package state stream has no revisions".to_owned(),
-                ));
-            }
         }
         Ok(())
     }

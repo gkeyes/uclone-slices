@@ -97,6 +97,11 @@ impl RegistryStore {
         Ok(latest)
     }
 
+    #[doc = "Returns the Registry persistence root for fixed-layout discovery."]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn load_all(&self, package_name: &PackageName) -> Result<Vec<PackageRevision>, RegistryError> {
         self.validate_store()?;
         let package = self.package_path(package_name);

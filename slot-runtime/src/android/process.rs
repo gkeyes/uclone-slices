@@ -33,6 +33,9 @@ impl CommandRunner for SystemCommandRunner {
         let package = OsStr::new(command.package_name().as_str());
         match &command.0 {
             CommandSpec::Package { kind, .. } => run_package_command(*kind, package),
+            CommandSpec::Launch { .. } | CommandSpec::ContractMutation { .. } => {
+                Err(CommandError::Rejected)
+            }
             CommandSpec::Bind { source, target, .. } => run_process(
                 Executable::Mount,
                 &[OsStr::new("--bind"), source.as_os_str(), target.as_os_str()],
@@ -86,7 +89,9 @@ fn run_package_command(kind: CommandKind, package: &OsStr) -> Result<(), Command
                 package,
             ],
         ),
-        CommandKind::Bind(_) | CommandKind::Unmount(_) => Err(CommandError::Rejected),
+        CommandKind::LaunchPackage | CommandKind::Bind(_) | CommandKind::Unmount(_) => {
+            Err(CommandError::Rejected)
+        }
     }
 }
 

@@ -9,46 +9,23 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.uclone.slots.preview.*
 import com.uclone.slots.preview.model.Destination
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
+import com.uclone.slots.preview.model.RuntimeMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SlotsManagerApp(viewModel: SlotsViewModel) {
     val destination = viewModel.destination
-    val context = LocalContext.current
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
     val snackbar = remember { SnackbarHostState() }
     val topLevel = destination in setOf(Destination.Apps, Destination.Tasks, Destination.Settings)
     val selectedPackage = (destination as? Destination.Detail)?.packageName
     val label = viewModel.managedApps.firstOrNull { it.packageName == selectedPackage }?.label
         ?: selectedPackage.orEmpty()
-
-    DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> viewModel.setManagerVisible(true)
-                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
-                    viewModel.setManagerVisible(false)
-                }
-                else -> Unit
-            }
-        }
-        lifecycle.addObserver(observer)
-        viewModel.setManagerVisible(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
-        onDispose {
-            lifecycle.removeObserver(observer)
-            viewModel.setManagerVisible(false)
-        }
-    }
 
     BackHandler(enabled = !topLevel) { viewModel.navigate(Destination.Apps) }
     LaunchedEffect(viewModel.message) {
@@ -57,20 +34,6 @@ fun SlotsManagerApp(viewModel: SlotsViewModel) {
             viewModel.clearMessage()
         }
     }
-    LaunchedEffect(viewModel.pendingLaunchPackage, destination) {
-        viewModel.pendingLaunchPackage?.let { packageName ->
-            val visibleTarget = (destination as? Destination.Detail)?.packageName == packageName
-            if (visibleTarget && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-                viewModel.completePendingLaunch(
-                    packageName,
-                    launchInstalledApp(context, packageName),
-                )
-            } else {
-                viewModel.cancelPendingLaunch(packageName)
-            }
-        }
-    }
-
     Scaffold(
         containerColor = AppBackground,
         snackbarHost = { SnackbarHost(snackbar) },
@@ -105,12 +68,17 @@ fun SlotsManagerApp(viewModel: SlotsViewModel) {
                     viewModel.runtimeHealth,
                     { viewModel.navigate(Destination.Runtime) },
                     { viewModel.navigate(Destination.AddApp) },
+                    { viewModel.navigate(Destination.RescueApp) },
                     viewModel::openDetail,
                 )
-                Destination.AddApp -> AddAppScreen(
+                Destination.AddApp, Destination.RescueApp -> AddAppScreen(
                     viewModel.installedApps,
                     !viewModel.runtimeBusy,
-                    viewModel::inspectForEnrollment,
+                    rescueMode = destination == Destination.RescueApp,
+                    onSelect = {
+                        if (destination == Destination.RescueApp) viewModel.selectRescueTarget(it)
+                        else viewModel.inspectForEnrollment(it)
+                    },
                 )
                 Destination.Runtime -> RuntimeScreen(viewModel.runtimeHealth, viewModel::refreshRuntime)
                 Destination.Tasks -> TasksScreen(viewModel.taskHistory)
@@ -120,10 +88,20 @@ fun SlotsManagerApp(viewModel: SlotsViewModel) {
                     label = label,
                     status = viewModel.selectedStatus,
                     slots = viewModel.selectedSlots,
-                    enabled = !viewModel.runtimeBusy &&
-                        viewModel.runtimeHealth == com.uclone.slots.preview.model.RuntimeHealth.Ready &&
+                    recoveryOnly = viewModel.runtimeMode == RuntimeMode.RecoveryOnly,
+                    enabled = canUseOrdinarySlotActions(
+                        viewModel.runtimeHealth,
+                        viewModel.runtimeBusy,
                         viewModel.selectedStatus?.requiresRecovery == false,
-                    recoveryEnabled = !viewModel.runtimeBusy,
+                    ),
+                    reconcileEnabled = canUseReconcile(
+                        viewModel.runtimeHealth,
+                        viewModel.runtimeBusy,
+                    ) && viewModel.runtimeMode.allowsReconcile,
+                    rescueEnabled = canUseIndependentBaseRescue(
+                        viewModel.runtimeHealth,
+                        viewModel.runtimeBusy,
+                    ) && viewModel.runtimeMode.allowsBaseRescue,
                     onCreate = { name, blank -> viewModel.createSlot(destination.packageName, name, blank) },
                     onSwitch = { viewModel.switchAndOpen(destination.packageName, it) },
                     onRename = { slot, name -> viewModel.renameSlot(destination.packageName, slot, name) },
@@ -222,5 +200,6 @@ private fun titleFor(destination: Destination, detailLabel: String) = when (dest
     Destination.Settings -> "设置"
     Destination.Runtime -> "Runtime 状态"
     Destination.AddApp -> "添加应用"
+    Destination.RescueApp -> "选择救援目标"
     is Destination.Detail -> detailLabel
 }

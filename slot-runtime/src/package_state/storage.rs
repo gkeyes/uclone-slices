@@ -30,9 +30,9 @@ pub(super) fn load_all(
     revisions: &Path,
     package: &PackageName,
     owner_uid: u32,
-) -> Result<Vec<PackageStateRevision>, PackageStateError> {
+) -> Result<Option<Vec<PackageStateRevision>>, PackageStateError> {
     if !validate_package_directory(revisions, owner_uid)? {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     let entries = fs::read_dir(revisions).map_err(|source| {
         PackageStateError::io("read package state revisions", revisions, source)
@@ -67,6 +67,11 @@ pub(super) fn load_all(
         files.push(entry.path());
     }
     files.sort();
+    if files.is_empty() {
+        return Err(PackageStateError::Corrupt(
+            "package state stream has no revisions".to_owned(),
+        ));
+    }
     let mut loaded = Vec::with_capacity(files.len());
     for path in files {
         let file_generation = path
@@ -100,7 +105,7 @@ pub(super) fn load_all(
         revision.verify(loaded.last())?;
         loaded.push(revision);
     }
-    Ok(loaded)
+    Ok(Some(loaded))
 }
 
 pub(super) fn write_revision(
@@ -165,7 +170,12 @@ fn validate_package_directory(revisions: &Path, owner_uid: u32) -> Result<bool, 
         validate_directory(&entry.path(), owner_uid)?;
         found_revisions = true;
     }
-    Ok(found_revisions)
+    if !found_revisions {
+        return Err(PackageStateError::Corrupt(
+            "package state stream is missing revisions".to_owned(),
+        ));
+    }
+    Ok(true)
 }
 
 pub(super) fn revision_file_name(generation: u64) -> String {

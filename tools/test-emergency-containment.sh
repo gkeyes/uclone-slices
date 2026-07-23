@@ -17,6 +17,9 @@ esac
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
 SOURCE="$REPO_ROOT/slot-kernelsu/emergency-containment.sh"
+JOURNAL_SOURCE="$REPO_ROOT/slot-kernelsu/journal-packages.sh"
+RESCUE_SOURCE="$REPO_ROOT/slot-kernelsu/rescue-retired-packages.sh"
+LOADER_SOURCE="$REPO_ROOT/slot-kernelsu/profile-loader.sh"
 RENDERER="$REPO_ROOT/tools/render-target-profile.sh"
 TMP_BASE=${TMPDIR:-/tmp}
 FIXTURE=$(mktemp -d "$TMP_BASE/uclone-containment.XXXXXX")
@@ -53,6 +56,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 [ -f "$SOURCE" ] || fail 'missing emergency containment source'
+[ -f "$JOURNAL_SOURCE" ] || fail 'missing journal package source'
+[ -f "$RESCUE_SOURCE" ] || fail 'missing active-control discovery source'
+[ -f "$LOADER_SOURCE" ] || fail 'missing profile loader source'
 [ -x "$RENDERER" ] || fail 'missing target profile renderer'
 mkdir -p "$BIN" "$STATE" \
     "$RUNTIME/enrollment/packages" "$RUNTIME/catalog/packages" "$PROFILE_ROOT"
@@ -74,6 +80,8 @@ case "${1:-}" in
     stat)
         case "${2:-}:${3:-}" in
             -c:%u:%g) printf '%s\n' '0:0' ;;
+            -c:%u:%a) printf '%s\n' '0:444' ;;
+            -c:%u) printf '%s\n' '0' ;;
             -c:%a) printf '%s\n' '755' ;;
             *) exit 1 ;;
         esac
@@ -81,6 +89,11 @@ case "${1:-}" in
     grep)
         shift
         exec /usr/bin/grep "$@"
+        ;;
+    sed|sort|tr|wc)
+        tool=$1
+        shift
+        exec "/usr/bin/$tool" "$@"
         ;;
     ps)
         if [ -e "$STATE/first-ps" ]; then
@@ -96,6 +109,27 @@ case "${1:-}" in
     sleep)
         shift
         exec /bin/sleep "$@"
+        ;;
+    timeout)
+        shift
+        if [ "${1:-}" = -s ]; then shift 2; fi
+        seconds=${1:-}
+        [ -n "$seconds" ] || exit 2
+        shift
+        "$@" &
+        child=$!
+        ticks=$((seconds * 100))
+        tick=0
+        while [ "$tick" -lt "$ticks" ]; do
+            child_state=$(/bin/ps -p "$child" -o state= 2>/dev/null) || break
+            case "$child_state" in *Z*) break ;; esac
+            /bin/sleep 0.01
+            tick=$((tick + 1))
+        done
+        kill -9 "$child" 2>/dev/null || :
+        status=0
+        wait "$child" 2>/dev/null || status=$?
+        exit "$status"
         ;;
     *) exit 1 ;;
 esac
@@ -138,10 +172,26 @@ for fake in "$BIN/toybox" "$BIN/cmd" "$BIN/am"; do
     chmod 755 "$fake"
 done
 
+sed "s|/system/bin/toybox|$BIN/toybox|g" "$LOADER_SOURCE" \
+    >"$FIXTURE/profile-loader.sh"
+chmod 755 "$FIXTURE/profile-loader.sh"
+sed -e '1s|.*|#!/bin/sh|' \
+    -e "s|^TOYBOX_BIN=.*$|TOYBOX_BIN=\"$BIN/toybox\"|" \
+    -e "s|^RUNTIME_ROOT=.*$|RUNTIME_ROOT=\"$RUNTIME\"|" \
+    "$JOURNAL_SOURCE" >"$FIXTURE/journal-packages.sh"
+chmod 755 "$FIXTURE/journal-packages.sh"
+sed -e '1s|.*|#!/bin/sh|' \
+    -e "s|^TOYBOX_BIN=.*$|TOYBOX_BIN=\"$BIN/toybox\"|" \
+    -e "s|^UCLONE_RUNTIME_ROOT=/data/adb/uclone-slices-preview$|UCLONE_RUNTIME_ROOT=\"$RUNTIME\"|" \
+    -e "s|^RUNTIME_ROOT=.*$|RUNTIME_ROOT=\"$RUNTIME\"|" \
+    "$RESCUE_SOURCE" >"$FIXTURE/rescue-retired-packages.sh"
+chmod 755 "$FIXTURE/rescue-retired-packages.sh"
+
 sed \
     -e "s|^TOYBOX_BIN=.*$|TOYBOX_BIN=\"$BIN/toybox\"|" \
     -e "s|^CMD_BIN=.*$|CMD_BIN=\"$BIN/cmd\"|" \
     -e "s|^AM_BIN=.*$|AM_BIN=\"$BIN/am\"|" \
+    -e "s|^RUNTIME_ROOT=.*$|RUNTIME_ROOT=\"$RUNTIME\"|" \
     "$SOURCE" | sed \
     -e "s|STATE=__STATE__|STATE=\"$STATE\"|g" \
     -e "s|LOG=__DISABLE_LOG__|LOG=\"$DISABLE_LOG\"|g" \
@@ -166,18 +216,23 @@ bash "$SCRIPT" --watch >"$FIXTURE/watcher.log" 2>&1 &
 WATCH_PID=$!
 
 wait_for_file "$STATE/quiescence-verified"
+first_disable_count=$(wc -l <"$DISABLE_LOG" | tr -d ' ')
+[ "$first_disable_count" = 1 ] ||
+    fail "first pass contained the same package more than once (count=$first_disable_count)"
 printf '%s\n' 'first_containment=proved'
 rm -f "$STATE/disabled"
 : >"$STATE/process-running"
 : >"$STATE/release-first-ps"
 
 for i in $(seq 1 250); do
-    [ -f "$DISABLE_LOG" ] && [ "$(wc -l <"$DISABLE_LOG" | tr -d ' ')" -ge 2 ] && break
+    [ -f "$DISABLE_LOG" ] &&
+        [ "$(wc -l <"$DISABLE_LOG" | tr -d ' ')" -gt "$first_disable_count" ] && break
     /bin/sleep 0.02
 done
 [ -f "$DISABLE_LOG" ] || fail 'disable invocation log was not created'
 disable_count=$(wc -l <"$DISABLE_LOG" | tr -d ' ')
-[ "$disable_count" -ge 2 ] || fail "watch exited after first containment (disable_count=$disable_count)"
+[ "$disable_count" -gt "$first_disable_count" ] ||
+    fail "watch exited after first containment (disable_count=$disable_count)"
 printf '%s\n' "recontainment=proved disable_count=$disable_count"
 
 rm -f "$RUNTIME/enrollment/packages/$PACKAGE"

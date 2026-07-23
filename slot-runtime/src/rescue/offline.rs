@@ -1,16 +1,17 @@
-use std::path::Path;
-
-use crate::domain::{GateSnapshot, PackageKey};
-use crate::reconcile::{NativeBaseRecoveryBackend, RecoveryBackend};
-
 use super::anchors::{LiveDecision, RescueAnchors};
 use super::coordinator::RescueCoordinator;
-use super::offline_roots::{RescueRoots, management_artifacts_present, supported};
+use super::offline_roots::{
+    RescueRoots, management_artifacts_present, ordinary_journal_mentions_package, supported,
+    typed_target_evidence,
+};
 use super::{
     NoRescueFault, RescueError, RescueExecution, RescueFaultInjector, RescueJournalStore,
-    RescueMetadataSource, RescuePhase, RescueSpec, RescueStartup,
+    RescueMetadataSource, RescuePhase, RescueSpec, RescueStartup, StartupGateOutcome,
+    platform_error,
 };
-
+use crate::domain::{GateSnapshot, PackageKey, PackageName};
+use crate::reconcile::{NativeBaseRecoveryBackend, RecoveryBackend};
+use std::{collections::BTreeSet, path::Path};
 #[doc = "Independent emergency platform that never opens ordinary mutable stores."]
 #[derive(Debug)]
 pub struct OfflineRescuePlatform<B, T, F = NoRescueFault> {
@@ -18,8 +19,8 @@ pub struct OfflineRescuePlatform<B, T, F = NoRescueFault> {
     metadata: T,
     faults: F,
     roots: RescueRoots,
+    recovery_targets: BTreeSet<PackageName>,
 }
-
 impl<B, T> OfflineRescuePlatform<B, T, NoRescueFault> {
     #[doc = "Creates the production platform using only compiled fixed roots."]
     pub fn open_fixed(backend: B, metadata: T) -> Self {
@@ -28,10 +29,10 @@ impl<B, T> OfflineRescuePlatform<B, T, NoRescueFault> {
             metadata,
             faults: NoRescueFault,
             roots: RescueRoots::fixed(),
+            recovery_targets: BTreeSet::new(),
         }
     }
 }
-
 impl<B, T, F> OfflineRescuePlatform<B, T, F> {
     #[doc(hidden)]
     pub fn with_dependencies(
@@ -47,20 +48,44 @@ impl<B, T, F> OfflineRescuePlatform<B, T, F> {
             metadata,
             faults,
             roots: RescueRoots::with_roots(enrollment_root, catalog_root, journal_root),
+            recovery_targets: BTreeSet::new(),
         }
     }
-
+    #[doc = "Authorizes a user-zero target only when typed fixed-root recovery evidence verifies."]
+    pub fn authorize_existing_target(&mut self, key: &PackageKey) -> Result<bool, RescueError> {
+        if !supported(key) {
+            return Ok(false);
+        }
+        if !typed_target_evidence(&self.roots, key)? {
+            return match management_artifacts_present(&self.roots, key)? {
+                false => Ok(false),
+                true => Err(RescueError::Corrupt(
+                    "management evidence exists without valid rescue anchors".to_owned(),
+                )),
+            };
+        }
+        self.recovery_targets.insert(key.package_name().clone());
+        Ok(true)
+    }
+    pub(super) fn recovery_targets(&self) -> Vec<PackageName> {
+        self.recovery_targets
+            .iter()
+            .take(crate::service::MAX_RECOVERY_TARGETS)
+            .cloned()
+            .collect()
+    }
+    pub(super) fn accepts_recovery_target(&self, key: &PackageKey) -> bool {
+        supported(key) && self.recovery_targets.contains(key.package_name())
+    }
     #[doc = "Returns the injected backend for deterministic evidence inspection."]
     pub const fn backend(&self) -> &B {
         &self.backend
     }
-
     #[doc = "Consumes the platform and returns the injected dependencies."]
     pub fn into_dependencies(self) -> (B, T, F) {
         (self.backend, self.metadata, self.faults)
     }
 }
-
 impl<B, T, F> OfflineRescuePlatform<B, T, F>
 where
     B: RecoveryBackend + NativeBaseRecoveryBackend,
@@ -110,31 +135,56 @@ where
         RescueCoordinator::new(&mut self.backend, &journal, &mut self.faults)
             .resume(anchors.base(), &spec)
     }
-
     #[doc = "Holds the package gate before ordinary stores open when management artifacts exist."]
-    pub fn hold_startup_gate(&mut self, key: &PackageKey) -> Result<bool, RescueError> {
+    pub fn hold_startup_gate(
+        &mut self,
+        key: &PackageKey,
+    ) -> Result<StartupGateOutcome, RescueError> {
         if !supported(key) {
             return Err(RescueError::UnsupportedPackage);
         }
-        if !management_artifacts_present(&self.roots, key)? {
-            return Ok(false);
+        if ordinary_journal_mentions_package(&self.roots, key).is_err() {
+            self.backend
+                .emergency_gate(key.package_name())
+                .map_err(platform_error)?;
+            return Ok(StartupGateOutcome::HeldRecovery);
+        }
+        let managed = match management_artifacts_present(&self.roots, key) {
+            Ok(value) => value,
+            Err(_) => {
+                self.backend
+                    .emergency_gate(key.package_name())
+                    .map_err(platform_error)?;
+                return Ok(StartupGateOutcome::HeldRecovery);
+            }
+        };
+        if !managed {
+            return Ok(StartupGateOutcome::NotManaged);
         }
         self.backend
             .emergency_gate(key.package_name())
             .map_err(platform_error)?;
-        Ok(true)
+        Ok(StartupGateOutcome::Held)
     }
-
+    #[doc = "Reads only the typed rescue journal to classify startup before mutating the gate."]
+    pub fn startup_status(
+        &self,
+        key: &PackageKey,
+    ) -> Result<Option<super::RescueStatus>, RescueError> {
+        if !supported(key) {
+            return Err(RescueError::UnsupportedPackage);
+        }
+        let journal = RescueJournalStore::for_package(&self.roots.journal, key.package_name())?;
+        journal
+            .load()
+            .map(|transaction| transaction.map(|value| value.status()))
+    }
     #[doc = "Reconciles rescue state before any ordinary store may be opened."]
     pub fn reconcile_startup(&mut self, key: &PackageKey) -> RescueStartup {
         if !supported(key) {
             return RescueStartup::RecoveryRequired;
         }
-        let Ok(journal) = RescueJournalStore::for_package(&self.roots.journal, key.package_name())
-        else {
-            return self.startup_contain(key, RescueStartup::RecoveryRequired);
-        };
-        match journal.load() {
+        match self.startup_status(key) {
             Ok(None) => RescueStartup::OpenOrdinary,
             Ok(Some(_)) => match self.rescue_to_base(key) {
                 RescueExecution::CompletedBase => RescueStartup::BaseRetired,
@@ -145,7 +195,6 @@ where
             Err(_) => self.startup_contain(key, RescueStartup::RecoveryRequired),
         }
     }
-
     fn prepare(
         &mut self,
         journal: &RescueJournalStore,
@@ -170,7 +219,6 @@ where
         self.faults.after_phase(RescuePhase::Prepared)?;
         Ok(spec)
     }
-
     fn capture_gate(&mut self, anchors: &RescueAnchors) -> Result<GateSnapshot, RescueError> {
         if let Ok(snapshot) = self.backend.capture_gate_snapshot(anchors.base()) {
             return Ok(snapshot);
@@ -185,7 +233,6 @@ where
             .map_err(platform_error)?;
         Ok(snapshot)
     }
-
     fn contain(&mut self, key: &PackageKey, outcome: RescueExecution) -> RescueExecution {
         if self.backend.emergency_gate(key.package_name()).is_ok() {
             outcome
@@ -193,7 +240,6 @@ where
             RescueExecution::ContainmentFailed
         }
     }
-
     fn startup_contain(&mut self, key: &PackageKey, outcome: RescueStartup) -> RescueStartup {
         if self.backend.emergency_gate(key.package_name()).is_ok() {
             outcome
@@ -201,9 +247,4 @@ where
             RescueStartup::ContainmentFailed
         }
     }
-}
-
-fn platform_error(error: impl Into<crate::runtime::PlatformError>) -> RescueError {
-    let error = error.into();
-    RescueError::Corrupt(error.to_string())
 }

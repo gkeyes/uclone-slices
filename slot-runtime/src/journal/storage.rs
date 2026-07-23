@@ -89,6 +89,25 @@ pub(super) fn read_steps(
     Ok(steps)
 }
 
+pub(super) fn read_first_step(
+    directory: &Path,
+    owner_uid: u32,
+    transaction_id: &TransactionId,
+) -> Result<JournalStep, JournalError> {
+    validate_directory(directory, owner_uid)?;
+    let path = directory.join(step_file_name(1));
+    let bytes = store_security::read_record(&path, owner_uid, "journal step")
+        .map_err(|error| map_security("read first journal step", &path, error))?;
+    let step = serde_json::from_slice::<JournalStep>(&bytes).map_err(|source| {
+        JournalError::Corrupt(format!(
+            "first-step digest or JSON verification failed: {source}"
+        ))
+    })?;
+    step.verify()?;
+    verify_chain(transaction_id, &[], &step)?;
+    Ok(step)
+}
+
 pub(super) fn validate_transaction_directory(
     directory: &Path,
     owner_uid: u32,

@@ -31,10 +31,8 @@ STAGING="$TARGET_ROOT/staging"
 ZIP_PATH="$TARGET_ROOT/uclone-slices-preview-kernelsu.zip"
 MANIFEST_PATH="$TARGET_ROOT/manifest.txt"
 SHA256_PATH="$TARGET_ROOT/SHA256SUMS"
-SUMMARY_PATH="$TARGET_ROOT/package-summary.txt"
-ZIP_ENTRIES_PATH="$TARGET_ROOT/zip-entries.txt"
-STAGED_SHA256_PATH="$TARGET_ROOT/staged-SHA256SUMS"
-PROFILE_OUTPUT="$TARGET_ROOT/profile"
+SUMMARY_PATH="$TARGET_ROOT/package-summary.txt"; ZIP_ENTRIES_PATH="$TARGET_ROOT/zip-entries.txt"
+STAGED_SHA256_PATH="$TARGET_ROOT/staged-SHA256SUMS"; PROFILE_OUTPUT="$TARGET_ROOT/profile"
 mkdir -p "$PROFILE_OUTPUT"
 GENERATED_PROFILE="$PROFILE_OUTPUT/target-profile-$PROFILE"
 "$REPO_ROOT/tools/render-target-profile.sh" "$PROFILE" "$PROFILE_OUTPUT" >/dev/null
@@ -76,7 +74,7 @@ do
         exit 1
     }
 done
-for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh prepare-upgrade.sh; do
+for script in customize.sh post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh rescue-retired-packages.sh startup-gate.sh service.sh boot-completed.sh boot-state.sh profile-loader.sh rescue.sh prepare-upgrade.sh upgrade-freeze.sh; do
     require_regular_file "$KERNELSU_ROOT/$script"
     /bin/sh -n "$KERNELSU_ROOT/$script"
     cp "$KERNELSU_ROOT/$script" "$STAGING/$script"
@@ -108,15 +106,16 @@ chmod 0700 "$STAGING/post-fs-data.sh" "$STAGING/startup-gate.sh" \
     "$STAGING/emergency-containment.sh" "$STAGING/service.sh" \
     "$STAGING/boot-completed.sh" "$STAGING/customize.sh" \
     "$STAGING/boot-state.sh" "$STAGING/profile-loader.sh" \
-    "$STAGING/post-fs-setup.sh" "$STAGING/journal-packages.sh" "$STAGING/rescue.sh" \
-    "$STAGING/prepare-upgrade.sh"
+    "$STAGING/post-fs-setup.sh" "$STAGING/journal-packages.sh" \
+    "$STAGING/rescue-retired-packages.sh" "$STAGING/rescue.sh" \
+    "$STAGING/prepare-upgrade.sh" "$STAGING/upgrade-freeze.sh"
 chmod 0644 "$STAGING/disable" "$STAGING/module.prop" "$STAGING/skip_mount"
 chmod 0444 "$STAGING/target-profile.sh"
 chmod 0600 "$STAGING/runtime/slot-bridge.apk"
 for executable in \
     bin/ucloned bin/slotctl runtime/slot-fsprobe \
-    post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh \
-    boot-completed.sh boot-state.sh profile-loader.sh customize.sh rescue.sh prepare-upgrade.sh
+    post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh rescue-retired-packages.sh startup-gate.sh service.sh \
+    boot-completed.sh boot-state.sh profile-loader.sh customize.sh rescue.sh prepare-upgrade.sh upgrade-freeze.sh
 do
     [ "$(file_mode "$STAGING/$executable")" = 700 ] || {
         printf 'unexpected executable mode: %s\n' "$executable" >&2
@@ -139,6 +138,7 @@ done
 [ ! -L "$STAGING/disable" ] || exit 1
 [ ! -s "$STAGING/disable" ] || die 'disable marker must be zero-length'
 [ "$(file_mode "$STAGING/target-profile.sh")" = 444 ] || exit 1
+find "$STAGING" -exec touch -t 200001010000 {} +
 : >"$STAGED_SHA256_PATH"
 while IFS= read -r file; do
     relative=${file#"$STAGING/"}
@@ -162,7 +162,7 @@ done < <(find "$STAGING" -type f -print | sort)
 rm -f "$ZIP_PATH"
 (
     cd "$STAGING"
-    /usr/bin/zip -X -q -r "$ZIP_PATH" .
+    TZ=UTC /usr/bin/zip -X -q -r "$ZIP_PATH" .
 )
 /usr/bin/unzip -tq "$ZIP_PATH"
 VERIFY_ROOT="$TARGET_ROOT/verify-extract"
@@ -172,8 +172,8 @@ mkdir -p "$VERIFY_ROOT"
 [ -z "$(find "$VERIFY_ROOT" -type l -print -quit)" ] || die 'ZIP extraction produced a symlink'
 for executable in \
     bin/ucloned bin/slotctl runtime/slot-fsprobe \
-    post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh startup-gate.sh service.sh \
-    boot-completed.sh boot-state.sh profile-loader.sh rescue.sh prepare-upgrade.sh
+    post-fs-data.sh post-fs-setup.sh emergency-containment.sh journal-packages.sh rescue-retired-packages.sh startup-gate.sh service.sh \
+    boot-completed.sh boot-state.sh profile-loader.sh rescue.sh prepare-upgrade.sh upgrade-freeze.sh
 do
     [ "$(file_mode "$VERIFY_ROOT/$executable")" = 700 ] || {
         printf 'ZIP executable mode drift: %s\n' "$executable" >&2
@@ -204,6 +204,7 @@ customize.sh
 disable
 emergency-containment.sh
 journal-packages.sh
+rescue-retired-packages.sh
 module.prop
 post-fs-data.sh
 post-fs-setup.sh
@@ -216,6 +217,7 @@ service.sh
 skip_mount
 startup-gate.sh
 target-profile.sh
+upgrade-freeze.sh
 EOF
 /usr/bin/unzip -Z1 "$ZIP_PATH" | awk '!/\/$/' | sort >"$TARGET_ROOT/actual-zip-entries.txt"
 /usr/bin/cmp -s "$ZIP_ENTRIES_PATH" "$TARGET_ROOT/actual-zip-entries.txt" || {

@@ -8,7 +8,8 @@
 use uclone_slot_runtime::domain::{PackageKey, SlotId, SlotView};
 use uclone_slot_runtime::lifecycle::LifecycleState;
 use uclone_slot_runtime::service::{
-    ManagedAppInfo, PackageInspection, PackageState, ServiceError, SlotInfo, SwitchExecution,
+    ManagedAppInfo, PackageInspection, PackageSnapshot, PackageState, ServiceError, SlotInfo,
+    SwitchExecution,
 };
 use uclone_slot_runtime::slot_metadata::{SlotDisplayName, SlotRecordState, SlotSeedMode};
 
@@ -30,6 +31,9 @@ impl FakePlatform {
 
     pub(super) fn list_managed_fake(&self) -> Result<Vec<ManagedAppInfo>, ServiceError> {
         self.record(Call::ListManaged);
+        if let Some(apps) = &self.managed_apps {
+            return Ok(apps.clone());
+        }
         match self.state.borrow().clone() {
             PackageState::Absent => Ok(Vec::new()),
             PackageState::Ready(snapshot) => Ok(vec![ManagedAppInfo::new(
@@ -76,6 +80,17 @@ impl FakePlatform {
         assert_key(key);
         self.record(Call::CreateSlot);
         let target = preview_view();
+        let PackageState::Ready(snapshot) = self.state.borrow().clone() else {
+            return Err(ServiceError::RecoveryRequired);
+        };
+        let mut slots = snapshot.slots().to_vec();
+        slots.push(target.clone());
+        self.state
+            .replace(PackageState::Ready(Box::new(PackageSnapshot::new(
+                snapshot.managed().clone(),
+                slots,
+                snapshot.gate(),
+            ))));
         self.set_active(&target);
         Ok(SwitchExecution::Committed(target))
     }

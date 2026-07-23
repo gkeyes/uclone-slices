@@ -4,55 +4,6 @@ use super::outcome::ReconcileOutcome;
 use crate::domain::{PackageName, SlotId};
 use crate::lifecycle::LifecycleState;
 
-/// Probe capability result for the allowlisted package.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProbeReport {
-    ready: bool,
-    user_unlocked: bool,
-    ce_de_supported: bool,
-    runtime_version: String,
-    build_id: String,
-}
-
-impl ProbeReport {
-    /// Creates a bounded capability report.
-    pub fn new(ready: bool, user_unlocked: bool, ce_de_supported: bool) -> Self {
-        Self {
-            ready,
-            user_unlocked,
-            ce_de_supported,
-            runtime_version: env!("CARGO_PKG_VERSION").to_owned(),
-            build_id: crate::protocol::RUNTIME_BUILD_ID.to_owned(),
-        }
-    }
-
-    /// Returns whether all runtime gates are ready.
-    pub const fn ready(&self) -> bool {
-        self.ready
-    }
-
-    /// Returns whether user 0 CE is unlocked.
-    pub const fn user_unlocked(&self) -> bool {
-        self.user_unlocked
-    }
-
-    /// Returns whether paired CE and DE views are supported.
-    pub const fn ce_de_supported(&self) -> bool {
-        self.ce_de_supported
-    }
-
-    /// Returns the semantic Runtime version embedded in this binary.
-    pub fn runtime_version(&self) -> &str {
-        &self.runtime_version
-    }
-
-    /// Returns the immutable paired-build identity embedded by CI.
-    pub fn build_id(&self) -> &str {
-        &self.build_id
-    }
-}
-
 /// Current allowlisted package status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -130,6 +81,55 @@ impl SwitchResult {
     /// Returns the verified active slot.
     pub const fn slot(&self) -> &SlotId {
         &self.slot
+    }
+}
+
+/// Result of asking Runtime to open an already-committed slot view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchStatus {
+    /// ActivityTaskManager accepted the explicit launcher activity.
+    Launched,
+    /// PackageManager reported no enabled launcher entry.
+    EntryNotFound,
+    /// The package's captured disabled or suspended state was preserved.
+    GateBlocked,
+    /// The slot committed, but the bounded launch request failed.
+    Failed,
+}
+
+/// Result of opening one client-confirmed committed slot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaunchResult {
+    package: PackageName,
+    slot: SlotId,
+    launch_status: LaunchStatus,
+}
+
+impl LaunchResult {
+    /// Creates a result for one validated explicit launch request.
+    pub const fn new(package: PackageName, slot: SlotId, launch_status: LaunchStatus) -> Self {
+        Self {
+            package,
+            slot,
+            launch_status,
+        }
+    }
+
+    /// Returns the launched package.
+    pub const fn package(&self) -> &PackageName {
+        &self.package
+    }
+
+    /// Returns the client-confirmed active slot.
+    pub const fn slot(&self) -> &SlotId {
+        &self.slot
+    }
+
+    /// Returns the launcher outcome.
+    pub const fn launch_status(&self) -> LaunchStatus {
+        self.launch_status
     }
 }
 

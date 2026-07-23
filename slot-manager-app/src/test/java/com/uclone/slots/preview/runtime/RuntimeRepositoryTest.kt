@@ -37,36 +37,74 @@ class RuntimeRepositoryTest {
     }
 
     @Test
-    fun pairMismatchBlocksMutationBeforeItReachesRuntime() = runBlocking {
-        val client = RecordingClient(buildId = "other-build")
+    fun daemonPairMismatchIsPreservedWithoutAnExtraProbe() = runBlocking {
+        val client = RecordingClient(mutationError = "runtime_pair_mismatch")
         val repository = RuntimeRepository(client)
 
-        val result = repository.switch("com.example.app", "preview")
+        val result = repository.switchSlot("com.example.app", "preview")
 
         assertEquals(RuntimeResult.Rejected("runtime_pair_mismatch"), result)
-        assertEquals(listOf("probe"), client.requests.map { it.command })
+        assertEquals(listOf("switch"), client.requests.map { it.command })
     }
 
     @Test
-    fun invalidProbePayloadBlocksMutation() = runBlocking {
+    fun confirmedSwitchThenLaunchFlowUsesThreeTypedCalls() = runBlocking {
+        val client = RecordingClient()
+        val repository = RuntimeRepository(client)
+
+        repository.switchSlot("com.example.app", "work")
+        repository.packageSnapshot("com.example.app")
+        repository.launchCurrent("com.example.app", "work")
+
+        assertEquals(
+            listOf("switch", "package_snapshot", "launch_current"),
+            client.requests.map { it.command },
+        )
+        assertEquals("com.example.app", client.requests.last().packageName)
+        assertEquals("work", client.requests.last().slotId)
+    }
+
+    @Test
+    fun invalidProbePayloadIsRejectedByExplicitProbe() = runBlocking {
         val client = RecordingClient(probePayload = RuntimePayload.Ack("probe"))
         val repository = RuntimeRepository(client)
 
-        val result = repository.switch("com.example.app", "preview")
+        val result = repository.probe()
 
         assertEquals(RuntimeResult.Rejected("invalid_probe"), result)
         assertEquals(listOf("probe"), client.requests.map { it.command })
     }
 
     @Test
-    fun runtimeThatIsNotReadyBlocksMutation() = runBlocking {
+    fun explicitProbeReportsRuntimeReadinessWithoutPrefacingMutation() = runBlocking {
         val client = RecordingClient(ready = false)
         val repository = RuntimeRepository(client)
 
-        val result = repository.switch("com.example.app", "preview")
+        val result = repository.probe()
 
-        assertEquals(RuntimeResult.Rejected("unsupported_device"), result)
+        assertTrue(result is RuntimeResult.Success)
         assertEquals(listOf("probe"), client.requests.map { it.command })
+    }
+
+    @Test
+    fun pairedRecoveryOnlyRuntimeCanListTargetsWithoutBeingReady() = runBlocking {
+        val client = RecordingClient(ready = false)
+        val repository = RuntimeRepository(client)
+
+        repository.listRecoveryTargets()
+
+        assertEquals(listOf("list_recovery_targets"), client.requests.map { it.command })
+    }
+
+    @Test
+    fun pairingMismatchFromDaemonBlocksRecoveryTargetDiscovery() = runBlocking {
+        val client = RecordingClient(mutationError = "runtime_pair_mismatch", ready = false)
+        val repository = RuntimeRepository(client)
+
+        val result = repository.listRecoveryTargets()
+
+        assertEquals(RuntimeResult.Rejected("runtime_pair_mismatch"), result)
+        assertEquals(listOf("list_recovery_targets"), client.requests.map { it.command })
     }
 
     @Test
@@ -85,6 +123,7 @@ private class RecordingClient(
     private val buildId: String = BuildConfig.PREVIEW_BUILD_ID,
     private val ready: Boolean = true,
     private val probePayload: RuntimePayload? = null,
+    private val mutationError: String? = null,
 ) : RpcClient {
     val requests = mutableListOf<RuntimeRequest>()
 
@@ -95,6 +134,7 @@ private class RecordingClient(
                 probePayload ?: RuntimePayload.Probe(ready, true, true, "test", buildId),
             )
         }
+        mutationError?.let { return RuntimeResult.Rejected(it) }
         return RuntimeResult.Success(RuntimePayload.Ack("recorded"))
     }
 }

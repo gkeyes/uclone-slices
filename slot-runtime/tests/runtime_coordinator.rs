@@ -5,6 +5,8 @@
 mod fixture;
 #[path = "runtime_coordinator/gate_acquire.rs"]
 mod gate_acquire;
+#[path = "runtime_coordinator/quiesce.rs"]
+mod quiesce;
 #[allow(dead_code)]
 mod support;
 

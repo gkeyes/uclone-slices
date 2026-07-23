@@ -70,11 +70,11 @@ impl<B: RecoveryBackend> Reconciler<B> {
         }
     }
 
-    pub(super) fn restore_gate(&mut self, held: &HeldPackage) -> bool {
+    pub(super) fn restore_gate(&mut self, held: &HeldPackage, managed: &ManagedPackage) -> bool {
         let Some(snapshot) = held.snapshot else {
             return false;
         };
-        self.backend.restore_gate(&held.managed, snapshot).is_ok()
+        self.backend.restore_gate(managed, snapshot).is_ok()
     }
 
     pub(super) fn contain(&mut self, managed: &ManagedPackage) -> Result<(), ReconcileError> {

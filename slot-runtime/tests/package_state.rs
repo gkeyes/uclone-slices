@@ -144,6 +144,49 @@ fn enumerates_sorted_packages_and_rejects_unexpected_artifacts() {
 }
 
 #[test]
+fn corrupt_stream_isolated_from_reopen_and_sibling_operations() {
+    let (root, state) = store();
+    let broken = key("com.uclone.broken");
+    let healthy = key("com.uclone.healthy");
+    let later = key("com.uclone.later");
+    state.initialize(&broken).unwrap();
+    state.initialize(&healthy).unwrap();
+    fs::write(
+        state.revision_path(broken.package_name(), 1),
+        b"corrupt-state",
+    )
+    .unwrap();
+
+    let reopened = PackageStateStore::new(root.path()).unwrap();
+    assert!(reopened.latest(&broken).is_err());
+    assert_eq!(
+        reopened
+            .latest(&healthy)
+            .unwrap()
+            .unwrap()
+            .lifecycle_state(),
+        LifecycleState::Normal
+    );
+    reopened
+        .transition(
+            &healthy,
+            LifecycleState::Normal,
+            LifecycleState::RecoveryRequired,
+            PackageStateReason::ViewUncertain,
+        )
+        .unwrap();
+    reopened.initialize(&later).unwrap();
+    assert_eq!(
+        reopened.enumerate_packages().unwrap(),
+        vec![
+            broken.package_name().clone(),
+            healthy.package_name().clone(),
+            later.package_name().clone(),
+        ]
+    );
+}
+
+#[test]
 fn rejects_tampering_schema_and_filename_generation() {
     let (_root, state) = store();
     let package = key("com.uclone.tamper");
@@ -181,19 +224,28 @@ fn rejects_tampering_schema_and_filename_generation() {
 }
 
 #[test]
-fn rejects_dot_prefixed_artifacts_at_every_state_level() {
+fn isolates_attributable_package_artifacts_but_rejects_root_artifacts() {
     let (root, state) = store();
     let package = key("com.uclone.dot");
     state.initialize(&package).unwrap();
 
-    let artifacts = [
-        root.path().join(".orphan"),
-        root.path().join("packages/.orphan"),
+    let root_artifact = root.path().join(".orphan");
+    fs::write(&root_artifact, b"unexpected").unwrap();
+    assert!(state.latest(&package).is_err());
+    fs::remove_file(root_artifact).unwrap();
+
+    let unattributed = root.path().join("packages/.orphan");
+    fs::write(&unattributed, b"unexpected").unwrap();
+    assert!(state.latest(&package).is_ok());
+    assert!(state.enumerate_packages().is_err());
+    fs::remove_file(unattributed).unwrap();
+
+    let package_artifacts = [
         root.path().join("packages/com.uclone.dot/.orphan"),
         root.path()
             .join("packages/com.uclone.dot/revisions/.orphan"),
     ];
-    for artifact in artifacts {
+    for artifact in package_artifacts {
         fs::write(&artifact, b"unexpected").unwrap();
         let error = state.latest(&package).unwrap_err();
         assert!(error.to_string().contains("unexpected"));

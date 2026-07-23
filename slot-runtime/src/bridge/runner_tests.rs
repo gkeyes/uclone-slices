@@ -3,7 +3,7 @@ use super::{
     MAX_BOOT_CLASSPATH_BYTES, ValidatedBootEnvironment,
 };
 use crate::bridge::{ALLOWED_PACKAGE, BridgeCommand, PackageEnabledState};
-use crate::domain::PackageName;
+use crate::domain::{AppIdentity, DataInodes, PackageName};
 
 const CURRENT_BOOTCLASSPATH: &str =
     "/apex/com.android.art/javalib/core-oj.jar:/system/framework/framework.jar";
@@ -102,6 +102,13 @@ fn rejects_classpath_larger_than_64_kibibytes() {
 #[test]
 fn persistent_session_requests_keep_only_fixed_bridge_arguments() {
     let package = PackageName::parse(ALLOWED_PACKAGE).unwrap();
+    let identity = AppIdentity::new(
+        10_321,
+        &"ab".repeat(32),
+        7,
+        "/data/app/example.package/base.apk",
+    )
+    .unwrap();
     assert_eq!(
         BridgeCommand::GateStatus(package.clone()).session_request(),
         format!("probe-gate\t{ALLOWED_PACKAGE}\n").into_bytes()
@@ -109,5 +116,18 @@ fn persistent_session_requests_keep_only_fixed_bridge_arguments() {
     assert_eq!(
         BridgeCommand::SetEnabled(package, PackageEnabledState::DisabledUser).session_request(),
         format!("set-enabled\t{ALLOWED_PACKAGE}\tdisabled_user\n").into_bytes()
+    );
+    assert_eq!(
+        BridgeCommand::LaunchPackage {
+            package: PackageName::parse(ALLOWED_PACKAGE).unwrap(),
+            expected_identity: identity,
+            expected_base_inodes: DataInodes::new(101, 202).unwrap(),
+        }
+        .session_request(),
+        format!(
+            "launch-package\t{ALLOWED_PACKAGE}\t10321\t{}\t7\t/data/app/example.package/base.apk\t101\t202\n",
+            "ab".repeat(32)
+        )
+        .into_bytes()
     );
 }

@@ -27,6 +27,7 @@ pub(super) struct FakeBackend {
     pub(super) gate_held: bool,
     pub(super) lease_retired: bool,
     pub(super) failure: FailureMode,
+    pub(super) mount_operations: Vec<&'static str>,
     gate_acquire_calls: u32,
     gate_verifications: u32,
     pub(super) mutations: Vec<&'static str>,
@@ -41,6 +42,7 @@ pub(super) enum FailureMode {
     None,
     GateAcquire,
     GateAcquireAfterMutation,
+    Quiesce,
     TargetVerification,
     RollbackAndContainment,
     GateLeaseRetirement,
@@ -64,6 +66,7 @@ impl FakeBackend {
             gate_held: false,
             lease_retired: false,
             failure: FailureMode::None,
+            mount_operations: Vec::new(),
             gate_acquire_calls: 0,
             gate_verifications: 0,
             mutations: Vec::new(),
@@ -129,6 +132,11 @@ impl RuntimeBackend for FakeBackend {
     }
 
     fn quiesce_processes(&mut self, _package: &ManagedPackage) -> Result<(), PlatformError> {
+        if self.failure == FailureMode::Quiesce {
+            return Err(PlatformError::QuiesceProcesses {
+                detail: "injected_residual_process".to_owned(),
+            });
+        }
         self.mutations.push("processes_quiesced");
         Ok(())
     }
@@ -138,6 +146,7 @@ impl RuntimeBackend for FakeBackend {
         _package: &ManagedPackage,
         view: &SlotView,
     ) -> Result<(), PlatformError> {
+        self.mount_operations.extend(["unmount", "bind"]);
         self.current = view.clone();
         self.mutations.push("view_applied");
         Ok(())

@@ -11,15 +11,22 @@ pub struct CapabilitySnapshot {
     ready: bool,
     user_unlocked: bool,
     ce_de_supported: bool,
+    recovery_only: bool,
 }
 
 impl CapabilitySnapshot {
     /// Groups already-probed user-zero runtime capability facts.
-    pub const fn new(ready: bool, user_unlocked: bool, ce_de_supported: bool) -> Self {
+    pub const fn new(
+        ready: bool,
+        user_unlocked: bool,
+        ce_de_supported: bool,
+        recovery_only: bool,
+    ) -> Self {
         Self {
             ready,
             user_unlocked,
             ce_de_supported,
+            recovery_only,
         }
     }
 
@@ -36,6 +43,11 @@ impl CapabilitySnapshot {
     /// Returns whether paired CE and DE views are supported.
     pub const fn ce_de_supported(self) -> bool {
         self.ce_de_supported
+    }
+
+    /// Returns whether this daemon exposes only bounded recovery operations.
+    pub const fn recovery_only(self) -> bool {
+        self.recovery_only
     }
 }
 
