@@ -101,43 +101,105 @@ pub(super) fn transition_recovery(
     stores: &super::super::super::stores::ProductionStores,
     key: &crate::domain::PackageKey,
 ) {
-    stores
-        .package_state
-        .transition(
-            key,
-            LifecycleState::Normal,
-            LifecycleState::RecoveryRequired,
-            PackageStateReason::ViewUncertain,
-        )
-        .unwrap();
+    transition(
+        stores,
+        key,
+        LifecycleState::Normal,
+        LifecycleState::RecoveryRequired,
+        PackageStateReason::ViewUncertain,
+    );
 }
 
 pub(super) fn transition_quarantine(
     stores: &super::super::super::stores::ProductionStores,
     key: &crate::domain::PackageKey,
 ) {
-    stores
-        .package_state
-        .transition(
-            key,
-            LifecycleState::Normal,
-            LifecycleState::Quarantined,
-            PackageStateReason::IdentityChanged,
-        )
-        .unwrap();
+    transition(
+        stores,
+        key,
+        LifecycleState::Normal,
+        LifecycleState::Quarantined,
+        PackageStateReason::IdentityChanged,
+    );
 }
 
 pub(super) fn transition_drift(
     stores: &super::super::super::stores::ProductionStores,
     key: &crate::domain::PackageKey,
 ) {
+    transition(
+        stores,
+        key,
+        LifecycleState::Normal,
+        LifecycleState::LifecycleDrifted,
+        PackageStateReason::LifecycleDrift,
+    );
+}
+
+pub(super) fn transition_update_preparing(
+    stores: &super::super::super::stores::ProductionStores,
+    key: &crate::domain::PackageKey,
+) {
+    transition(
+        stores,
+        key,
+        LifecycleState::Normal,
+        LifecycleState::UpdatePreparing,
+        PackageStateReason::ManagedUpdate,
+    );
+}
+
+pub(super) fn transition_update_window_open(
+    stores: &super::super::super::stores::ProductionStores,
+    key: &crate::domain::PackageKey,
+) {
+    transition_update_preparing(stores, key);
+    transition(
+        stores,
+        key,
+        LifecycleState::UpdatePreparing,
+        LifecycleState::UpdateWindowOpen,
+        PackageStateReason::ManagedUpdate,
+    );
+}
+
+pub(super) fn transition_update_verifying(
+    stores: &super::super::super::stores::ProductionStores,
+    key: &crate::domain::PackageKey,
+) {
+    transition_update_window_open(stores, key);
+    transition(
+        stores,
+        key,
+        LifecycleState::UpdateWindowOpen,
+        LifecycleState::UpdateVerifying,
+        PackageStateReason::ManagedUpdate,
+    );
+}
+
+pub(super) fn transition_repair_waiting(
+    stores: &super::super::super::stores::ProductionStores,
+    key: &crate::domain::PackageKey,
+) {
+    transition_drift(stores, key);
+    transition(
+        stores,
+        key,
+        LifecycleState::LifecycleDrifted,
+        LifecycleState::RepairWaiting,
+        PackageStateReason::ManualRepair,
+    );
+}
+
+fn transition(
+    stores: &super::super::super::stores::ProductionStores,
+    key: &crate::domain::PackageKey,
+    previous: LifecycleState,
+    next: LifecycleState,
+    reason: PackageStateReason,
+) {
     stores
         .package_state
-        .transition(
-            key,
-            LifecycleState::Normal,
-            LifecycleState::LifecycleDrifted,
-            PackageStateReason::LifecycleDrift,
-        )
+        .transition(key, previous, next, reason)
         .unwrap();
 }

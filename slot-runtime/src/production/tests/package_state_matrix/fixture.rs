@@ -1,7 +1,6 @@
 use super::matrix_probe::MatrixProbe;
 use super::{fixture_cases, fixture_data};
 use crate::domain::{PackageKey, SlotView};
-use crate::lifecycle::LifecycleState;
 use crate::service::{PackageState, ServiceError};
 
 #[derive(Clone, Copy)]
@@ -25,7 +24,11 @@ pub(super) enum Row {
     IdentityMismatch,
     Blocked,
     PersistedQuarantine,
+    UpdatePreparing,
+    UpdateWindowOpen,
+    UpdateVerifying,
     LifecycleDrift,
+    RepairWaiting,
 }
 
 pub(super) enum Expected {
@@ -35,7 +38,6 @@ pub(super) enum Expected {
     Recovery,
     Quarantined,
     Error,
-    DriftReady,
 }
 
 pub(super) struct Fixture {
@@ -46,7 +48,7 @@ pub(super) struct Fixture {
     pub(super) expected: Expected,
 }
 
-pub(super) const fn rows() -> [Row; 19] {
+pub(super) const fn rows() -> [Row; 24] {
     [
         Row::Absent,
         Row::ReadyBase,
@@ -67,6 +69,11 @@ pub(super) const fn rows() -> [Row; 19] {
         Row::IdentityMismatch,
         Row::Blocked,
         Row::PersistedQuarantine,
+        Row::UpdatePreparing,
+        Row::UpdateWindowOpen,
+        Row::UpdateVerifying,
+        Row::LifecycleDrift,
+        Row::RepairWaiting,
     ]
 }
 
@@ -129,10 +136,30 @@ pub(super) fn build(row: Row) -> Fixture {
             MatrixProbe::healthy(fixture_data::default_gate()),
             |stores, key, _| fixture_cases::transition_quarantine(stores, key),
         ),
+        Row::UpdatePreparing => fixture_data::base_case(
+            Expected::Recovery,
+            MatrixProbe::healthy(fixture_data::default_gate()),
+            |stores, key, _| fixture_cases::transition_update_preparing(stores, key),
+        ),
+        Row::UpdateWindowOpen => fixture_data::base_case(
+            Expected::Recovery,
+            MatrixProbe::healthy(fixture_data::default_gate()),
+            |stores, key, _| fixture_cases::transition_update_window_open(stores, key),
+        ),
+        Row::UpdateVerifying => fixture_data::base_case(
+            Expected::Recovery,
+            MatrixProbe::healthy(fixture_data::default_gate()),
+            |stores, key, _| fixture_cases::transition_update_verifying(stores, key),
+        ),
         Row::LifecycleDrift => fixture_data::base_case(
-            Expected::DriftReady,
+            Expected::Recovery,
             MatrixProbe::healthy(fixture_data::default_gate()),
             |stores, key, _| fixture_cases::transition_drift(stores, key),
+        ),
+        Row::RepairWaiting => fixture_data::base_case(
+            Expected::Recovery,
+            MatrixProbe::healthy(fixture_data::default_gate()),
+            |stores, key, _| fixture_cases::transition_repair_waiting(stores, key),
         ),
     }
 }
@@ -161,13 +188,6 @@ pub(super) fn assert_expected(actual: Result<PackageState, ServiceError>, expect
                 assert_eq!(snapshot.slot(target.slot_id()), Some(&target));
             }
             _ => panic!("expected a ready extension"),
-        },
-        Expected::DriftReady => match actual {
-            Ok(PackageState::Ready(snapshot)) => assert_eq!(
-                snapshot.managed().lifecycle_state(),
-                LifecycleState::LifecycleDrifted
-            ),
-            _ => panic!("current lifecycle-drift characterization changed"),
         },
     }
 }

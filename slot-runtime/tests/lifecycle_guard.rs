@@ -115,3 +115,31 @@ fn accepts_version_change_only_during_update_verification() {
 
     assert_eq!(decision, GuardDecision::AllowUpdateVerification);
 }
+
+#[test]
+fn rejects_transitional_lifecycle_states_without_update_proof() {
+    let base = DataInodes::new(100, 200).unwrap();
+    let observed = observation(
+        AppIdentity::new(10_321, SIGNATURE_A, 1, "/data/app/slotprobe/base.apk").unwrap(),
+        base,
+        base,
+        false,
+    );
+    for lifecycle in [
+        LifecycleState::UpdatePreparing,
+        LifecycleState::UpdateWindowOpen,
+        LifecycleState::UpdateVerifying,
+        LifecycleState::LifecycleDrifted,
+        LifecycleState::RepairWaiting,
+    ] {
+        let decision = PackageLifecycleGuard::assess(
+            &managed(SlotId::base(), base).with_lifecycle_state(lifecycle),
+            &observed,
+        );
+        assert_eq!(
+            decision,
+            GuardDecision::RecoveryRequired(RecoveryReason::PersistedLifecycleState),
+            "lifecycle {lifecycle:?} must not be served without update proof",
+        );
+    }
+}

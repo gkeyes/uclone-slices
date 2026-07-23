@@ -53,6 +53,7 @@ store, journal, catalog, Registry, and slot-metadata fixtures.
 | Observation probe failure | `observe_package` returns `ProbeError` | `Err(RecoveryRequired)` | No live identity/view proof, no serving view. |
 | Gate probe failure | `gate_snapshot` returns `ProbeError` | `Err(RecoveryRequired)` | Exact gate facts are part of the read contract. |
 | Persisted recovery lifecycle | Latest package-state revision is `RecoveryRequired` | `RecoveryRequired` | A durable recovery fence cannot be bypassed by a healthy probe. |
+| Persisted transitional lifecycle | Latest revision is `LifecycleDrifted`, `RepairWaiting`, `UpdatePreparing`, `UpdateWindowOpen`, or `UpdateVerifying` without an exact update proof | `RecoveryRequired` | Transitional state is not an ordinary serveable state. |
 | Identity mismatch | UID or signing identity differs from enrollment | `Quarantined` | Old slots are not automatically attached to a new identity. |
 | Blocked support class | Live probe classifies a system/shared-UID package as blocked | `Quarantined` | The Preview allowlist does not manage this package class. |
 | Persisted quarantine lifecycle | Latest package-state revision is `Quarantined` | `Quarantined` | Quarantine is terminal until an explicit repair path exists. |
@@ -95,22 +96,20 @@ absent, previous, matching-target, conflicting-nonce, and foreign-identity
 Registry evidence. It also proves that an illegal next Journal event is rejected
 without changing the persisted transaction.
 
-## Known gap: lifecycle drift is not fail-closed today
+## Lifecycle fail-closed rule
 
-The characterization test
-`package_state_matrix_lifecycle_drift_is_not_promoted_to_recovery_today` records
-an unsafe current behavior: with coherent live base observations, a persisted
-`LifecycleDrifted` revision is returned as `Ready`. The same loader does explicitly
-fence `RecoveryRequired` and `Quarantined`, but the lifecycle guard currently does
-not independently reject `LifecycleDrifted` (or all other transitional lifecycle
-states) when the live sample happens to look normal.
+The package-state matrix now covers every persisted `LifecycleState`. Only
+`Normal` may produce an ordinary `PackageState::Ready` result. A coherent live
+probe does not override a persisted `LifecycleDrifted`, `RepairWaiting`,
+`UpdatePreparing`, `UpdateWindowOpen`, or `UpdateVerifying` state; these resolve to
+`RecoveryRequired` unless a future update use case supplies an exact verification
+proof. `Quarantined` remains an isolated terminal result.
 
-This row is intentionally an expected-current-behavior test so a later hardening
-change can make the result `RecoveryRequired` without silently changing the
-characterization record. It is not a normative safety rule and must not be used as
-authorization to serve a drifted package. `RepairWaiting`, `UpdatePreparing`,
-`UpdateWindowOpen`, and `UpdateVerifying` need an explicit policy review before
-they can be treated as safe read states; they are not promoted by this document.
+The lifecycle guard retains one narrow update exception for the future managed
+update path: `UpdateVerifying` may return `AllowUpdateVerification` only when the
+installed version/path changed, the active view is Base, and PackageManager,
+canonical, and active-process inodes all prove the enrolled Base. This exception
+does not make the ordinary package-state loader serve a transitional snapshot.
 
 ## Non-goals and boundaries
 

@@ -27,10 +27,10 @@ fn package_state_matrix_rows() {
 }
 
 #[test]
-fn package_state_matrix_lifecycle_drift_is_not_promoted_to_recovery_today() {
+fn package_state_matrix_lifecycle_drift_is_fail_closed() {
     let mut case = fixture::build(fixture::Row::LifecycleDrift);
     let actual = super::super::state::load(&case.stores, &mut case.probe, &case.key);
-    fixture::assert_expected(actual, fixture::Expected::DriftReady);
+    fixture::assert_expected(actual, fixture::Expected::Recovery);
 }
 
 #[test]

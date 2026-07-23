@@ -64,6 +64,8 @@ impl LifecycleState {
 #[doc = "Fail-closed reason associated with a recovery-required decision."]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecoveryReason {
+    #[doc = "A persisted transitional lifecycle state has no accepted update proof."]
+    PersistedLifecycleState,
     #[doc = "`PackageManager` no longer points to the enrolled base inodes."]
     PackageManagerInodeDrift,
     #[doc = "Canonical and App-process views disagree with the committed slot."]
@@ -100,22 +102,29 @@ impl PackageLifecycleGuard {
     pub fn assess(managed: &ManagedPackage, observed: &PackageObservation) -> GuardDecision {
         let expected = managed.identity();
         let actual = observed.identity();
+        let lifecycle = managed.lifecycle_state();
 
-        if managed.lifecycle_state() == LifecycleState::Quarantined
+        if lifecycle == LifecycleState::Quarantined
             || expected.uid() != actual.uid()
             || expected.signature_sha256() != actual.signature_sha256()
         {
             return GuardDecision::Quarantine;
         }
-        if managed.lifecycle_state() == LifecycleState::RecoveryRequired {
+        if lifecycle == LifecycleState::RecoveryRequired {
             return GuardDecision::RecoveryRequired(RecoveryReason::PersistedRecoveryState);
+        }
+        if !matches!(
+            lifecycle,
+            LifecycleState::Normal | LifecycleState::UpdateVerifying
+        ) {
+            return GuardDecision::RecoveryRequired(RecoveryReason::PersistedLifecycleState);
         }
         if observed.package_manager_inodes() != managed.base_inodes() {
             return GuardDecision::RecoveryRequired(RecoveryReason::PackageManagerInodeDrift);
         }
         if observed.pending_install()
             && !matches!(
-                managed.lifecycle_state(),
+                lifecycle,
                 LifecycleState::UpdateWindowOpen | LifecycleState::UpdateVerifying
             )
         {
@@ -125,7 +134,7 @@ impl PackageLifecycleGuard {
         let package_replaced = expected.version_code() != actual.version_code()
             || expected.code_path() != actual.code_path();
         if package_replaced {
-            if managed.lifecycle_state() == LifecycleState::UpdateVerifying
+            if lifecycle == LifecycleState::UpdateVerifying
                 && managed.active_slot().is_base()
                 && observed.canonical_inodes() == managed.base_inodes()
                 && observed.active_process_inodes() == managed.base_inodes()
@@ -133,6 +142,9 @@ impl PackageLifecycleGuard {
                 return GuardDecision::AllowUpdateVerification;
             }
             return GuardDecision::RecoveryRequired(RecoveryReason::UnexpectedPackageReplacement);
+        }
+        if lifecycle == LifecycleState::UpdateVerifying {
+            return GuardDecision::RecoveryRequired(RecoveryReason::PersistedLifecycleState);
         }
 
         if observed.canonical_inodes() != managed.active_inodes()

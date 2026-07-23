@@ -76,6 +76,12 @@ pub(super) fn load<Q: PackageProbe>(
     if !registry_matches_journal(registry.as_ref(), &journal, key) {
         return Ok(PackageState::RecoveryRequired);
     }
+    if state.lifecycle_state() != crate::lifecycle::LifecycleState::Normal {
+        return Ok(match state.lifecycle_state() {
+            crate::lifecycle::LifecycleState::Quarantined => PackageState::Quarantined,
+            _ => PackageState::RecoveryRequired,
+        });
+    }
     let managed = ManagedPackage::new(
         key.clone(),
         enrolled.identity().clone(),
