@@ -23,6 +23,7 @@ TOYBOX_BIN=/system/bin/toybox
 CMD_BIN=/system/bin/cmd
 AM_BIN=/system/bin/am
 RUNTIME_BIN=$SCRIPT_DIR/bin/ucloned
+SLOTCTL_BIN=$SCRIPT_DIR/bin/slotctl
 RESCUE_PACKAGES=$SCRIPT_DIR/rescue-retired-packages.sh
 COMMAND_TIMEOUT_SECONDS=2
 HELPER_TIMEOUT_SECONDS=4
@@ -48,6 +49,19 @@ management_artifact_present() {
     active_control="$($TOYBOX_BIN timeout -s 9 "$HELPER_TIMEOUT_SECONDS" \
         "$RESCUE_PACKAGES" --active-control 2>/dev/null)" || return 0
     [ -n "$active_control" ]
+}
+runtime_owns_containment() {
+    safe_binary "$SLOTCTL_BIN" || return 1
+    "$TOYBOX_BIN" timeout -s 9 "$COMMAND_TIMEOUT_SECONDS" \
+        "$SLOTCTL_BIN" probe >/dev/null 2>&1
+}
+retire_containment_request() {
+    if [ ! -e "$CONTAINMENT_REQUEST" ] && [ ! -L "$CONTAINMENT_REQUEST" ]; then
+        return 0
+    fi
+    [ -f "$CONTAINMENT_REQUEST" ] && [ ! -L "$CONTAINMENT_REQUEST" ] || return 1
+    "$TOYBOX_BIN" rm -f "$CONTAINMENT_REQUEST" >/dev/null 2>&1 || return 1
+    [ ! -e "$CONTAINMENT_REQUEST" ] && [ ! -L "$CONTAINMENT_REQUEST" ]
 }
 valid_package() {
     [ "${#1}" -le 255 ] || return 1
@@ -150,6 +164,9 @@ case "${1:-}" in
     --watch)
         [ -z "${2:-}" ] || exit 2
         while :; do
+            if runtime_owns_containment && retire_containment_request; then
+                exit 0
+            fi
             result="$(attempt_once 2>/dev/null)"
             status=$?
             if [ "$status" -eq 0 ] && [ "$result" = not-managed ]; then

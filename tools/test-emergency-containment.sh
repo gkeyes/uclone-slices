@@ -90,10 +90,13 @@ case "${1:-}" in
         shift
         exec /usr/bin/grep "$@"
         ;;
-    sed|sort|tr|wc)
+    rm|sed|sort|tr|wc)
         tool=$1
         shift
-        exec "/usr/bin/$tool" "$@"
+        case "$tool" in
+            rm) exec /bin/rm "$@" ;;
+            *) exec "/usr/bin/$tool" "$@" ;;
+        esac
         ;;
     ps)
         if [ -e "$STATE/first-ps" ]; then
@@ -243,3 +246,33 @@ wait "$WATCH_PID"
 WATCH_PID=
 printf '%s\n' 'retirement=proved all_anchors_removed'
 printf '%s\n' "disable_log=$(tr '\n' ',' <"$DISABLE_LOG")"
+
+printf '%s\n' 'scenario=watch-hands-off-to-live-runtime'
+mkdir -p "$RUNTIME/state"
+touch "$RUNTIME/enrollment/packages/$PACKAGE" \
+    "$RUNTIME/catalog/packages/$PACKAGE" \
+    "$RUNTIME/state/emergency-containment.request"
+cat >"$BIN/slotctl" <<EOF
+#!/bin/sh
+[ "\${1:-}" = probe ] || exit 2
+[ -e "$STATE/runtime-online" ] || exit 1
+printf '%s\n' '{"schema_version":2,"status":"ok"}'
+EOF
+chmod 755 "$BIN/slotctl"
+bash "$SCRIPT" --watch >"$FIXTURE/handoff-watcher.log" 2>&1 &
+WATCH_PID=$!
+/bin/sleep 0.15
+kill -0 "$WATCH_PID" 2>/dev/null ||
+    fail 'watch handed off before Runtime probe succeeded'
+: >"$STATE/runtime-online"
+for _ in $(seq 1 250); do
+    kill -0 "$WATCH_PID" 2>/dev/null || break
+    /bin/sleep 0.02
+done
+kill -0 "$WATCH_PID" 2>/dev/null &&
+    fail 'watch did not hand off after Runtime probe succeeded'
+wait "$WATCH_PID"
+WATCH_PID=
+[ ! -e "$RUNTIME/state/emergency-containment.request" ] ||
+    fail 'watch handoff retained the emergency request'
+printf '%s\n' 'runtime_handoff=proved'

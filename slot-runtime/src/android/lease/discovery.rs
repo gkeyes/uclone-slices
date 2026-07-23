@@ -29,6 +29,12 @@ pub(super) fn package_names() -> Result<Vec<PackageName>, GateLeaseError> {
 }
 
 fn active_package(name: &str) -> Result<Option<PackageName>, GateLeaseError> {
+    if matches!(
+        name,
+        "startup-gate.pending" | "startup-gate.ready" | "emergency-containment.request"
+    ) {
+        return Ok(None);
+    }
     if let Some(raw) = name
         .strip_suffix(".gate")
         .filter(|raw| !raw.starts_with('.'))
@@ -90,7 +96,15 @@ mod tests {
             active_package(".com.example.app.gate.retired").unwrap(),
             None
         );
+        for name in [
+            "startup-gate.pending",
+            "startup-gate.ready",
+            "emergency-containment.request",
+        ] {
+            assert_eq!(active_package(name).unwrap(), None);
+        }
         assert!(active_package("../bad.gate").is_err());
+        assert!(active_package("unknown.request").is_err());
         assert!(active_package(".com.example.app.gate.upgrade-x-1").is_err());
     }
 }
