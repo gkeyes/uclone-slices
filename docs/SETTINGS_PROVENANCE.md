@@ -28,6 +28,8 @@
 | Rust 1.95、edition 2024 | 旧版固定基线 `2ae26765…/slot-runtime/Cargo.toml`；V2 已在本机完整通过 | format、test、Clippy、doc |
 | AGP 8.11.1、Kotlin 2.2.0、JDK 17、SDK 36、minSdk 29、Compose 依赖版本 | 同一旧版固定提交的根构建和 Manager 构建文件；这里只沿用已通过的工具链，不沿用旧架构 | Gradle test、lint、assemble |
 | Gradle 8.13 | 与当前 AGP 组合完成本机构建；wrapper 是唯一 Gradle 版本源 | `./gradlew` 构建 |
+| GitHub runner `ubuntu-24.04` | CI 明确固定 Linux runner，避免首个基线随 `ubuntu-latest` 漂移；不是产品运行限制 | 首次远端 CI 尚待真机门禁后验证 |
+| Android build-tools `36.0.0` | 与项目唯一 `compileSdk/targetSdk 36` 配套安装，避免 CI 隐式选择不同 build-tools | Android assemble、首次远端 CI |
 | NDK 29.0.14206865、Android API 29、aarch64 | 旧版固定提交的 Android arm64 构建链和设备可行性证据；V2 已完成交叉编译 | KernelSU ZIP 构建和完整性检查 |
 | Android owner user `0`、`/data/user/0`、`/data/user_de/0` | 首个里程碑沿用已验证的单用户 CE/DE 行为；多用户没有进入聚合模型或产品入口 | Android command-sequence 和 mountinfo 测试 |
 | `/data/misc_ce/0/uclone-slices-v2/slots` 与 `/data/misc_de/0/uclone-slices-v2/slots` | 固定旧版行为基线已经验证的分离 CE/DE 槽布局；控制面数据不充当应用数据槽 | 成对物化、半成品清理和 paired-mount 测试 |
@@ -38,8 +40,8 @@
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.1.1`、versionCode `2` | 首个设备补丁版本；区别于会在 CE 解锁前退出的 `0.1.0` | `check-decision-alignment.sh` 保证 Rust、Manager、KernelSU 一致 |
+| 版本 `0.1.2`、versionCode `3` | 首次 GitHub 候选基线；统一包含 Runtime 事务回归、Manager transport 区分和 Runtime 启动复验候选修复 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
 | UI 的 8 dp 网格间距 | Material 布局网格，仅影响首个真实入口的排版，不进入业务或协议 | Android lint、assemble |
 | GitHub Action commit SHA | 旧版 CI 中已使用的 v3/v4 action 固定提交 | CI workflow |
 
-`tools/check-decision-alignment.sh` 只检查重复声明是否一致：发布版本、Rust 工具链、Manager minSdk 与 Rust Android API。它不设置文件长度、执行次数或覆盖率阈值。
+`tools/check-decision-alignment.sh` 只检查重复声明是否一致：发布版本、versionCode、Rust 工具链、Manager minSdk 与 Rust Android API。它不设置文件长度、执行次数或覆盖率阈值。

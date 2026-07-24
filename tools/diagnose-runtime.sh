@@ -25,6 +25,7 @@ print_path() {
 }
 
 printf '%s\n' '=== UClone Slices V2 Runtime diagnosis ==='
+printf '%s\n' 'script_version=3'
 printf 'uid=%s\n' "$(id -u 2>/dev/null)"
 printf 'date=%s\n' "$(date 2>/dev/null)"
 
@@ -74,6 +75,9 @@ fi
 printf 'pid_state=%s\n' "$PID_STATE"
 printf 'pidof_ucloned=%s\n' "$(pidof ucloned 2>/dev/null)"
 printf 'init_mount_ns=%s\n' "$(readlink /proc/1/ns/mnt 2>/dev/null)"
+printf 'user0_state=%s\n' \
+    "$(cmd activity get-started-user-state 0 2>&1)"
+printf 'boot_completed=%s\n' "$(getprop sys.boot_completed 2>/dev/null)"
 
 printf '%s\n' '--- socket and probe ---'
 print_path runtime_socket "$SOCKET"
