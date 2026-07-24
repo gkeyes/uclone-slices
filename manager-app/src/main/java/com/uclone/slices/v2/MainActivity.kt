@@ -84,7 +84,21 @@ private fun SlicesScreen(state: SlotsUiState, onIntent: (UiIntent) -> Unit) {
         onIntent(UiIntent.BackToPackages)
     }
     val registered = state.packages.associateBy { it.packageName }
-    Scaffold { padding ->
+    Scaffold(
+        bottomBar = {
+            state.message?.let { message ->
+                Surface(color = MaterialTheme.colorScheme.errorContainer) {
+                    Text(
+                        text = message,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(SectionSpacing),
+                    )
+                }
+            }
+        },
+    ) { padding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
@@ -147,6 +161,7 @@ private fun SlicesScreen(state: SlotsUiState, onIntent: (UiIntent) -> Unit) {
                     OutlinedTextField(
                         modifier = Modifier.fillMaxWidth(),
                         value = state.slotName,
+                        enabled = !state.busy,
                         onValueChange = { onIntent(UiIntent.SlotNameChanged(it)) },
                         label = { Text("新数据槽名称") },
                     )
@@ -164,7 +179,7 @@ private fun SlicesScreen(state: SlotsUiState, onIntent: (UiIntent) -> Unit) {
                         }
                     }
                     Button(
-                        enabled = !state.busy,
+                        enabled = !state.busy && state.slotName.isNotBlank(),
                         onClick = { onIntent(UiIntent.CreateSlot) },
                     ) {
                         Text("创建数据槽")
@@ -192,9 +207,6 @@ private fun SlicesScreen(state: SlotsUiState, onIntent: (UiIntent) -> Unit) {
                         }
                     }
                 }
-            }
-            state.message?.let { message ->
-                item { Text(message, color = MaterialTheme.colorScheme.error) }
             }
         }
     }

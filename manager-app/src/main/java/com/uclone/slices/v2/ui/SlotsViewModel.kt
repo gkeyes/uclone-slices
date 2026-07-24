@@ -9,7 +9,6 @@ import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeCommand
 import com.uclone.slices.v2.runtime.RuntimeReply
 import com.uclone.slices.v2.runtime.SeedMode
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -49,7 +48,8 @@ class SlotsViewModel(
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableState = MutableStateFlow(SlotsUiState())
-    private val operationActive = AtomicBoolean(false)
+    private val operationLock = Any()
+    private var operationActive = false
     val state: StateFlow<SlotsUiState> = mutableState.asStateFlow()
 
     init {
@@ -104,14 +104,19 @@ class SlotsViewModel(
     }
 
     private fun runOperation(operation: suspend () -> Unit) {
-        if (!operationActive.compareAndSet(false, true)) return
-        mutableState.update { it.copy(busy = true, message = null) }
+        synchronized(operationLock) {
+            if (operationActive) return
+            operationActive = true
+            mutableState.update { it.copy(busy = true, message = null) }
+        }
         scope.launch {
             try {
                 operation()
             } finally {
-                operationActive.set(false)
-                mutableState.update { it.copy(busy = false) }
+                synchronized(operationLock) {
+                    operationActive = false
+                    mutableState.update { it.copy(busy = false) }
+                }
             }
         }
     }
@@ -132,6 +137,7 @@ class SlotsViewModel(
                 refreshPackages()
             }
             is RuntimeReply.Error -> showError(probe.code)
+            RuntimeReply.TransportFailure -> showTransportFailure()
             is RuntimeReply.Package,
             is RuntimeReply.Packages,
             -> showError(ErrorCode.OperationFailed)
@@ -150,6 +156,7 @@ class SlotsViewModel(
                 )
             }
             is RuntimeReply.Error -> showError(reply.code)
+            RuntimeReply.TransportFailure -> showTransportFailure()
             is RuntimeReply.Capabilities,
             is RuntimeReply.Package,
             -> showError(ErrorCode.OperationFailed)
@@ -175,6 +182,7 @@ class SlotsViewModel(
                 )
             }
             is RuntimeReply.Error -> showError(reply.code)
+            RuntimeReply.TransportFailure -> showTransportFailure()
             is RuntimeReply.Capabilities,
             is RuntimeReply.Packages,
             -> showError(ErrorCode.OperationFailed)
@@ -189,10 +197,13 @@ class SlotsViewModel(
             ErrorCode.OperationFailed -> "Runtime 操作失败"
         }
         mutableState.update {
-            it.copy(
-                runtimeReady = if (code == ErrorCode.OperationFailed) false else it.runtimeReady,
-                message = message,
-            )
+            it.copy(message = message)
+        }
+    }
+
+    private fun showTransportFailure() {
+        mutableState.update {
+            it.copy(runtimeReady = false, message = "Runtime 未连接")
         }
     }
 }

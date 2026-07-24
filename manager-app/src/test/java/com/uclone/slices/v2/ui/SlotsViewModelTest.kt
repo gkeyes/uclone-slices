@@ -94,12 +94,26 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun blankSlotNameNeverReachesRuntime() {
+        val client = FakeRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        viewModel.onIntent(UiIntent.SlotNameChanged("   "))
+        val commandsBeforeCreate = client.commands.toList()
+
+        viewModel.onIntent(UiIntent.CreateSlot)
+
+        assertEquals(commandsBeforeCreate, client.commands)
+    }
+
+    @Test
     fun busyDropsASecondOperationInsteadOfQueuingIt() = runBlocking {
         val client = BlockingRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.OpenPackage("com.example.first"))
         client.firstStarted.await()
+        assertTrue(viewModel.state.value.busy)
         viewModel.onIntent(UiIntent.OpenPackage("com.example.second"))
 
         assertEquals(1, client.openCommands.size)
@@ -125,7 +139,7 @@ class SlotsViewModelTest {
     }
 
     @Test
-    fun fourErrorsHaveDistinctMessagesAndConnectionFailureClearsReady() {
+    fun fourWireErrorsHaveDistinctMessagesAndKeepTheConnectionState() {
         val expected = mapOf(
             ErrorCode.InvalidRequest to "输入无效",
             ErrorCode.NotFound to "应用或数据槽不存在",
@@ -140,10 +154,20 @@ class SlotsViewModelTest {
             viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
 
             assertEquals(message, viewModel.state.value.message)
-            if (code == ErrorCode.OperationFailed) {
-                assertFalse(viewModel.state.value.runtimeReady)
-            }
+            assertTrue(viewModel.state.value.runtimeReady)
         }
+    }
+
+    @Test
+    fun transportFailureClearsRuntimeReady() {
+        val client = FakeRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.TransportFailure
+
+        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+
+        assertEquals("Runtime 未连接", viewModel.state.value.message)
+        assertFalse(viewModel.state.value.runtimeReady)
     }
 }
 

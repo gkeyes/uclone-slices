@@ -49,6 +49,7 @@ sealed interface RuntimeReply {
     data class Packages(val packages: List<PackageSnapshot>) : RuntimeReply
     data class Package(val packageSnapshot: PackageSnapshot) : RuntimeReply
     data class Error(val code: ErrorCode) : RuntimeReply
+    data object TransportFailure : RuntimeReply
 }
 
 object RuntimeProtocol {

@@ -13,8 +13,10 @@ class RootRuntimeClient internal constructor(
         runInterruptible(Dispatchers.IO) {
             val process = try {
                 processStarter()
+            } catch (interrupted: InterruptedException) {
+                throw interrupted
             } catch (_: Exception) {
-                return@runInterruptible RuntimeReply.Error(ErrorCode.OperationFailed)
+                return@runInterruptible RuntimeReply.TransportFailure
             }
             val stderrReader = Thread {
                 process.errorStream.use { it.copyTo(DiscardOutput) }
@@ -27,16 +29,16 @@ class RootRuntimeClient internal constructor(
                 val exitCode = process.waitFor()
                 stderrReader.join()
                 if (exitCode != 0) {
-                    RuntimeReply.Error(ErrorCode.OperationFailed)
+                    RuntimeReply.TransportFailure
                 } else {
                     runCatching {
                         RuntimeProtocol.decode(output.trim())
-                    }.getOrElse { RuntimeReply.Error(ErrorCode.OperationFailed) }
+                    }.getOrElse { RuntimeReply.TransportFailure }
                 }
             } catch (interrupted: InterruptedException) {
                 throw interrupted
             } catch (_: Exception) {
-                RuntimeReply.Error(ErrorCode.OperationFailed)
+                RuntimeReply.TransportFailure
             } finally {
                 if (process.isAlive) process.destroy()
             }
