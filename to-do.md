@@ -14,8 +14,6 @@
   - 已确认失败点：App 进程为 0，但 `iorapd` 持有 XHS 的 CE/DE cache 目录，普通 `umount` 返回 `Device or resource busy`；已知可用的 `92e09a1` Runtime 在相同现场也会复现，排除近期 reset 修改回归。
   - 修复只在当前目标路径返回精确 EBUSY 时执行 lazy detach，并继续要求 mountinfo 数量减少；用户已确认最新模块不再出现旧模块的偶发“重新登记应用”弹窗。
   - 仍需完成 `slot-1 → Base → slot-1` 双向启动验收后关闭本项。
-- [ ] 真机门禁通过后创建私有仓库 `gkeyes/uclone-slices-v2`，再配置 `origin`、推送分支并检查首次 CI。
-
 ## 后续可靠性任务
 
 - [ ] 在 user0 解锁后、目标 App 可启动前，主动恢复已持久化的活动槽。
