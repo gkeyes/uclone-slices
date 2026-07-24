@@ -14,6 +14,11 @@ pub enum Command {
     },
     Enroll {
         package: PackageName,
+        #[serde(default)]
+        reset: bool,
+    },
+    Unenroll {
+        package: PackageName,
     },
     CreateSlot {
         package: PackageName,
@@ -21,6 +26,15 @@ pub enum Command {
         seed: SeedMode,
     },
     ActivateSlot {
+        package: PackageName,
+        slot: SlotId,
+    },
+    RenameSlot {
+        package: PackageName,
+        slot: SlotId,
+        name: DisplayName,
+    },
+    DeleteSlot {
         package: PackageName,
         slot: SlotId,
     },
@@ -32,6 +46,7 @@ pub enum SuccessPayload {
     Capabilities(Capabilities),
     PackageList { packages: Vec<PackageSnapshot> },
     Package { package: PackageSnapshot },
+    Empty {},
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,12 +102,23 @@ fn decode_command(line: &str) -> Result<Command, ()> {
         .ok_or(())?;
     let allowed = match operation {
         "probe" | "list_packages" => &["op"][..],
-        "get_package" | "enroll" => &["op", "package"][..],
+        "get_package" => &["op", "package"][..],
+        "enroll" => &["op", "package", "reset"][..],
+        "unenroll" => &["op", "package"][..],
         "create_slot" => &["op", "package", "name", "seed"][..],
         "activate_slot" => &["op", "package", "slot"][..],
+        "rename_slot" => &["op", "package", "slot", "name"][..],
+        "delete_slot" => &["op", "package", "slot"][..],
         _ => return Err(()),
     };
     if !object.keys().all(|key| allowed.contains(&key.as_str())) {
+        return Err(());
+    }
+    if operation == "enroll"
+        && object
+            .get("reset")
+            .is_some_and(|reset| reset != &serde_json::Value::Bool(true))
+    {
         return Err(());
     }
     serde_json::from_value(value).map_err(|_error| ())
@@ -112,9 +138,12 @@ where
         Command::GetPackage { package } => runtime
             .get_package(&package)
             .map(|package| SuccessPayload::Package { package }),
-        Command::Enroll { package } => runtime
-            .enroll(package)
+        Command::Enroll { package, reset } => runtime
+            .enroll(package, reset)
             .map(|package| SuccessPayload::Package { package }),
+        Command::Unenroll { package } => runtime
+            .unenroll(&package)
+            .map(|()| SuccessPayload::Empty {}),
         Command::CreateSlot {
             package,
             name,
@@ -124,6 +153,16 @@ where
             .map(|package| SuccessPayload::Package { package }),
         Command::ActivateSlot { package, slot } => runtime
             .activate_slot(&package, &slot)
+            .map(|package| SuccessPayload::Package { package }),
+        Command::RenameSlot {
+            package,
+            slot,
+            name,
+        } => runtime
+            .rename_slot(&package, &slot, name)
+            .map(|package| SuccessPayload::Package { package }),
+        Command::DeleteSlot { package, slot } => runtime
+            .delete_slot(&package, &slot)
             .map(|package| SuccessPayload::Package { package }),
     };
     match result {
@@ -154,9 +193,10 @@ mod tests {
 
     use super::*;
     use crate::adapters::{MemoryAndroidOps, MemoryPackageStore, MemorySlotStorage};
+    use crate::model::ObservedView;
 
     #[test]
-    fn shared_fixtures_cover_the_six_command_flow() {
+    fn shared_fixtures_cover_the_core_command_flow() {
         let package = PackageName::new("com.example.app").unwrap();
         let mut android = MemoryAndroidOps::default();
         android.install(package);
@@ -181,6 +221,41 @@ mod tests {
     }
 
     #[test]
+    fn shared_rename_fixture_covers_the_metadata_operation() {
+        let mut runtime = runtime_with_slot();
+        let request = fixture("rename_slot.request.json".to_owned());
+        let expected = fixture("rename_slot.response.json".to_owned());
+
+        let actual = handle_line(&mut runtime, request.trim());
+
+        assert_eq!(actual.trim(), expected.trim());
+    }
+
+    #[test]
+    fn shared_delete_fixture_covers_the_storage_operation() {
+        let mut runtime = runtime_with_slot();
+        let request = fixture("delete_slot.request.json".to_owned());
+        let expected = fixture("delete_slot.response.json".to_owned());
+
+        let actual = handle_line(&mut runtime, request.trim());
+
+        assert_eq!(actual.trim(), expected.trim());
+    }
+
+    #[test]
+    fn shared_unenroll_fixture_covers_the_registration_removal() {
+        let mut runtime = runtime_with_slot();
+        let request = fixture("unenroll.request.json".to_owned());
+        let expected = fixture("unenroll.response.json".to_owned());
+
+        let actual = handle_line(&mut runtime, request.trim());
+        let repeated = handle_line(&mut runtime, request.trim());
+
+        assert_eq!(actual.trim(), expected.trim());
+        assert_eq!(repeated.trim(), expected.trim());
+    }
+
+    #[test]
     fn unknown_field_is_an_invalid_request() {
         let mut runtime = Runtime::new(
             MemoryPackageStore::default(),
@@ -193,10 +268,92 @@ mod tests {
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
     }
 
+    #[test]
+    fn unenroll_rejects_fields_that_have_no_consumer() {
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            MemoryAndroidOps::default(),
+        );
+
+        let response = handle_line(
+            &mut runtime,
+            r#"{"op":"unenroll","package":"com.example.app","slot":"base"}"#,
+        );
+
+        assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
+    }
+
+    #[test]
+    fn reset_marker_only_accepts_the_ui_backed_true_value() {
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            MemoryAndroidOps::default(),
+        );
+
+        let response = handle_line(
+            &mut runtime,
+            r#"{"op":"enroll","package":"com.example.app","reset":false}"#,
+        );
+
+        assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
+    }
+
+    #[test]
+    fn explicit_reset_enroll_recovers_an_identity_conflict() {
+        let package = PackageName::new("com.example.app").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        android.install(package.clone());
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            android,
+        );
+        runtime.enroll(package.clone(), false).unwrap();
+        let created = runtime
+            .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+            .unwrap();
+        let target = created.slots[1].id.clone();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        let mut runtime = Runtime::new(packages, slots, android);
+        assert_eq!(
+            runtime.get_package(&package),
+            Err(RuntimeError::StateConflict)
+        );
+
+        let request = fixture("enroll_reset.request.json".to_owned());
+        let expected = fixture("enroll_reset.response.json".to_owned());
+        let actual = handle_line(&mut runtime, request.trim());
+
+        assert_eq!(actual.trim(), expected.trim());
+        let (_packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), None);
+        assert_eq!(android.view(&package), Some(&ObservedView::Base));
+        assert!(!android.is_running(&package));
+    }
+
     fn fixture(name: String) -> String {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../protocol/fixtures")
             .join(name);
         fs::read_to_string(path).unwrap()
+    }
+
+    fn runtime_with_slot() -> Runtime<MemoryPackageStore, MemorySlotStorage, MemoryAndroidOps> {
+        let package = PackageName::new("com.example.app").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        android.install(package.clone());
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            android,
+        );
+        runtime.enroll(package.clone(), false).unwrap();
+        runtime
+            .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+            .unwrap();
+        runtime
     }
 }

@@ -90,6 +90,24 @@ impl PackageStore for FilePackageStore {
             .map_err(io_error)?;
         Ok(())
     }
+
+    fn remove(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        let package_root = self
+            .aggregate_path(package)
+            .parent()
+            .ok_or_else(|| AdapterError::new("aggregate path has no parent"))?
+            .to_path_buf();
+        match fs::remove_dir_all(package_root) {
+            Ok(()) => {
+                File::open(&self.packages_root)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(io_error)?;
+                Ok(())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(io_error(error)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -187,10 +205,13 @@ impl SlotStorage for FileSlotStorage {
     fn discard(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError> {
         let ce_result = remove_slot_artifacts(&self.ce_slots_root, package, slot);
         let de_result = remove_slot_artifacts(&self.de_slots_root, package, slot);
-        match (ce_result, de_result) {
-            (Err(error), _) | (Ok(()), Err(error)) => Err(error),
-            (Ok(()), Ok(())) => Ok(()),
-        }
+        ce_result.and(de_result)
+    }
+
+    fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        let ce_result = remove_tree_if_exists(&self.ce_slots_root.join(package.as_str()));
+        let de_result = remove_tree_if_exists(&self.de_slots_root.join(package.as_str()));
+        ce_result.and(de_result)
     }
 
     fn require_complete_pair(
@@ -385,6 +406,27 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_removal_is_idempotent_and_does_not_touch_other_packages() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let other = PackageName::new("com.example.other").unwrap();
+        let mut store = FilePackageStore::open(root.path()).unwrap();
+        store
+            .save(&PackageAggregate::enrolled(package.clone(), identity()))
+            .unwrap();
+        store
+            .save(&PackageAggregate::enrolled(other.clone(), identity()))
+            .unwrap();
+
+        store.remove(&package).unwrap();
+        store.remove(&package).unwrap();
+
+        assert!(store.load(&package).unwrap().is_none());
+        assert!(store.load(&other).unwrap().is_some());
+        assert_eq!(store.list().unwrap(), vec![other]);
+    }
+
+    #[test]
     fn package_directory_without_an_aggregate_is_not_listed() {
         let root = tempfile::tempdir().unwrap();
         let store = FilePackageStore::open(root.path()).unwrap();
@@ -510,5 +552,37 @@ mod tests {
         assert!(!stale_ce.exists());
         assert!(!stale_de.exists());
         assert!(unrelated.exists());
+    }
+
+    #[test]
+    fn discard_package_removes_every_ce_de_slot_and_temporary_artifact() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let other = PackageName::new("com.example.other").unwrap();
+        let ce_slots = root.path().join("slots-ce");
+        let de_slots = root.path().join("slots-de");
+        for slots_root in [&ce_slots, &de_slots] {
+            for path in [
+                slots_root.join(package.as_str()).join("slot-1"),
+                slots_root.join(package.as_str()).join(".slot-2.tmp-111"),
+                slots_root.join(other.as_str()).join("slot-1"),
+            ] {
+                fs::create_dir_all(path).unwrap();
+            }
+        }
+        let mut storage = FileSlotStorage::open(
+            &ce_slots,
+            &de_slots,
+            root.path().join("base-ce"),
+            root.path().join("base-de"),
+        )
+        .unwrap();
+
+        storage.discard_package(&package).unwrap();
+
+        assert!(!ce_slots.join(package.as_str()).exists());
+        assert!(!de_slots.join(package.as_str()).exists());
+        assert!(ce_slots.join(other.as_str()).join("slot-1").is_dir());
+        assert!(de_slots.join(other.as_str()).join("slot-1").is_dir());
     }
 }

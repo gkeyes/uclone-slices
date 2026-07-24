@@ -25,6 +25,40 @@ pub struct Runtime<P, S, A> {
     android: A,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum UnenrollContext {
+    Request,
+    Recovery,
+}
+
+impl UnenrollContext {
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Request => "unenroll",
+            Self::Recovery => "recover",
+        }
+    }
+
+    fn map_adapter(self, package: &PackageName, step: &str, error: AdapterError) -> RuntimeError {
+        log_adapter(self.operation(), package, step, &error);
+        match self {
+            Self::Request => adapter_error(error),
+            Self::Recovery => RuntimeError::StateConflict,
+        }
+    }
+
+    fn view_failure(self, package: &PackageName) -> RuntimeError {
+        eprintln!(
+            "op={} package={package} step=verify_unenroll_base error=view_is_not_base",
+            self.operation()
+        );
+        match self {
+            Self::Request => RuntimeError::OperationFailed,
+            Self::Recovery => RuntimeError::StateConflict,
+        }
+    }
+}
+
 impl<P, S, A> Runtime<P, S, A>
 where
     P: PackageStore,
@@ -62,7 +96,14 @@ where
         aggregate.snapshot().map_err(model_error)
     }
 
-    pub fn enroll(&mut self, package: PackageName) -> Result<PackageSnapshot, RuntimeError> {
+    pub fn enroll(
+        &mut self,
+        package: PackageName,
+        reset: bool,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        if reset {
+            return self.reset_enrollment(package);
+        }
         if self
             .packages
             .load(&package)
@@ -87,6 +128,57 @@ where
             .save(&aggregate)
             .map_err(|error| logged_adapter("enroll", &package, "save", error))?;
         aggregate.snapshot().map_err(model_error)
+    }
+
+    fn reset_enrollment(&mut self, package: PackageName) -> Result<PackageSnapshot, RuntimeError> {
+        let inspection = self
+            .android
+            .inspect(&package)
+            .map_err(|error| logged_adapter("enroll", &package, "reset_inspect", error))?;
+        self.android
+            .force_stop(&package)
+            .map_err(|error| logged_adapter("enroll", &package, "reset_force_stop", error))?;
+        let base = SlotId::base();
+        self.android
+            .apply_view(&package, &base)
+            .map_err(|error| logged_adapter("enroll", &package, "reset_apply_base", error))?;
+        let observed = self
+            .android
+            .observe_view(&package)
+            .map_err(|error| logged_adapter("enroll", &package, "reset_verify_base", error))?;
+        if observed != ObservedView::Base {
+            eprintln!("op=enroll package={package} step=reset_verify_base error=view_is_not_base");
+            return Err(RuntimeError::OperationFailed);
+        }
+        self.slots
+            .discard_package(&package)
+            .map_err(|error| logged_adapter("enroll", &package, "reset_discard_slots", error))?;
+        let aggregate = PackageAggregate::enrolled(package.clone(), inspection.identity);
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("enroll", &package, "reset_save", error))?;
+        aggregate.snapshot().map_err(model_error)
+    }
+
+    pub fn unenroll(&mut self, package: &PackageName) -> Result<(), RuntimeError> {
+        if self
+            .packages
+            .load(package)
+            .map_err(adapter_error)?
+            .is_none()
+        {
+            return Ok(());
+        }
+        let (mut aggregate, _inspection) = match self.load_ready(package) {
+            Ok(loaded) => loaded,
+            Err(RuntimeError::NotFound) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        aggregate.begin_unenrollment().map_err(model_error)?;
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("unenroll", package, "save_intent", error))?;
+        self.finish_unenrollment(package, UnenrollContext::Request)
     }
 
     pub fn create_slot(
@@ -145,6 +237,42 @@ where
                 .launch_verified(package, aggregate.active_slot())
                 .map_err(|error| logged_adapter("create_slot", package, "restore_launch", error))?;
         }
+        aggregate.snapshot().map_err(model_error)
+    }
+
+    pub fn rename_slot(
+        &mut self,
+        package: &PackageName,
+        target: &SlotId,
+        display_name: DisplayName,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        let (mut aggregate, _inspection) = self.load_validated(package)?;
+        aggregate
+            .rename_slot(target, display_name)
+            .map_err(model_error)?;
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("rename_slot", package, "save", error))?;
+        aggregate.snapshot().map_err(model_error)
+    }
+
+    pub fn delete_slot(
+        &mut self,
+        package: &PackageName,
+        target: &SlotId,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        let (mut aggregate, _inspection) = self.load_ready(package)?;
+        aggregate.begin_deletion(target).map_err(model_error)?;
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("delete_slot", package, "save_intent", error))?;
+        self.slots
+            .discard(package, target)
+            .map_err(|error| logged_adapter("delete_slot", package, "discard", error))?;
+        aggregate.finish_deletion(target).map_err(model_error)?;
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("delete_slot", package, "save_commit", error))?;
         aggregate.snapshot().map_err(model_error)
     }
 
@@ -213,7 +341,7 @@ where
     }
 
     #[cfg(test)]
-    fn into_parts(self) -> (P, S, A) {
+    pub(crate) fn into_parts(self) -> (P, S, A) {
         (self.packages, self.slots, self.android)
     }
 
@@ -222,6 +350,10 @@ where
         package: &PackageName,
     ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
         let (mut aggregate, inspection) = self.load_validated(package)?;
+        if aggregate.is_unenrolling() {
+            self.finish_unenrollment(package, UnenrollContext::Recovery)?;
+            return Err(RuntimeError::NotFound);
+        }
         let recovering_activation = aggregate.pending_activation().is_some();
         self.recover(&mut aggregate)?;
         if recovering_activation {
@@ -305,6 +437,24 @@ where
     }
 
     fn recover(&mut self, aggregate: &mut PackageAggregate) -> Result<(), RuntimeError> {
+        if let Some(target) = aggregate.pending_deletion().cloned() {
+            let package = aggregate.package().clone();
+            let observed = self
+                .android
+                .observe_view(&package)
+                .map_err(|error| logged_conflict("recover", &package, "observe_deleting", error))?;
+            if observed == ObservedView::Inconsistent || observed.matches(&target) {
+                return Err(RuntimeError::StateConflict);
+            }
+            self.slots
+                .discard(&package, &target)
+                .map_err(|error| logged_conflict("recover", &package, "discard_deleting", error))?;
+            aggregate.finish_deletion(&target).map_err(model_error)?;
+            self.packages
+                .save(aggregate)
+                .map_err(|error| logged_conflict("recover", &package, "save_deleting", error))?;
+        }
+
         if let Some((target, restore_running)) = aggregate
             .pending_creation()
             .map(|(target, restore)| (target.clone(), restore))
@@ -378,6 +528,33 @@ where
         }
 
         Ok(())
+    }
+
+    fn finish_unenrollment(
+        &mut self,
+        package: &PackageName,
+        context: UnenrollContext,
+    ) -> Result<(), RuntimeError> {
+        self.android
+            .force_stop(package)
+            .map_err(|error| context.map_adapter(package, "force_stop_unenroll", error))?;
+        let base = SlotId::base();
+        self.android
+            .apply_view(package, &base)
+            .map_err(|error| context.map_adapter(package, "apply_unenroll_base", error))?;
+        let observed = self
+            .android
+            .observe_view(package)
+            .map_err(|error| context.map_adapter(package, "verify_unenroll_base", error))?;
+        if observed != ObservedView::Base {
+            return Err(context.view_failure(package));
+        }
+        self.slots
+            .discard_package(package)
+            .map_err(|error| context.map_adapter(package, "discard_unenroll_slots", error))?;
+        self.packages
+            .remove(package)
+            .map_err(|error| context.map_adapter(package, "remove_unenroll_state", error))
     }
 
     fn rollback_creation(
@@ -534,7 +711,7 @@ mod tests {
     fn with_slot() -> (TestRuntime, SlotId) {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone()).unwrap();
+        runtime.enroll(package.clone(), false).unwrap();
         let snapshot = runtime
             .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
             .unwrap();
@@ -571,8 +748,8 @@ mod tests {
             MemorySlotStorage::default(),
             android,
         );
-        runtime.enroll(failed.clone()).unwrap();
-        runtime.enroll(healthy.clone()).unwrap();
+        runtime.enroll(failed.clone(), false).unwrap();
+        runtime.enroll(healthy.clone(), false).unwrap();
         let (packages, slots, mut android) = runtime.into_parts();
         android.fail_next(AndroidFailure::Inspect);
         let mut runtime = Runtime::new(packages, slots, android);
@@ -592,18 +769,419 @@ mod tests {
     fn enrolling_an_existing_package_reloads_it() {
         let package = package();
         let mut runtime = runtime();
-        let first = runtime.enroll(package.clone()).unwrap();
+        let first = runtime.enroll(package.clone(), false).unwrap();
 
-        let second = runtime.enroll(package).unwrap();
+        let second = runtime.enroll(package, false).unwrap();
 
         assert_eq!(second, first);
+    }
+
+    #[test]
+    fn rename_is_metadata_only_and_allows_the_active_non_base_slot() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime.activate_slot(&package, &target).unwrap();
+        let (packages, slots, android) = runtime.into_parts();
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let renamed = runtime
+            .rename_slot(
+                &package,
+                &target,
+                DisplayName::new("Current account").unwrap(),
+            )
+            .unwrap();
+
+        assert_eq!(renamed.slots[1].name, "Current account");
+        let (_packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[AndroidCall::Inspect(package)]
+        );
+    }
+
+    #[test]
+    fn rename_save_failure_is_atomic_and_non_ready_state_is_not_recovered() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (mut packages, slots, android) = runtime.into_parts();
+        packages.fail_next_save();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.rename_slot(&package, &target, DisplayName::new("Changed").unwrap()),
+            Err(RuntimeError::OperationFailed)
+        );
+
+        let (mut packages, slots, android) = runtime.into_parts();
+        assert_eq!(
+            packages
+                .load(&package)
+                .unwrap()
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .slots[1]
+                .name,
+            "Work"
+        );
+        let mut deleting = packages.load(&package).unwrap().unwrap();
+        deleting.begin_deletion(&target).unwrap();
+        packages.save(&deleting).unwrap();
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.rename_slot(&package, &target, DisplayName::new("Blocked").unwrap()),
+            Err(RuntimeError::StateConflict)
+        );
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+        assert!(
+            packages
+                .load(&package)
+                .unwrap()
+                .unwrap()
+                .pending_deletion()
+                .is_some()
+        );
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[AndroidCall::Inspect(package)]
+        );
+    }
+
+    #[test]
+    fn delete_rejects_base_missing_and_active_slots() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+
+        assert_eq!(
+            runtime.delete_slot(&package, &SlotId::base()),
+            Err(RuntimeError::StateConflict)
+        );
+        assert_eq!(
+            runtime.delete_slot(&package, &SlotId::numbered(9)),
+            Err(RuntimeError::NotFound)
+        );
+        runtime.activate_slot(&package, &target).unwrap();
+        assert_eq!(
+            runtime.delete_slot(&package, &target),
+            Err(RuntimeError::StateConflict)
+        );
+    }
+
+    #[test]
+    fn delete_discards_the_inactive_pair_without_reusing_its_number() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+
+        let deleted = runtime.delete_slot(&package, &target).unwrap();
+
+        assert_eq!(deleted.slots.len(), 1);
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), None);
+        let mut runtime = Runtime::new(packages, slots, android);
+        let recreated = runtime
+            .create_slot(&package, DisplayName::new("Next").unwrap(), SeedMode::Blank)
+            .unwrap();
+        assert_eq!(recreated.slots[1].id, SlotId::numbered(2));
+    }
+
+    #[test]
+    fn delete_persists_intent_before_discarding_storage() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (mut packages, slots, android) = runtime.into_parts();
+        packages.fail_next_save();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.delete_slot(&package, &target),
+            Err(RuntimeError::OperationFailed)
+        );
+
+        let (packages, slots, _android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+        let aggregate = packages.load(&package).unwrap().unwrap();
+        assert!(aggregate.is_ready());
+        assert!(aggregate.has_slot(&target));
+    }
+
+    #[test]
+    fn partial_domain_delete_is_operation_failed_then_recovers_idempotently() {
+        for (failure, remaining) in [
+            (SlotFailure::DiscardCe, (true, false)),
+            (SlotFailure::DiscardDe, (false, true)),
+        ] {
+            let package = package();
+            let (runtime, target) = with_slot();
+            let (packages, mut slots, android) = runtime.into_parts();
+            slots.fail_next(failure);
+            let mut runtime = Runtime::new(packages, slots, android);
+
+            assert_eq!(
+                runtime.delete_slot(&package, &target),
+                Err(RuntimeError::OperationFailed)
+            );
+            let (packages, slots, android) = runtime.into_parts();
+            assert_eq!(slots.domain_state(&package, &target), Some(remaining));
+            assert_eq!(
+                packages.load(&package).unwrap().unwrap().pending_deletion(),
+                Some(&target)
+            );
+
+            let mut runtime = Runtime::new(packages, slots, android);
+            let recovered = runtime.get_package(&package).unwrap();
+            assert_eq!(recovered.slots.len(), 1);
+            let (packages, slots, android) = runtime.into_parts();
+            assert_eq!(slots.domain_state(&package, &target), None);
+            let mut runtime = Runtime::new(packages, slots, android);
+            let recreated = runtime
+                .create_slot(&package, DisplayName::new("Next").unwrap(), SeedMode::Blank)
+                .unwrap();
+            assert_eq!(recreated.slots[1].id, SlotId::numbered(2));
+        }
+    }
+
+    #[test]
+    fn delete_recovery_failure_is_state_conflict_and_can_retry() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (packages, mut slots, android) = runtime.into_parts();
+        slots.fail_next(SlotFailure::DiscardCe);
+        slots.fail_next(SlotFailure::Discard);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.delete_slot(&package, &target),
+            Err(RuntimeError::OperationFailed)
+        );
+        assert_eq!(
+            runtime.get_package(&package),
+            Err(RuntimeError::StateConflict)
+        );
+
+        let recovered = runtime.get_package(&package).unwrap();
+        assert_eq!(recovered.slots.len(), 1);
+        let (_packages, slots, _android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), None);
+    }
+
+    #[test]
+    fn delete_commit_save_failure_recovers_after_idempotent_discard() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (mut packages, slots, android) = runtime.into_parts();
+        let next_save = packages.save_calls() + 1;
+        packages.fail_save_call(next_save + 1);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.delete_slot(&package, &target),
+            Err(RuntimeError::OperationFailed)
+        );
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), None);
+        assert_eq!(
+            packages.load(&package).unwrap().unwrap().pending_deletion(),
+            Some(&target)
+        );
+
+        let mut runtime = Runtime::new(packages, slots, android);
+        let recovered = runtime.get_package(&package).unwrap();
+        assert_eq!(recovered.slots.len(), 1);
+    }
+
+    #[test]
+    fn delete_recovery_never_discards_the_real_target_or_an_inconsistent_view() {
+        for observed in [
+            ObservedView::Slot(SlotId::numbered(1)),
+            ObservedView::Inconsistent,
+        ] {
+            let package = package();
+            let (runtime, target) = with_slot();
+            let (mut packages, slots, mut android) = runtime.into_parts();
+            let mut aggregate = packages.load(&package).unwrap().unwrap();
+            aggregate.begin_deletion(&target).unwrap();
+            packages.save(&aggregate).unwrap();
+            android.set_view(&package, observed);
+            let mut runtime = Runtime::new(packages, slots, android);
+
+            assert_eq!(
+                runtime.get_package(&package),
+                Err(RuntimeError::StateConflict)
+            );
+
+            let (packages, slots, _android) = runtime.into_parts();
+            assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+            assert_eq!(
+                packages.load(&package).unwrap().unwrap().pending_deletion(),
+                Some(&target)
+            );
+        }
+    }
+
+    #[test]
+    fn reset_enrollment_rebinds_identity_clears_slots_and_stops_on_base() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime.activate_slot(&package, &target).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let reset = runtime.enroll(package.clone(), true).unwrap();
+
+        assert_eq!(reset.active_slot, SlotId::base());
+        assert_eq!(reset.slots.len(), 1);
+        let (packages, slots, mut android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), None);
+        assert_eq!(android.view(&package), Some(&ObservedView::Base));
+        assert!(!android.is_running(&package));
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[
+                AndroidCall::Inspect(package.clone()),
+                AndroidCall::ForceStop(package.clone()),
+                AndroidCall::Apply(package.clone(), SlotId::base()),
+                AndroidCall::Observe(package.clone()),
+            ]
+        );
+        let current_identity = android.inspect(&package).unwrap().identity;
+        assert_eq!(
+            packages.load(&package).unwrap().unwrap().identity(),
+            &current_identity
+        );
+
+        let mut runtime = Runtime::new(packages, slots, android);
+        let recreated = runtime
+            .create_slot(
+                &package,
+                DisplayName::new("Fresh").unwrap(),
+                SeedMode::Blank,
+            )
+            .unwrap();
+        assert_eq!(recreated.slots[1].id, SlotId::numbered(1));
+    }
+
+    #[test]
+    fn reset_base_failures_preserve_the_old_aggregate_and_slot_data() {
+        for failure in [
+            AndroidFailure::ForceStop,
+            AndroidFailure::Apply,
+            AndroidFailure::Observe,
+        ] {
+            let package = package();
+            let (mut runtime, target) = with_slot();
+            runtime.activate_slot(&package, &target).unwrap();
+            let (packages, slots, mut android) = runtime.into_parts();
+            android.change_identity(&package);
+            android.fail_next(failure);
+            let mut runtime = Runtime::new(packages, slots, android);
+
+            assert_eq!(
+                runtime.enroll(package.clone(), true),
+                Err(RuntimeError::OperationFailed)
+            );
+
+            let (packages, slots, _android) = runtime.into_parts();
+            assert_eq!(
+                packages.load(&package).unwrap().unwrap().active_slot(),
+                &target
+            );
+            assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+        }
+    }
+
+    #[test]
+    fn partial_package_cleanup_keeps_old_registration_and_retry_converges() {
+        for (failure, remaining) in [
+            (SlotFailure::DiscardPackageCe, (true, false)),
+            (SlotFailure::DiscardPackageDe, (false, true)),
+        ] {
+            let package = package();
+            let (mut runtime, target) = with_slot();
+            runtime.activate_slot(&package, &target).unwrap();
+            let (packages, mut slots, mut android) = runtime.into_parts();
+            android.change_identity(&package);
+            slots.fail_next(failure);
+            let mut runtime = Runtime::new(packages, slots, android);
+
+            assert_eq!(
+                runtime.enroll(package.clone(), true),
+                Err(RuntimeError::OperationFailed)
+            );
+
+            let (packages, slots, android) = runtime.into_parts();
+            assert_eq!(slots.domain_state(&package, &target), Some(remaining));
+            assert_eq!(
+                packages.load(&package).unwrap().unwrap().active_slot(),
+                &target
+            );
+            let mut runtime = Runtime::new(packages, slots, android);
+            let reset = runtime.enroll(package.clone(), true).unwrap();
+            assert_eq!(reset.active_slot, SlotId::base());
+            let (_packages, slots, _android) = runtime.into_parts();
+            assert_eq!(slots.domain_state(&package, &target), None);
+        }
+    }
+
+    #[test]
+    fn reset_save_failure_is_retryable_after_slot_cleanup() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime.activate_slot(&package, &target).unwrap();
+        let (mut packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        packages.fail_next_save();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.enroll(package.clone(), true),
+            Err(RuntimeError::OperationFailed)
+        );
+
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), None);
+        assert_eq!(
+            packages.load(&package).unwrap().unwrap().active_slot(),
+            &target
+        );
+        let mut runtime = Runtime::new(packages, slots, android);
+        let reset = runtime.enroll(package, true).unwrap();
+        assert_eq!(reset.active_slot, SlotId::base());
+        assert_eq!(reset.slots.len(), 1);
+    }
+
+    #[test]
+    fn reset_overwrites_an_invalid_persisted_aggregate() {
+        let root = tempfile::tempdir().unwrap();
+        let package = package();
+        let packages = FilePackageStore::open(root.path()).unwrap();
+        let package_root = root.path().join("packages").join(package.as_str());
+        std::fs::create_dir_all(&package_root).unwrap();
+        std::fs::write(package_root.join("aggregate.json"), b"{not-json").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        android.install(package.clone());
+        let mut runtime = Runtime::new(packages, MemorySlotStorage::default(), android);
+
+        let reset = runtime.enroll(package.clone(), true).unwrap();
+
+        assert_eq!(reset.active_slot, SlotId::base());
+        assert_eq!(reset.slots.len(), 1);
+        let (packages, _slots, _android) = runtime.into_parts();
+        assert!(packages.load(&package).unwrap().is_some());
     }
 
     #[test]
     fn save_intent_failure_does_not_touch_slot_storage() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone()).unwrap();
+        runtime.enroll(package.clone(), false).unwrap();
         let (mut packages, slots, android) = runtime.into_parts();
         packages.fail_next_save();
         let mut runtime = Runtime::new(packages, slots, android);
@@ -621,7 +1199,7 @@ mod tests {
         for failure in [SlotFailure::MaterializeCe, SlotFailure::MaterializeDe] {
             let package = package();
             let mut runtime = runtime();
-            runtime.enroll(package.clone()).unwrap();
+            runtime.enroll(package.clone(), false).unwrap();
             let (packages, mut slots, android) = runtime.into_parts();
             slots.fail_next(failure);
             let mut runtime = Runtime::new(packages, slots, android);
@@ -639,7 +1217,7 @@ mod tests {
     fn stale_target_discard_failure_aborts_before_materialization() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone()).unwrap();
+        runtime.enroll(package.clone(), false).unwrap();
         let (packages, mut slots, android) = runtime.into_parts();
         slots.fail_next(SlotFailure::Discard);
         let mut runtime = Runtime::new(packages, slots, android);
@@ -657,7 +1235,7 @@ mod tests {
     fn interrupted_creation_discards_pair_and_restores_running_app() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone()).unwrap();
+        runtime.enroll(package.clone(), false).unwrap();
         let (mut packages, mut slots, mut android) = runtime.into_parts();
         let mut aggregate = packages.load(&package).unwrap().unwrap();
         let slot = aggregate
@@ -682,7 +1260,7 @@ mod tests {
     fn clone_base_checks_the_real_view_as_well_as_the_aggregate() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone()).unwrap();
+        runtime.enroll(package.clone(), false).unwrap();
         let (packages, slots, mut android) = runtime.into_parts();
         android.set_view(&package, ObservedView::Slot(SlotId::numbered(8)));
         let mut runtime = Runtime::new(packages, slots, android);
@@ -924,5 +1502,175 @@ mod tests {
         let recovered = runtime.get_package(&package).unwrap();
 
         assert_eq!(recovered.active_slot, target);
+    }
+
+    #[test]
+    fn unenroll_from_active_slot_returns_to_base_and_removes_every_slot() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime.activate_slot(&package, &target).unwrap();
+        let (packages, slots, android) = runtime.into_parts();
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        runtime.unenroll(&package).unwrap();
+
+        let (packages, slots, android) = runtime.into_parts();
+        assert!(packages.load(&package).unwrap().is_none());
+        assert_eq!(slots.domain_state(&package, &target), None);
+        assert_eq!(android.view(&package), Some(&ObservedView::Base));
+        assert!(!android.is_running(&package));
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[
+                AndroidCall::Inspect(package.clone()),
+                AndroidCall::Observe(package.clone()),
+                AndroidCall::ForceStop(package.clone()),
+                AndroidCall::Apply(package.clone(), SlotId::base()),
+                AndroidCall::Observe(package),
+            ]
+        );
+    }
+
+    #[test]
+    fn unenroll_from_base_and_repeated_unenroll_are_idempotent() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false).unwrap();
+
+        runtime.unenroll(&package).unwrap();
+        runtime.unenroll(&package).unwrap();
+
+        let (packages, _slots, android) = runtime.into_parts();
+        assert!(packages.load(&package).unwrap().is_none());
+        assert_eq!(android.view(&package), Some(&ObservedView::Base));
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn unenroll_save_intent_failure_has_no_destructive_side_effect() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (mut packages, slots, android) = runtime.into_parts();
+        packages.fail_next_save();
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.unenroll(&package),
+            Err(RuntimeError::OperationFailed)
+        );
+
+        let (packages, slots, android) = runtime.into_parts();
+        assert!(packages.load(&package).unwrap().unwrap().is_ready());
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[
+                AndroidCall::Inspect(package.clone()),
+                AndroidCall::Observe(package),
+            ]
+        );
+    }
+
+    #[test]
+    fn unenroll_android_failures_keep_intent_and_recover_forward() {
+        for failure in [AndroidFailure::ForceStop, AndroidFailure::Apply] {
+            let package = package();
+            let (mut runtime, target) = with_slot();
+            runtime.activate_slot(&package, &target).unwrap();
+            let (packages, slots, mut android) = runtime.into_parts();
+            android.fail_next(failure);
+            let mut runtime = Runtime::new(packages, slots, android);
+
+            assert_eq!(
+                runtime.unenroll(&package),
+                Err(RuntimeError::OperationFailed)
+            );
+            let (packages, slots, android) = runtime.into_parts();
+            assert!(packages.load(&package).unwrap().unwrap().is_unenrolling());
+            assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+
+            let mut runtime = Runtime::new(packages, slots, android);
+            assert_eq!(runtime.get_package(&package), Err(RuntimeError::NotFound));
+            let (packages, slots, android) = runtime.into_parts();
+            assert!(packages.load(&package).unwrap().is_none());
+            assert_eq!(slots.domain_state(&package, &target), None);
+            assert_eq!(android.view(&package), Some(&ObservedView::Base));
+        }
+    }
+
+    #[test]
+    fn unenroll_verification_failure_is_retryable_state_conflict() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime.activate_slot(&package, &target).unwrap();
+        let (mut packages, slots, mut android) = runtime.into_parts();
+        let mut aggregate = packages.load(&package).unwrap().unwrap();
+        aggregate.begin_unenrollment().unwrap();
+        packages.save(&aggregate).unwrap();
+        android.fail_next(AndroidFailure::Observe);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.get_package(&package),
+            Err(RuntimeError::StateConflict)
+        );
+        let (packages, slots, android) = runtime.into_parts();
+        assert!(packages.load(&package).unwrap().unwrap().is_unenrolling());
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+
+        let mut runtime = Runtime::new(packages, slots, android);
+        assert_eq!(runtime.get_package(&package), Err(RuntimeError::NotFound));
+    }
+
+    #[test]
+    fn partial_unenroll_storage_cleanup_recovers_both_domains() {
+        for (failure, remaining) in [
+            (SlotFailure::DiscardPackageCe, (true, false)),
+            (SlotFailure::DiscardPackageDe, (false, true)),
+        ] {
+            let package = package();
+            let (runtime, target) = with_slot();
+            let (packages, mut slots, android) = runtime.into_parts();
+            slots.fail_next(failure);
+            let mut runtime = Runtime::new(packages, slots, android);
+
+            assert_eq!(
+                runtime.unenroll(&package),
+                Err(RuntimeError::OperationFailed)
+            );
+            let (packages, slots, android) = runtime.into_parts();
+            assert_eq!(slots.domain_state(&package, &target), Some(remaining));
+            assert!(packages.load(&package).unwrap().unwrap().is_unenrolling());
+
+            let mut runtime = Runtime::new(packages, slots, android);
+            assert_eq!(runtime.get_package(&package), Err(RuntimeError::NotFound));
+            let (packages, slots, _android) = runtime.into_parts();
+            assert!(packages.load(&package).unwrap().is_none());
+            assert_eq!(slots.domain_state(&package, &target), None);
+        }
+    }
+
+    #[test]
+    fn unenroll_store_remove_failure_is_completed_by_package_listing() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (mut packages, slots, android) = runtime.into_parts();
+        packages.fail_next_remove();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.unenroll(&package),
+            Err(RuntimeError::OperationFailed)
+        );
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), None);
+        assert!(packages.load(&package).unwrap().unwrap().is_unenrolling());
+
+        let mut runtime = Runtime::new(packages, slots, android);
+        assert!(runtime.list_packages().unwrap().is_empty());
+        let (packages, _slots, _android) = runtime.into_parts();
+        assert!(packages.load(&package).unwrap().is_none());
     }
 }

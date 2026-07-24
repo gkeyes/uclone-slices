@@ -41,8 +41,16 @@ impl ProductionRuntime {
         self.inner.get_package(package)
     }
 
-    pub fn enroll(&mut self, package: PackageName) -> Result<PackageSnapshot, RuntimeError> {
-        self.inner.enroll(package)
+    pub fn enroll(
+        &mut self,
+        package: PackageName,
+        reset: bool,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        self.inner.enroll(package, reset)
+    }
+
+    pub fn unenroll(&mut self, package: &PackageName) -> Result<(), RuntimeError> {
+        self.inner.unenroll(package)
     }
 
     pub fn create_slot(
@@ -52,6 +60,23 @@ impl ProductionRuntime {
         seed: SeedMode,
     ) -> Result<PackageSnapshot, RuntimeError> {
         self.inner.create_slot(package, display_name, seed)
+    }
+
+    pub fn rename_slot(
+        &mut self,
+        package: &PackageName,
+        target: &SlotId,
+        display_name: DisplayName,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        self.inner.rename_slot(package, target, display_name)
+    }
+
+    pub fn delete_slot(
+        &mut self,
+        package: &PackageName,
+        target: &SlotId,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        self.inner.delete_slot(package, target)
     }
 
     pub fn activate_slot(

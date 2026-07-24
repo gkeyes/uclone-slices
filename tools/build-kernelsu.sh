@@ -15,7 +15,9 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 LINKER="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin/${TARGET}${API}-clang"
+STRIP="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin/llvm-strip"
 [ -x "$LINKER" ]
+[ -x "$STRIP" ]
 
 TOOLCHAIN=$(rustup show active-toolchain | awk '{print $1}')
 rustup target add "$TARGET" --toolchain "$TOOLCHAIN"
@@ -35,10 +37,11 @@ cp "$ROOT/kernelsu/customize.sh" "$STAGE/customize.sh"
 cp "$ROOT/kernelsu/service.sh" "$STAGE/service.sh"
 cp "$ROOT/target/$TARGET/release/ucloned" "$STAGE/bin/ucloned"
 cp "$ROOT/target/$TARGET/release/slotctl" "$STAGE/bin/slotctl"
+"$STRIP" --strip-all "$STAGE/bin/ucloned" "$STAGE/bin/slotctl"
 chmod 0755 "$STAGE/customize.sh" "$STAGE/service.sh" "$STAGE/bin/ucloned" "$STAGE/bin/slotctl"
 
 (
     cd "$STAGE"
-    zip -X -q -r "$ROOT/outputs/uclone-slices-v2-kernelsu.zip" .
+    zip -9 -X -q -r "$ROOT/outputs/uclone-slices-v2-kernelsu.zip" .
 )
 unzip -t "$ROOT/outputs/uclone-slices-v2-kernelsu.zip" >/dev/null

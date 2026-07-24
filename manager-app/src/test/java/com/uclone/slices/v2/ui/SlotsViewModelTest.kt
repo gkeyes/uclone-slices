@@ -15,6 +15,8 @@ import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SlotsViewModelTest {
@@ -34,45 +36,140 @@ class SlotsViewModelTest {
         )
         assertEquals("com.example.app", viewModel.state.value.installedApps.single().packageName)
         assertTrue(viewModel.state.value.runtimeReady)
+        assertTrue(viewModel.state.value.initialLoadComplete)
+        assertIs<OperationUiState.Idle>(viewModel.state.value.operation)
     }
 
     @Test
-    fun localAppSelectionEnrollsThenOpensAnExistingPackage() {
+    fun unconfiguredAppRequiresConfirmationBeforeEnrollment() {
         val client = FakeRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val commandsBeforeRequest = client.commands.toList()
 
-        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
-        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
+
+        assertEquals("com.example.app", viewModel.state.value.pendingConfigurationPackage)
+        assertEquals(commandsBeforeRequest, client.commands)
+
+        viewModel.onIntent(UiIntent.ConfirmConfigureApp)
+
+        assertEquals(RuntimeCommand.Enroll("com.example.app"), client.commands.last())
+        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
+        assertEquals(UiNotice.ConfigurationCompleted, viewModel.state.value.notice)
+        assertNull(viewModel.state.value.pendingConfigurationPackage)
+    }
+
+    @Test
+    fun openingConfiguredAppUsesGetPackage() {
+        val snapshot = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.OpenPackage(snapshot.packageName))
+
+        assertEquals(RuntimeCommand.GetPackage(snapshot.packageName), client.commands.last())
+        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
+    }
+
+    @Test
+    fun stateConflictWhileOpeningBuildsRecoveryWithKnownSpaces() {
+        val snapshot = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.Error(ErrorCode.StateConflict)
+
+        viewModel.onIntent(UiIntent.OpenPackage(snapshot.packageName))
 
         assertEquals(
-            listOf(
-                RuntimeCommand.Probe,
-                RuntimeCommand.ListPackages,
-                RuntimeCommand.Enroll("com.example.app"),
-                RuntimeCommand.GetPackage("com.example.app"),
+            RegistrationRecoveryUi(
+                packageName = snapshot.packageName,
+                affectedSpaces = listOf("Work"),
             ),
-            client.commands,
+            viewModel.state.value.registrationRecovery,
         )
+        assertNull(viewModel.state.value.notice)
     }
 
     @Test
-    fun backReturnsToTheAppListWithoutCallingRuntime() {
+    fun stateConflictWhileConfiguringAlsoOffersRecovery() {
         val client = FakeRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.Error(ErrorCode.StateConflict)
+
+        viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
+        viewModel.onIntent(UiIntent.ConfirmConfigureApp)
+
+        assertEquals(
+            RegistrationRecoveryUi("com.example.app", emptyList()),
+            viewModel.state.value.registrationRecovery,
+        )
+        assertEquals(RuntimeCommand.Enroll("com.example.app"), client.commands.last())
+    }
+
+    @Test
+    fun dismissingRegistrationRecoveryDoesNotCallRuntime() {
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.Error(ErrorCode.StateConflict)
         viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
-        val beforeBack = client.commands.toList()
+        val commandsBeforeDismiss = client.commands.toList()
 
-        viewModel.onIntent(UiIntent.BackToPackages)
+        viewModel.onIntent(UiIntent.DismissRegistrationRecovery)
 
-        assertEquals(null, viewModel.state.value.selected)
-        assertEquals(beforeBack, client.commands)
+        assertNull(viewModel.state.value.registrationRecovery)
+        assertEquals(commandsBeforeDismiss, client.commands)
+    }
+
+    @Test
+    fun recoveryRequiresExactConfirmationBeforeReset() {
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.Error(ErrorCode.StateConflict)
+        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        val commandsBeforeConfirm = client.commands.toList()
+
+        viewModel.onIntent(UiIntent.ConfirmRegistrationRecovery)
+
+        assertEquals(commandsBeforeConfirm, client.commands)
+        assertEquals(UiNotice.InvalidInput, viewModel.state.value.notice)
+
+        viewModel.onIntent(UiIntent.RegistrationRecoveryConfirmationChanged("删除"))
+        viewModel.onIntent(UiIntent.ConfirmRegistrationRecovery)
+
+        assertEquals(
+            RuntimeCommand.ResetEnrollment("com.example.app"),
+            client.commands.last(),
+        )
+        assertEquals("base", viewModel.state.value.selected?.activeSlot)
+        assertEquals(1, viewModel.state.value.selected?.slots?.size)
+        assertNull(viewModel.state.value.registrationRecovery)
+        assertEquals(UiNotice.ConfigurationRepaired, viewModel.state.value.notice)
+    }
+
+    @Test
+    fun navigationReturnsToSpacesWithoutCallingRuntime() {
+        val client = FakeRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val commandsBeforeNavigation = client.commands.toList()
+
+        viewModel.onIntent(UiIntent.OpenAddApps)
+        assertEquals(ManagerDestination.AddApp, viewModel.state.value.destination)
+        viewModel.onIntent(UiIntent.NavigateBack)
+        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+
+        viewModel.onIntent(UiIntent.OpenRuntimeStatus)
+        assertEquals(ManagerDestination.RuntimeStatus, viewModel.state.value.destination)
+        viewModel.onIntent(UiIntent.NavigateBack)
+
+        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(commandsBeforeNavigation, client.commands)
     }
 
     @Test
     fun operationArgumentsAreFrozenAtIntentTime() = runBlocking {
         val client = FreezingRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
-        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        configureApp(viewModel)
         viewModel.onIntent(UiIntent.SlotNameChanged("Work"))
         viewModel.onIntent(UiIntent.SeedChanged(SeedMode.CloneBase))
 
@@ -94,16 +191,118 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun activeOrdinarySpaceCanBeRenamedWithoutChangingItsIdentity() {
+        val initial = packageSnapshot(active = "slot-1")
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
+
+        viewModel.onIntent(UiIntent.RequestRenameSlot("slot-1"))
+        viewModel.onIntent(UiIntent.RenameSlotNameChanged("Personal"))
+        viewModel.onIntent(UiIntent.ConfirmRenameSlot)
+
+        assertEquals(
+            RuntimeCommand.RenameSlot("com.example.app", "slot-1", "Personal"),
+            client.commands.last(),
+        )
+        assertEquals("slot-1", viewModel.state.value.selected?.activeSlot)
+        assertEquals(
+            "Personal",
+            viewModel.state.value.selected?.slots?.first { it.id == "slot-1" }?.name,
+        )
+        assertEquals(UiNotice.SpaceRenamed("Personal"), viewModel.state.value.notice)
+        assertNull(viewModel.state.value.pendingRename)
+    }
+
+    @Test
+    fun renameRejectsBaseBlankAndUnchangedNamesBeforeRuntime() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
+        val commandsBeforeRename = client.commands.toList()
+
+        viewModel.onIntent(UiIntent.RequestRenameSlot("base"))
+        assertNull(viewModel.state.value.pendingRename)
+
+        viewModel.onIntent(UiIntent.RequestRenameSlot("slot-1"))
+        viewModel.onIntent(UiIntent.ConfirmRenameSlot)
+        assertEquals(commandsBeforeRename, client.commands)
+        assertEquals(UiNotice.InvalidInput, viewModel.state.value.notice)
+
+        viewModel.onIntent(UiIntent.RenameSlotNameChanged("   "))
+        viewModel.onIntent(UiIntent.ConfirmRenameSlot)
+        assertEquals(commandsBeforeRename, client.commands)
+    }
+
+    @Test
+    fun inactiveOrdinarySpaceCanBeDeletedAfterConfirmation() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
+
+        viewModel.onIntent(UiIntent.RequestDeleteSlot("slot-1"))
+        assertEquals(
+            DeleteSpaceUi("com.example.app", "slot-1", "Work"),
+            viewModel.state.value.pendingDelete,
+        )
+        viewModel.onIntent(UiIntent.ConfirmDeleteSlot)
+
+        assertEquals(
+            RuntimeCommand.DeleteSlot("com.example.app", "slot-1"),
+            client.commands.last(),
+        )
+        assertEquals(listOf("base"), viewModel.state.value.selected?.slots?.map { it.id })
+        assertEquals(UiNotice.SpaceDeleted("Work"), viewModel.state.value.notice)
+        assertNull(viewModel.state.value.pendingDelete)
+    }
+
+    @Test
+    fun baseAndActiveSpaceNeverOpenTheDeleteConfirmation() {
+        val initial = packageSnapshot(active = "slot-1")
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
+        val commandsBeforeDelete = client.commands.toList()
+
+        viewModel.onIntent(UiIntent.RequestDeleteSlot("base"))
+        assertNull(viewModel.state.value.pendingDelete)
+        viewModel.onIntent(UiIntent.RequestDeleteSlot("slot-1"))
+
+        assertNull(viewModel.state.value.pendingDelete)
+        assertEquals(commandsBeforeDelete, client.commands)
+    }
+
+    @Test
+    fun deleteFailureKeepsTheCurrentSnapshotWithoutOfferingRegistrationReset() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
+        viewModel.onIntent(UiIntent.RequestDeleteSlot("slot-1"))
+        client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
+
+        viewModel.onIntent(UiIntent.ConfirmDeleteSlot)
+
+        assertEquals(UiNotice.OperationFailed, viewModel.state.value.notice)
+        assertNull(viewModel.state.value.registrationRecovery)
+        assertEquals(initial.slots, viewModel.state.value.selected?.slots)
+        assertTrue(viewModel.state.value.runtimeReady)
+    }
+
+    @Test
     fun blankSlotNameNeverReachesRuntime() {
         val client = FakeRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
-        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        configureApp(viewModel)
         viewModel.onIntent(UiIntent.SlotNameChanged("   "))
         val commandsBeforeCreate = client.commands.toList()
 
         viewModel.onIntent(UiIntent.CreateSlot)
 
         assertEquals(commandsBeforeCreate, client.commands)
+        assertEquals(UiNotice.InvalidInput, viewModel.state.value.notice)
     }
 
     @Test
@@ -111,10 +310,15 @@ class SlotsViewModelTest {
         val client = BlockingRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
 
-        viewModel.onIntent(UiIntent.OpenPackage("com.example.first"))
+        viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.first"))
+        viewModel.onIntent(UiIntent.ConfirmConfigureApp)
         client.firstStarted.await()
         assertTrue(viewModel.state.value.busy)
-        viewModel.onIntent(UiIntent.OpenPackage("com.example.second"))
+        assertEquals(
+            OperationUiState.Configuring("com.example.first"),
+            viewModel.state.value.operation,
+        )
+        viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.second"))
 
         assertEquals(1, client.openCommands.size)
         client.releaseFirst.complete(Unit)
@@ -136,38 +340,256 @@ class SlotsViewModelTest {
         viewModel.onIntent(UiIntent.Refresh)
 
         assertEquals("slot-1", viewModel.state.value.selected?.activeSlot)
+        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
     }
 
     @Test
-    fun fourWireErrorsHaveDistinctMessagesAndKeepTheConnectionState() {
+    fun refreshClearsCloneBaseSeedWhenTheActiveSpaceChangedOutsideManager() {
+        val first = packageSnapshot(active = "base")
+        val client = FakeRuntimeClient(initialPackages = listOf(first))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage(first.packageName))
+        viewModel.onIntent(UiIntent.SeedChanged(SeedMode.CloneBase))
+        client.snapshot = first.copy(activeSlot = "slot-1")
+
+        viewModel.onIntent(UiIntent.Refresh)
+
+        assertEquals("slot-1", viewModel.state.value.selected?.activeSlot)
+        assertEquals(SeedMode.Blank, viewModel.state.value.seed)
+    }
+
+    @Test
+    fun fourWireErrorsRemainDistinctOutsideTheOpenRecoveryPath() {
         val expected = mapOf(
-            ErrorCode.InvalidRequest to "输入无效",
-            ErrorCode.NotFound to "应用或数据槽不存在",
-            ErrorCode.StateConflict to "应用记录与当前数据状态不一致，请刷新后重试",
-            ErrorCode.OperationFailed to "Runtime 操作失败",
+            ErrorCode.InvalidRequest to UiNotice.InvalidInput,
+            ErrorCode.NotFound to UiNotice.MissingEntity,
+            ErrorCode.StateConflict to UiNotice.StateChanged,
+            ErrorCode.OperationFailed to UiNotice.OperationFailed,
         )
-        expected.forEach { (code, message) ->
+        expected.forEach { (code, notice) ->
             val client = FakeRuntimeClient()
             val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+            configureApp(viewModel)
+            viewModel.onIntent(UiIntent.SlotNameChanged("Work"))
             client.nextReply = RuntimeReply.Error(code)
 
-            viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+            viewModel.onIntent(UiIntent.CreateSlot)
 
-            assertEquals(message, viewModel.state.value.message)
+            assertEquals(notice, viewModel.state.value.notice)
+            assertNull(viewModel.state.value.registrationRecovery)
             assertTrue(viewModel.state.value.runtimeReady)
         }
     }
 
     @Test
-    fun transportFailureClearsRuntimeReady() {
+    fun busyDropsDuplicateRecoveryConfirmationAndKeepsFrozenPackage() = runBlocking {
+        val client = BlockingResetRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.first"))
+        viewModel.onIntent(UiIntent.ConfirmConfigureApp)
+        viewModel.onIntent(UiIntent.RegistrationRecoveryConfirmationChanged("删除"))
+
+        viewModel.onIntent(UiIntent.ConfirmRegistrationRecovery)
+        client.resetStarted.await()
+        viewModel.onIntent(UiIntent.ConfirmRegistrationRecovery)
+
+        assertTrue(viewModel.state.value.busy)
+        assertEquals(
+            listOf(RuntimeCommand.ResetEnrollment("com.example.first")),
+            client.resetCommands,
+        )
+        client.releaseReset.complete(Unit)
+        assertFalse(viewModel.state.value.busy)
+        assertEquals("com.example.first", viewModel.state.value.selected?.packageName)
+    }
+
+    @Test
+    fun transportFailureClearsRuntimeReadyAndPreservesTypedNotice() {
+        val client = FakeRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        configureApp(viewModel)
+        viewModel.onIntent(UiIntent.SlotNameChanged("Work"))
+        client.nextReply = RuntimeReply.TransportFailure
+
+        viewModel.onIntent(UiIntent.CreateSlot)
+
+        assertEquals(UiNotice.RuntimeUnavailable, viewModel.state.value.notice)
+        assertFalse(viewModel.state.value.runtimeReady)
+    }
+
+    @Test
+    fun runtimeDependentIntentDoesNotExecuteWhileDisconnected() {
         val client = FakeRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
         client.nextReply = RuntimeReply.TransportFailure
+        viewModel.onIntent(UiIntent.Refresh)
+        val commandsBeforeOpen = client.commands.toList()
 
-        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
 
-        assertEquals("Runtime 未连接", viewModel.state.value.message)
+        assertEquals(commandsBeforeOpen, client.commands)
+        assertEquals(UiNotice.RuntimeUnavailable, viewModel.state.value.notice)
+        assertNull(viewModel.state.value.pendingConfigurationPackage)
+    }
+
+    @Test
+    fun configuredAccountExpansionPersistsUntilTheUserChangesIt() {
+        val preferences = MemoryManagerUiPreferences()
+        val first = SlotsViewModel(
+            FakeRuntimeClient(),
+            appSource,
+            Dispatchers.Unconfined,
+            preferences,
+        )
+
+        first.onIntent(UiIntent.SetConfiguredAccountsExpanded(true))
+        first.onIntent(UiIntent.Refresh)
+        val reopened = SlotsViewModel(
+            FakeRuntimeClient(),
+            appSource,
+            Dispatchers.Unconfined,
+            preferences,
+        )
+
+        assertTrue(first.state.value.configuredAccountsExpanded)
+        assertTrue(reopened.state.value.configuredAccountsExpanded)
+        reopened.onIntent(UiIntent.SetConfiguredAccountsExpanded(false))
+        val reopenedAgain = SlotsViewModel(
+            FakeRuntimeClient(),
+            appSource,
+            Dispatchers.Unconfined,
+            preferences,
+        )
+        assertFalse(reopenedAgain.state.value.configuredAccountsExpanded)
+    }
+
+    @Test
+    fun quickActivationUpdatesOnlyTheHomeSnapshotAndLaunchesCurrentSpaceToo() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
+
+        assertEquals(
+            RuntimeCommand.ActivateSlot("com.example.app", "slot-1"),
+            client.commands.last(),
+        )
+        assertEquals("slot-1", viewModel.state.value.packages.single().activeSlot)
+        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertNull(viewModel.state.value.selected)
+        assertEquals(
+            UiNotice.SpaceActivated("Work", switched = true),
+            viewModel.state.value.notice,
+        )
+
+        viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
+
+        assertEquals(
+            UiNotice.SpaceActivated("Work", switched = false),
+            viewModel.state.value.notice,
+        )
+        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+    }
+
+    @Test
+    fun quickActivationFailureDoesNotOptimisticallyChangeTheHighlight() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
+
+        viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
+
+        assertEquals("base", viewModel.state.value.packages.single().activeSlot)
+        assertEquals(UiNotice.OperationFailed, viewModel.state.value.notice)
+        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+    }
+
+    @Test
+    fun quickActivationFreezesArgumentsAndDropsASecondTapWhileBusy() = runBlocking {
+        val client = BlockingQuickRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
+        client.activationStarted.await()
+        viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "base"))
+
+        assertEquals(
+            listOf(RuntimeCommand.ActivateSlot("com.example.app", "slot-1")),
+            client.activationCommands,
+        )
+        client.releaseActivation.complete(Unit)
+        assertFalse(viewModel.state.value.busy)
+        assertEquals("slot-1", viewModel.state.value.packages.single().activeSlot)
+        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+    }
+
+    @Test
+    fun unenrollRequiresFrozenConfirmationAndMovesTheAppBackToAvailable() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
+
+        assertEquals(
+            UnenrollAppUi(
+                packageName = "com.example.app",
+                appLabel = "Example",
+                affectedSpaces = listOf("Work"),
+            ),
+            viewModel.state.value.pendingUnenroll,
+        )
+        val commandsBeforeConfirmation = client.commands.toList()
+        viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
+        assertEquals(commandsBeforeConfirmation, client.commands)
+        assertEquals(UiNotice.InvalidInput, viewModel.state.value.notice)
+
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged("删除"))
+        viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
+
+        assertEquals(
+            RuntimeCommand.Unenroll("com.example.app"),
+            client.commands.last(),
+        )
+        assertTrue(viewModel.state.value.packages.isEmpty())
+        assertNull(viewModel.state.value.selected)
+        assertNull(viewModel.state.value.pendingUnenroll)
+        assertEquals(
+            UiNotice.AppUnenrolled("Example"),
+            viewModel.state.value.notice,
+        )
+    }
+
+    @Test
+    fun unenrollFailureKeepsTheConfiguredAppAndClearsRuntimeOnTransportFailure() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged("删除"))
+        client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
+
+        viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
+
+        assertEquals(listOf(initial), viewModel.state.value.packages)
+        assertEquals(UiNotice.OperationFailed, viewModel.state.value.notice)
+        assertTrue(viewModel.state.value.runtimeReady)
+
+        viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged("删除"))
+        client.nextReply = RuntimeReply.TransportFailure
+        viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
+
+        assertEquals(listOf(initial), viewModel.state.value.packages)
         assertFalse(viewModel.state.value.runtimeReady)
+        assertEquals(UiNotice.RuntimeUnavailable, viewModel.state.value.notice)
+    }
+
+    private fun configureApp(viewModel: SlotsViewModel) {
+        viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
+        viewModel.onIntent(UiIntent.ConfirmConfigureApp)
     }
 }
 
@@ -185,6 +607,7 @@ private open class FakeRuntimeClient(
 ) : RuntimeClient {
     val commands = mutableListOf<RuntimeCommand>()
     var snapshot = initialPackages.firstOrNull() ?: packageSnapshot()
+    var enrolled = initialPackages.isNotEmpty()
     var nextReply: RuntimeReply? = null
 
     override suspend fun execute(command: RuntimeCommand): RuntimeReply {
@@ -196,15 +619,23 @@ private open class FakeRuntimeClient(
         return when (command) {
             RuntimeCommand.Probe -> RuntimeReply.Capabilities("test")
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(
-                if (commands.count { it == RuntimeCommand.ListPackages } == 1) {
-                    emptyList()
-                } else {
-                    listOf(snapshot)
-                },
+                if (enrolled) listOf(snapshot) else emptyList(),
             )
-            is RuntimeCommand.GetPackage,
-            is RuntimeCommand.Enroll,
-            -> RuntimeReply.Package(snapshot)
+            is RuntimeCommand.GetPackage -> RuntimeReply.Package(snapshot)
+            is RuntimeCommand.Enroll -> {
+                enrolled = true
+                snapshot = snapshot.copy(packageName = command.packageName)
+                RuntimeReply.Package(snapshot)
+            }
+            is RuntimeCommand.ResetEnrollment -> {
+                enrolled = true
+                snapshot = snapshot.copy(
+                    packageName = command.packageName,
+                    activeSlot = "base",
+                    slots = listOf(SlotSnapshot("base", "Base")),
+                )
+                RuntimeReply.Package(snapshot)
+            }
             is RuntimeCommand.CreateSlot -> {
                 snapshot = snapshot.copy(
                     slots = snapshot.slots + SlotSnapshot("slot-2", command.name),
@@ -214,6 +645,28 @@ private open class FakeRuntimeClient(
             is RuntimeCommand.ActivateSlot -> {
                 snapshot = snapshot.copy(activeSlot = command.slotId)
                 RuntimeReply.Package(snapshot)
+            }
+            is RuntimeCommand.RenameSlot -> {
+                snapshot = snapshot.copy(
+                    slots = snapshot.slots.map { slot ->
+                        if (slot.id == command.slotId) {
+                            slot.copy(name = command.name)
+                        } else {
+                            slot
+                        }
+                    },
+                )
+                RuntimeReply.Package(snapshot)
+            }
+            is RuntimeCommand.DeleteSlot -> {
+                snapshot = snapshot.copy(
+                    slots = snapshot.slots.filterNot { it.id == command.slotId },
+                )
+                RuntimeReply.Package(snapshot)
+            }
+            is RuntimeCommand.Unenroll -> {
+                enrolled = false
+                RuntimeReply.Ack
             }
         }
     }
@@ -262,6 +715,71 @@ private class BlockingRuntimeClient : RuntimeClient {
             }
             is RuntimeCommand.CreateSlot,
             is RuntimeCommand.ActivateSlot,
+            is RuntimeCommand.RenameSlot,
+            is RuntimeCommand.DeleteSlot,
+            is RuntimeCommand.ResetEnrollment,
+            is RuntimeCommand.Unenroll,
+            -> RuntimeReply.Error(ErrorCode.InvalidRequest)
+        }
+}
+
+private class BlockingResetRuntimeClient : RuntimeClient {
+    val resetCommands = mutableListOf<RuntimeCommand.ResetEnrollment>()
+    val resetStarted = CompletableDeferred<Unit>()
+    val releaseReset = CompletableDeferred<Unit>()
+
+    override suspend fun execute(command: RuntimeCommand): RuntimeReply =
+        when (command) {
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities("test")
+            RuntimeCommand.ListPackages -> RuntimeReply.Packages(emptyList())
+            is RuntimeCommand.Enroll,
+            is RuntimeCommand.GetPackage,
+            -> RuntimeReply.Error(ErrorCode.StateConflict)
+            is RuntimeCommand.ResetEnrollment -> {
+                resetCommands += command
+                resetStarted.complete(Unit)
+                releaseReset.await()
+                RuntimeReply.Package(
+                    PackageSnapshot(
+                        packageName = command.packageName,
+                        activeSlot = "base",
+                        slots = listOf(SlotSnapshot("base", "Base")),
+                    ),
+                )
+            }
+            is RuntimeCommand.CreateSlot,
+            is RuntimeCommand.ActivateSlot,
+            is RuntimeCommand.RenameSlot,
+            is RuntimeCommand.DeleteSlot,
+            is RuntimeCommand.Unenroll,
+            -> RuntimeReply.Error(ErrorCode.InvalidRequest)
+        }
+}
+
+private class BlockingQuickRuntimeClient : RuntimeClient {
+    val activationCommands = mutableListOf<RuntimeCommand.ActivateSlot>()
+    val activationStarted = CompletableDeferred<Unit>()
+    val releaseActivation = CompletableDeferred<Unit>()
+    private var snapshot = packageSnapshot()
+
+    override suspend fun execute(command: RuntimeCommand): RuntimeReply =
+        when (command) {
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities("test")
+            RuntimeCommand.ListPackages -> RuntimeReply.Packages(listOf(snapshot))
+            is RuntimeCommand.ActivateSlot -> {
+                activationCommands += command
+                activationStarted.complete(Unit)
+                releaseActivation.await()
+                snapshot = snapshot.copy(activeSlot = command.slotId)
+                RuntimeReply.Package(snapshot)
+            }
+            is RuntimeCommand.GetPackage,
+            is RuntimeCommand.Enroll,
+            is RuntimeCommand.ResetEnrollment,
+            is RuntimeCommand.Unenroll,
+            is RuntimeCommand.CreateSlot,
+            is RuntimeCommand.RenameSlot,
+            is RuntimeCommand.DeleteSlot,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }

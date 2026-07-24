@@ -10,4 +10,5 @@ local.properties
 *.p12
 *.pfx
 outputs/
-
+.omo/
+tools/bisect-xhs-runtime.sh

@@ -36,6 +36,7 @@ pub(crate) trait PackageStore: core::fmt::Debug {
     fn list(&self) -> Result<Vec<PackageName>, AdapterError>;
     fn load(&self, package: &PackageName) -> Result<Option<PackageAggregate>, AdapterError>;
     fn save(&mut self, aggregate: &PackageAggregate) -> Result<(), AdapterError>;
+    fn remove(&mut self, package: &PackageName) -> Result<(), AdapterError>;
 }
 
 pub(crate) trait SlotStorage: core::fmt::Debug {
@@ -47,6 +48,8 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
     ) -> Result<(), AdapterError>;
 
     fn discard(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError>;
+
+    fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError>;
 
     fn require_complete_pair(
         &self,

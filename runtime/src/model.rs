@@ -240,6 +240,10 @@ enum Lifecycle {
         previous: SlotId,
         target: SlotId,
     },
+    Deleting {
+        target: SlotId,
+    },
+    Unenrolling,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,6 +314,12 @@ impl PackageAggregate {
                     return Err(ModelError::InvalidState);
                 }
             }
+            Lifecycle::Deleting { target } => {
+                if target.is_base() || target == &self.active_slot || !ids.contains(target) {
+                    return Err(ModelError::InvalidState);
+                }
+            }
+            Lifecycle::Unenrolling => {}
         }
         Ok(())
     }
@@ -336,6 +346,75 @@ impl PackageAggregate {
 
     fn slot(&self, id: &SlotId) -> Option<&Slot> {
         self.slots.iter().find(|slot| slot.id() == id)
+    }
+
+    pub fn rename_slot(
+        &mut self,
+        target: &SlotId,
+        display_name: DisplayName,
+    ) -> Result<(), ModelError> {
+        self.require_ready()?;
+        if target.is_base() {
+            return Err(ModelError::StateConflict);
+        }
+        let slot = self
+            .slots
+            .iter_mut()
+            .find(|slot| slot.id() == target)
+            .ok_or(ModelError::SlotNotFound)?;
+        slot.display_name = display_name;
+        self.validate()
+    }
+
+    pub fn begin_deletion(&mut self, target: &SlotId) -> Result<(), ModelError> {
+        self.require_ready()?;
+        if target.is_base() || target == &self.active_slot {
+            return Err(ModelError::StateConflict);
+        }
+        if self.slot(target).is_none() {
+            return Err(ModelError::SlotNotFound);
+        }
+        self.lifecycle = Lifecycle::Deleting {
+            target: target.clone(),
+        };
+        self.validate()
+    }
+
+    pub fn pending_deletion(&self) -> Option<&SlotId> {
+        match &self.lifecycle {
+            Lifecycle::Deleting { target } => Some(target),
+            Lifecycle::Ready
+            | Lifecycle::Creating { .. }
+            | Lifecycle::Activating { .. }
+            | Lifecycle::Unenrolling => None,
+        }
+    }
+
+    pub fn finish_deletion(&mut self, target: &SlotId) -> Result<(), ModelError> {
+        if !matches!(
+            &self.lifecycle,
+            Lifecycle::Deleting { target: pending } if pending == target
+        ) {
+            return Err(ModelError::StateConflict);
+        }
+        let index = self
+            .slots
+            .iter()
+            .position(|slot| slot.id() == target)
+            .ok_or(ModelError::StateConflict)?;
+        self.slots.remove(index);
+        self.lifecycle = Lifecycle::Ready;
+        self.validate()
+    }
+
+    pub fn begin_unenrollment(&mut self) -> Result<(), ModelError> {
+        self.require_ready()?;
+        self.lifecycle = Lifecycle::Unenrolling;
+        self.validate()
+    }
+
+    pub fn is_unenrolling(&self) -> bool {
+        matches!(self.lifecycle, Lifecycle::Unenrolling)
     }
 
     pub fn reserve_slot(&mut self, display_name: DisplayName) -> Result<Slot, ModelError> {
@@ -382,7 +461,10 @@ impl PackageAggregate {
                 target,
                 restore_running,
             } => Some((target, *restore_running)),
-            Lifecycle::Ready | Lifecycle::Activating { .. } => None,
+            Lifecycle::Ready
+            | Lifecycle::Activating { .. }
+            | Lifecycle::Deleting { .. }
+            | Lifecycle::Unenrolling => None,
         }
     }
 
@@ -415,7 +497,10 @@ impl PackageAggregate {
     pub fn pending_activation(&self) -> Option<(&SlotId, &SlotId)> {
         match &self.lifecycle {
             Lifecycle::Activating { previous, target } => Some((previous, target)),
-            Lifecycle::Ready | Lifecycle::Creating { .. } => None,
+            Lifecycle::Ready
+            | Lifecycle::Creating { .. }
+            | Lifecycle::Deleting { .. }
+            | Lifecycle::Unenrolling => None,
         }
     }
 
@@ -429,9 +514,11 @@ impl PackageAggregate {
                 self.validate()
             }
             Lifecycle::Ready if &self.active_slot == target => Ok(()),
-            Lifecycle::Ready | Lifecycle::Creating { .. } | Lifecycle::Activating { .. } => {
-                Err(ModelError::StateConflict)
-            }
+            Lifecycle::Ready
+            | Lifecycle::Creating { .. }
+            | Lifecycle::Activating { .. }
+            | Lifecycle::Deleting { .. }
+            | Lifecycle::Unenrolling => Err(ModelError::StateConflict),
         }
     }
 
@@ -551,5 +638,86 @@ mod tests {
         assert_eq!(aggregate.pending_activation(), Some((&base, &slot_id)));
         aggregate.abort_activation(&base).unwrap();
         assert!(aggregate.snapshot().is_ok());
+    }
+
+    #[test]
+    fn rename_and_delete_preserve_slot_identity_and_monotonic_numbering() {
+        let mut aggregate = PackageAggregate::enrolled(package(), identity());
+        let slot = aggregate
+            .reserve_slot(DisplayName::new("Work").unwrap())
+            .unwrap();
+        let slot_id = slot.id().clone();
+        aggregate.begin_creation(&slot, false).unwrap();
+        aggregate.finish_creation(slot).unwrap();
+
+        aggregate
+            .rename_slot(&slot_id, DisplayName::new("Personal").unwrap())
+            .unwrap();
+        assert_eq!(aggregate.snapshot().unwrap().slots[1].name, "Personal");
+
+        aggregate.begin_deletion(&slot_id).unwrap();
+        assert_eq!(aggregate.pending_deletion(), Some(&slot_id));
+        assert_eq!(aggregate.snapshot(), Err(ModelError::StateConflict));
+        aggregate.finish_deletion(&slot_id).unwrap();
+        assert!(!aggregate.has_slot(&slot_id));
+
+        let next = aggregate
+            .reserve_slot(DisplayName::new("Next").unwrap())
+            .unwrap();
+        assert_eq!(next.id(), &SlotId::numbered(2));
+    }
+
+    #[test]
+    fn base_active_and_missing_slots_cannot_be_deleted() {
+        let mut aggregate = PackageAggregate::enrolled(package(), identity());
+        assert_eq!(
+            aggregate.begin_deletion(&SlotId::base()),
+            Err(ModelError::StateConflict)
+        );
+        assert_eq!(
+            aggregate.begin_deletion(&SlotId::numbered(9)),
+            Err(ModelError::SlotNotFound)
+        );
+
+        let slot = aggregate
+            .reserve_slot(DisplayName::new("Work").unwrap())
+            .unwrap();
+        let slot_id = slot.id().clone();
+        aggregate.begin_creation(&slot, false).unwrap();
+        aggregate.finish_creation(slot).unwrap();
+        aggregate.begin_activation(&slot_id).unwrap();
+        aggregate.finish_activation(&slot_id).unwrap();
+
+        assert_eq!(
+            aggregate.begin_deletion(&slot_id),
+            Err(ModelError::StateConflict)
+        );
+        aggregate
+            .rename_slot(&slot_id, DisplayName::new("Current").unwrap())
+            .unwrap();
+        assert_eq!(aggregate.snapshot().unwrap().slots[1].name, "Current");
+        assert_eq!(
+            aggregate.rename_slot(&SlotId::base(), DisplayName::new("Root").unwrap()),
+            Err(ModelError::StateConflict)
+        );
+    }
+
+    #[test]
+    fn unenrollment_is_a_durable_terminal_intent() {
+        let mut aggregate = PackageAggregate::enrolled(package(), identity());
+
+        aggregate.begin_unenrollment().unwrap();
+
+        assert!(aggregate.is_unenrolling());
+        assert_eq!(aggregate.snapshot(), Err(ModelError::StateConflict));
+        assert_eq!(
+            aggregate.begin_unenrollment(),
+            Err(ModelError::StateConflict)
+        );
+        let encoded = serde_json::to_string(&aggregate).unwrap();
+        assert!(encoded.contains(r#""state":"unenrolling""#));
+        let restored: PackageAggregate = serde_json::from_str(&encoded).unwrap();
+        assert!(restored.is_unenrolling());
+        assert!(restored.validate().is_ok());
     }
 }

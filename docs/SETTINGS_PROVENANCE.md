@@ -21,7 +21,8 @@
 
 | 设置 | 来源 | 运行验证 |
 |---|---|---|
-| 六个协议操作、四个错误码 | 首个产品链路；每项都由 Rust flow、共享 fixture、Kotlin 消费和 UI 入口覆盖 | `cargo test`、`:manager-app:testDebugUnitTest` |
+| 九个协议操作、四个错误码 | 当前产品链路；每项都由 Rust flow、共享 fixture、Kotlin 消费和 UI 入口覆盖；首页快捷切换复用 `activate_slot` | `cargo test`、`:manager-app:testDebugUnitTest` |
+| `enroll` 的可选 `reset:true` | App 更新或重装后旧身份被严格拒绝时的用户确认恢复；删除旧分空间、保留 Base，不自动接管 | Runtime 失败点测试、`enroll_reset` 共享 fixture、Manager 确认测试 |
 | 每条连接一个换行结尾请求 | 重建方案明确约定 | `ucloned` 与 `slotctl` socket 测试 |
 | `base` 后从 `slot-1` 递增的内部槽 ID | V2 聚合模型的确定性标识规则；槽 ID 对 Manager 是不透明字符串 | 聚合测试和共享 fixtures |
 | 创建页默认选择空白槽 | 固定旧版行为基线中的真实创建入口默认值 | ViewModel 完整链路测试 |
@@ -40,8 +41,9 @@
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.1.2`、versionCode `3` | 首次 GitHub 候选基线；统一包含 Runtime 事务回归、Manager transport 区分和 Runtime 启动复验候选修复 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
+| 版本 `0.1.4`、versionCode `5` | 在 0.1.3 候选基线上增加首页快捷切换、持久展开偏好和可恢复取消配置闭环，Manager 与 Runtime 成对交付 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
 | UI 的 8 dp 网格间距 | Material 布局网格，仅影响首个真实入口的排版，不进入业务或协议 | Android lint、assemble |
+| 首页当前空间高亮色 `#D83B50` | 用户明确要求当前账号使用西瓜红；只影响首页 Chip 的真实当前快照展示 | Manager 真机截图、Android lint、assemble |
 | GitHub Action commit SHA | 旧版 CI 中已使用的 v3/v4 action 固定提交 | CI workflow |
 
 `tools/check-decision-alignment.sh` 只检查重复声明是否一致：发布版本、versionCode、Rust 工具链、Manager minSdk 与 Rust Android API。它不设置文件长度、执行次数或覆盖率阈值。

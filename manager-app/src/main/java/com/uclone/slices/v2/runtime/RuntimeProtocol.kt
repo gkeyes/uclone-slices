@@ -24,12 +24,20 @@ sealed interface RuntimeCommand {
     data object ListPackages : RuntimeCommand
     data class GetPackage(val packageName: String) : RuntimeCommand
     data class Enroll(val packageName: String) : RuntimeCommand
+    data class ResetEnrollment(val packageName: String) : RuntimeCommand
+    data class Unenroll(val packageName: String) : RuntimeCommand
     data class CreateSlot(
         val packageName: String,
         val name: String,
         val seed: SeedMode,
     ) : RuntimeCommand
     data class ActivateSlot(val packageName: String, val slotId: String) : RuntimeCommand
+    data class RenameSlot(
+        val packageName: String,
+        val slotId: String,
+        val name: String,
+    ) : RuntimeCommand
+    data class DeleteSlot(val packageName: String, val slotId: String) : RuntimeCommand
 }
 
 enum class ErrorCode(val wire: String) {
@@ -48,6 +56,7 @@ sealed interface RuntimeReply {
     data class Capabilities(val buildId: String) : RuntimeReply
     data class Packages(val packages: List<PackageSnapshot>) : RuntimeReply
     data class Package(val packageSnapshot: PackageSnapshot) : RuntimeReply
+    data object Ack : RuntimeReply
     data class Error(val code: ErrorCode) : RuntimeReply
     data object TransportFailure : RuntimeReply
 }
@@ -63,6 +72,13 @@ object RuntimeProtocol {
             is RuntimeCommand.Enroll -> JSONObject()
                 .put("op", "enroll")
                 .put("package", command.packageName)
+            is RuntimeCommand.ResetEnrollment -> JSONObject()
+                .put("op", "enroll")
+                .put("package", command.packageName)
+                .put("reset", true)
+            is RuntimeCommand.Unenroll -> JSONObject()
+                .put("op", "unenroll")
+                .put("package", command.packageName)
             is RuntimeCommand.CreateSlot -> JSONObject()
                 .put("op", "create_slot")
                 .put("package", command.packageName)
@@ -70,6 +86,15 @@ object RuntimeProtocol {
                 .put("seed", command.seed.wire)
             is RuntimeCommand.ActivateSlot -> JSONObject()
                 .put("op", "activate_slot")
+                .put("package", command.packageName)
+                .put("slot", command.slotId)
+            is RuntimeCommand.RenameSlot -> JSONObject()
+                .put("op", "rename_slot")
+                .put("package", command.packageName)
+                .put("slot", command.slotId)
+                .put("name", command.name)
+            is RuntimeCommand.DeleteSlot -> JSONObject()
+                .put("op", "delete_slot")
                 .put("package", command.packageName)
                 .put("slot", command.slotId)
         }
@@ -89,6 +114,9 @@ object RuntimeProtocol {
         }
         if (ok.has("packages")) {
             return RuntimeReply.Packages(parsePackages(ok.getJSONArray("packages")))
+        }
+        if (ok.length() == 0) {
+            return RuntimeReply.Ack
         }
         return RuntimeReply.Package(parsePackage(ok.getJSONObject("package")))
     }

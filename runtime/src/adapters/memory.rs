@@ -11,6 +11,8 @@ pub(crate) struct MemoryPackageStore {
     packages: BTreeMap<PackageName, PackageAggregate>,
     save_calls: usize,
     failed_save_calls: BTreeSet<usize>,
+    remove_calls: usize,
+    failed_remove_calls: BTreeSet<usize>,
 }
 
 impl MemoryPackageStore {
@@ -24,6 +26,10 @@ impl MemoryPackageStore {
 
     pub(crate) fn save_calls(&self) -> usize {
         self.save_calls
+    }
+
+    pub(crate) fn fail_next_remove(&mut self) {
+        self.failed_remove_calls.insert(self.remove_calls + 1);
     }
 }
 
@@ -48,6 +54,15 @@ impl PackageStore for MemoryPackageStore {
             .insert(aggregate.package().clone(), aggregate.clone());
         Ok(())
     }
+
+    fn remove(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        self.remove_calls += 1;
+        if self.failed_remove_calls.remove(&self.remove_calls) {
+            return Err(AdapterError::new("injected package-store remove failure"));
+        }
+        self.packages.remove(package);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +70,10 @@ pub(crate) enum SlotFailure {
     MaterializeCe,
     MaterializeDe,
     Discard,
+    DiscardCe,
+    DiscardDe,
+    DiscardPackageCe,
+    DiscardPackageDe,
 }
 
 #[derive(Debug, Default)]
@@ -74,6 +93,14 @@ impl MemorySlotStorage {
         if let Some(pair) = self.domains.get_mut(&(package.clone(), slot.clone())) {
             pair.1 = false;
         }
+    }
+
+    pub(crate) fn domain_state(
+        &self,
+        package: &PackageName,
+        slot: &SlotId,
+    ) -> Option<(bool, bool)> {
+        self.domains.get(&(package.clone(), slot.clone())).copied()
     }
 
     pub(crate) fn fail_next(&mut self, failure: SlotFailure) {
@@ -116,8 +143,49 @@ impl SlotStorage for MemorySlotStorage {
         if self.take_failure(SlotFailure::Discard) {
             return Err(AdapterError::new("injected slot discard failure"));
         }
-        self.domains.remove(&(package.clone(), slot.clone()));
-        Ok(())
+        let ce_failed = self.take_failure(SlotFailure::DiscardCe);
+        let de_failed = self.take_failure(SlotFailure::DiscardDe);
+        let key = (package.clone(), slot.clone());
+        if let Some(pair) = self.domains.get_mut(&key) {
+            if !ce_failed {
+                pair.0 = false;
+            }
+            if !de_failed {
+                pair.1 = false;
+            }
+        }
+        self.domains.retain(|_, pair| *pair != (false, false));
+        if ce_failed {
+            Err(AdapterError::new("injected CE slot discard failure"))
+        } else if de_failed {
+            Err(AdapterError::new("injected DE slot discard failure"))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        let ce_failed = self.take_failure(SlotFailure::DiscardPackageCe);
+        let de_failed = self.take_failure(SlotFailure::DiscardPackageDe);
+        for ((stored_package, _slot), pair) in &mut self.domains {
+            if stored_package != package {
+                continue;
+            }
+            if !ce_failed {
+                pair.0 = false;
+            }
+            if !de_failed {
+                pair.1 = false;
+            }
+        }
+        self.domains.retain(|_, pair| *pair != (false, false));
+        if ce_failed {
+            Err(AdapterError::new("injected CE package discard failure"))
+        } else if de_failed {
+            Err(AdapterError::new("injected DE package discard failure"))
+        } else {
+            Ok(())
+        }
     }
 
     fn require_complete_pair(
@@ -135,6 +203,7 @@ impl SlotStorage for MemorySlotStorage {
 pub(crate) enum AndroidFailure {
     Inspect,
     ForceStop,
+    Observe,
     Apply,
     Launch,
 }
@@ -272,6 +341,9 @@ impl AndroidOps for MemoryAndroidOps {
     fn observe_view(&mut self, package: &PackageName) -> Result<ObservedView, AdapterError> {
         self.calls.push(AndroidCall::Observe(package.clone()));
         self.require_installed(package)?;
+        if self.take_failure(AndroidFailure::Observe) {
+            return Err(AdapterError::new("injected view observation failure"));
+        }
         self.views
             .get(package)
             .cloned()

@@ -13,6 +13,8 @@ class RuntimeProtocolTest {
             "probe" to RuntimeCommand.Probe,
             "list_packages" to RuntimeCommand.ListPackages,
             "enroll" to RuntimeCommand.Enroll("com.example.app"),
+            "enroll_reset" to RuntimeCommand.ResetEnrollment("com.example.app"),
+            "unenroll" to RuntimeCommand.Unenroll("com.example.app"),
             "get_package" to RuntimeCommand.GetPackage("com.example.app"),
             "create_slot" to RuntimeCommand.CreateSlot(
                 "com.example.app",
@@ -20,6 +22,12 @@ class RuntimeProtocolTest {
                 SeedMode.Blank,
             ),
             "activate_slot" to RuntimeCommand.ActivateSlot("com.example.app", "slot-1"),
+            "rename_slot" to RuntimeCommand.RenameSlot(
+                "com.example.app",
+                "slot-1",
+                "Personal",
+            ),
+            "delete_slot" to RuntimeCommand.DeleteSlot("com.example.app", "slot-1"),
         )
 
         commands.forEach { (name, command) ->
@@ -33,6 +41,7 @@ class RuntimeProtocolTest {
                     emptyList(),
                     (response as RuntimeReply.Packages).packages,
                 )
+                "unenroll" -> assertEquals(RuntimeReply.Ack, response)
                 else -> assertTrue(response is RuntimeReply.Package)
             }
         }

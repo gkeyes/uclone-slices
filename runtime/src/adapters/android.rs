@@ -213,7 +213,18 @@ impl SystemAndroidOps {
                 return Ok(());
             }
             let mount_point_text = path_text(mount_point)?;
-            self.required("/system/bin/umount", &[mount_point_text])?;
+            let output = self.run("/system/bin/umount", &[mount_point_text])?;
+            if !output.success {
+                let busy_error = format!("umount: {mount_point_text}: Device or resource busy");
+                if output.stderr.trim() == busy_error {
+                    self.required("/system/bin/umount", &["-l", mount_point_text])?;
+                } else {
+                    return Err(AdapterError::new(format!(
+                        "/system/bin/umount failed: {}",
+                        output.stderr.trim()
+                    )));
+                }
+            }
             let content = fs::read_to_string(&self.mountinfo)
                 .map_err(|error| AdapterError::new(error.to_string()))?;
             let after = mount_roots(&content, mount_point).len();
@@ -417,15 +428,7 @@ fn runtime_view_from_mountinfo(
         &mount_roots(content, &canonical_de_root.join(package.as_str())),
         package,
     );
-    match (ce, de) {
-        (Some(None), Some(None)) => ObservedView::Base,
-        (Some(Some(ce)), Some(Some(de))) if ce == de => ObservedView::Slot(ce),
-        (Some(None), Some(Some(_)))
-        | (Some(Some(_)), Some(None))
-        | (Some(Some(_)), Some(Some(_)))
-        | (None, _)
-        | (_, None) => ObservedView::Inconsistent,
-    }
+    paired_view(ce, de)
 }
 
 fn domain_view(roots: &[String], package: &PackageName) -> Option<Option<SlotId>> {
@@ -450,6 +453,10 @@ fn app_view_from_mountinfo(
         &mount_roots(content, &canonical_de_root.join(package.as_str())),
         package,
     );
+    paired_view(ce, de)
+}
+
+fn paired_view(ce: Option<Option<SlotId>>, de: Option<Option<SlotId>>) -> ObservedView {
     match (ce, de) {
         (Some(None), Some(None)) => ObservedView::Base,
         (Some(Some(ce)), Some(Some(de))) if ce == de => ObservedView::Slot(ce),
@@ -552,6 +559,7 @@ mod tests {
         commands: RecordedCommands,
         mountinfo: PathBuf,
         fail_mount_containing: Option<String>,
+        normal_unmount_error: Option<String>,
         ignore_unmount: bool,
     }
 
@@ -584,8 +592,20 @@ mod tests {
                 content.push_str(&format!("{id} 0 0:1 {source} {target} rw - ext4 none rw\n"));
                 fs::write(&self.mountinfo, content)
                     .map_err(|error| AdapterError::new(error.to_string()))?;
-            } else if program == "/system/bin/umount" && !self.ignore_unmount {
-                let target = arguments.first().copied().unwrap_or_default();
+            } else if program == "/system/bin/umount" {
+                let lazy = arguments.first().copied() == Some("-l");
+                if !lazy && let Some(error) = &self.normal_unmount_error {
+                    let target = arguments.last().copied().unwrap_or_default();
+                    return Ok(CommandOutput {
+                        success: false,
+                        stdout: String::new(),
+                        stderr: error.replace("{mount_point}", target),
+                    });
+                }
+                if self.ignore_unmount {
+                    return Ok(output(""));
+                }
+                let target = arguments.last().copied().unwrap_or_default();
                 let content = fs::read_to_string(&self.mountinfo).unwrap_or_default();
                 let mut removed = false;
                 let mut lines: Vec<_> = content.lines().collect();
@@ -921,6 +941,7 @@ mod tests {
             commands: Rc::clone(&commands),
             mountinfo: mountinfo.clone(),
             fail_mount_containing: None,
+            normal_unmount_error: None,
             ignore_unmount: false,
         };
         let mut android = SystemAndroidOps {
@@ -993,6 +1014,7 @@ mod tests {
                 commands: Rc::new(RefCell::new(Vec::new())),
                 mountinfo: mountinfo.clone(),
                 fail_mount_containing: Some(failing_domain.to_owned()),
+                normal_unmount_error: None,
                 ignore_unmount: false,
             };
             let mut android = SystemAndroidOps {
@@ -1034,6 +1056,7 @@ mod tests {
             commands: Rc::clone(&commands),
             mountinfo: mountinfo.clone(),
             fail_mount_containing: None,
+            normal_unmount_error: None,
             ignore_unmount: true,
         };
         let mut android = SystemAndroidOps {
@@ -1049,5 +1072,190 @@ mod tests {
 
         assert!(android.apply_view(&package, &SlotId::base()).is_err());
         assert_eq!(commands.borrow().len(), 1);
+    }
+
+    #[test]
+    fn busy_managed_mount_uses_lazy_detach_and_still_verifies_progress() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce = root.path().join("data/user/0");
+        let canonical_de = root.path().join("data/user_de/0");
+        fs::create_dir_all(canonical_ce.join(package.as_str())).unwrap();
+        fs::create_dir_all(canonical_de.join(package.as_str())).unwrap();
+        let mountinfo = root.path().join("mountinfo");
+        fs::write(
+            &mountinfo,
+            format!(
+                "1 0 0:1 /uclone-slices-v2/slots/{package}/slot-1 {}/{} rw - ext4 none rw\n\
+                 2 0 0:1 /uclone-slices-v2/slots/{package}/slot-1 {}/{} rw - ext4 none rw\n",
+                canonical_ce.display(),
+                package,
+                canonical_de.display(),
+                package,
+            ),
+        )
+        .unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = MountRunner {
+            commands: Rc::clone(&commands),
+            mountinfo: mountinfo.clone(),
+            fail_mount_containing: None,
+            normal_unmount_error: Some("umount: {mount_point}: Device or resource busy".to_owned()),
+            ignore_unmount: false,
+        };
+        let mut android = SystemAndroidOps {
+            build_id: "test".to_owned(),
+            ce_slots_root: root.path().join("misc_ce/uclone-slices-v2/slots"),
+            de_slots_root: root.path().join("misc_de/uclone-slices-v2/slots"),
+            canonical_ce_root: canonical_ce.clone(),
+            canonical_de_root: canonical_de.clone(),
+            mountinfo,
+            proc_root: root.path().join("proc"),
+            runner: Box::new(runner),
+        };
+
+        android.apply_view(&package, &SlotId::base()).unwrap();
+
+        assert_eq!(android.observe_view(&package).unwrap(), ObservedView::Base);
+        assert_eq!(
+            *commands.borrow(),
+            vec![
+                (
+                    "/system/bin/umount".to_owned(),
+                    vec![canonical_ce.join(package.as_str()).display().to_string()],
+                ),
+                (
+                    "/system/bin/umount".to_owned(),
+                    vec![
+                        "-l".to_owned(),
+                        canonical_ce.join(package.as_str()).display().to_string(),
+                    ],
+                ),
+                (
+                    "/system/bin/umount".to_owned(),
+                    vec![canonical_de.join(package.as_str()).display().to_string()],
+                ),
+                (
+                    "/system/bin/umount".to_owned(),
+                    vec![
+                        "-l".to_owned(),
+                        canonical_de.join(package.as_str()).display().to_string(),
+                    ],
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_exact_busy_error_does_not_use_lazy_detach() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce = root.path().join("data/user/0");
+        let canonical_de = root.path().join("data/user_de/0");
+        fs::create_dir_all(canonical_ce.join(package.as_str())).unwrap();
+        fs::create_dir_all(canonical_de.join(package.as_str())).unwrap();
+        let mountinfo = root.path().join("mountinfo");
+        fs::write(
+            &mountinfo,
+            format!(
+                "1 0 0:1 /uclone-slices-v2/slots/{package}/slot-1 {}/{} rw - ext4 none rw\n",
+                canonical_ce.display(),
+                package,
+            ),
+        )
+        .unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = MountRunner {
+            commands: Rc::clone(&commands),
+            mountinfo: mountinfo.clone(),
+            fail_mount_containing: None,
+            normal_unmount_error: Some("helper: Device or resource busy".to_owned()),
+            ignore_unmount: false,
+        };
+        let mut android = SystemAndroidOps {
+            build_id: "test".to_owned(),
+            ce_slots_root: root.path().join("misc_ce/uclone-slices-v2/slots"),
+            de_slots_root: root.path().join("misc_de/uclone-slices-v2/slots"),
+            canonical_ce_root: canonical_ce.clone(),
+            canonical_de_root: canonical_de,
+            mountinfo,
+            proc_root: root.path().join("proc"),
+            runner: Box::new(runner),
+        };
+
+        let error = android
+            .apply_view(&package, &SlotId::base())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("helper: Device or resource busy"));
+        assert_eq!(
+            *commands.borrow(),
+            vec![(
+                "/system/bin/umount".to_owned(),
+                vec![canonical_ce.join(package.as_str()).display().to_string()],
+            )]
+        );
+    }
+
+    #[test]
+    fn lazy_detach_that_makes_no_progress_still_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce = root.path().join("data/user/0");
+        let canonical_de = root.path().join("data/user_de/0");
+        fs::create_dir_all(canonical_ce.join(package.as_str())).unwrap();
+        fs::create_dir_all(canonical_de.join(package.as_str())).unwrap();
+        let mountinfo = root.path().join("mountinfo");
+        fs::write(
+            &mountinfo,
+            format!(
+                "1 0 0:1 /uclone-slices-v2/slots/{package}/slot-1 {}/{} rw - ext4 none rw\n",
+                canonical_ce.display(),
+                package,
+            ),
+        )
+        .unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = MountRunner {
+            commands: Rc::clone(&commands),
+            mountinfo: mountinfo.clone(),
+            fail_mount_containing: None,
+            normal_unmount_error: Some("umount: {mount_point}: Device or resource busy".to_owned()),
+            ignore_unmount: true,
+        };
+        let mut android = SystemAndroidOps {
+            build_id: "test".to_owned(),
+            ce_slots_root: root.path().join("misc_ce/uclone-slices-v2/slots"),
+            de_slots_root: root.path().join("misc_de/uclone-slices-v2/slots"),
+            canonical_ce_root: canonical_ce.clone(),
+            canonical_de_root: canonical_de,
+            mountinfo,
+            proc_root: root.path().join("proc"),
+            runner: Box::new(runner),
+        };
+
+        let error = android
+            .apply_view(&package, &SlotId::base())
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("unmount made no progress"));
+        assert_eq!(
+            *commands.borrow(),
+            vec![
+                (
+                    "/system/bin/umount".to_owned(),
+                    vec![canonical_ce.join(package.as_str()).display().to_string()],
+                ),
+                (
+                    "/system/bin/umount".to_owned(),
+                    vec![
+                        "-l".to_owned(),
+                        canonical_ce.join(package.as_str()).display().to_string(),
+                    ],
+                ),
+            ]
+        );
     }
 }
