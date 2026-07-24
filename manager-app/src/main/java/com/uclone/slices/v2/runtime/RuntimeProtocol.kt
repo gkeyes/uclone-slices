@@ -1,0 +1,113 @@
+package com.uclone.slices.v2.runtime
+
+import org.json.JSONArray
+import org.json.JSONObject
+
+enum class SeedMode(val wire: String) {
+    Blank("blank"),
+    CloneBase("clone_base"),
+}
+
+data class SlotSnapshot(
+    val id: String,
+    val name: String,
+)
+
+data class PackageSnapshot(
+    val packageName: String,
+    val activeSlot: String,
+    val slots: List<SlotSnapshot>,
+)
+
+sealed interface RuntimeCommand {
+    data object Probe : RuntimeCommand
+    data object ListPackages : RuntimeCommand
+    data class GetPackage(val packageName: String) : RuntimeCommand
+    data class Enroll(val packageName: String) : RuntimeCommand
+    data class CreateSlot(
+        val packageName: String,
+        val name: String,
+        val seed: SeedMode,
+    ) : RuntimeCommand
+    data class ActivateSlot(val packageName: String, val slotId: String) : RuntimeCommand
+}
+
+enum class ErrorCode(val wire: String) {
+    InvalidRequest("invalid_request"),
+    NotFound("not_found"),
+    StateConflict("state_conflict"),
+    OperationFailed("operation_failed");
+
+    companion object {
+        fun fromWire(value: String): ErrorCode =
+            entries.first { it.wire == value }
+    }
+}
+
+sealed interface RuntimeReply {
+    data class Capabilities(val buildId: String) : RuntimeReply
+    data class Packages(val packages: List<PackageSnapshot>) : RuntimeReply
+    data class Package(val packageSnapshot: PackageSnapshot) : RuntimeReply
+    data class Error(val code: ErrorCode) : RuntimeReply
+}
+
+object RuntimeProtocol {
+    fun encode(command: RuntimeCommand): String {
+        val json = when (command) {
+            RuntimeCommand.Probe -> JSONObject().put("op", "probe")
+            RuntimeCommand.ListPackages -> JSONObject().put("op", "list_packages")
+            is RuntimeCommand.GetPackage -> JSONObject()
+                .put("op", "get_package")
+                .put("package", command.packageName)
+            is RuntimeCommand.Enroll -> JSONObject()
+                .put("op", "enroll")
+                .put("package", command.packageName)
+            is RuntimeCommand.CreateSlot -> JSONObject()
+                .put("op", "create_slot")
+                .put("package", command.packageName)
+                .put("name", command.name)
+                .put("seed", command.seed.wire)
+            is RuntimeCommand.ActivateSlot -> JSONObject()
+                .put("op", "activate_slot")
+                .put("package", command.packageName)
+                .put("slot", command.slotId)
+        }
+        return json.toString()
+    }
+
+    fun decode(frame: String): RuntimeReply {
+        val root = JSONObject(frame)
+        root.optJSONObject("error")?.let { error ->
+            return RuntimeReply.Error(ErrorCode.fromWire(error.getString("code")))
+        }
+        val ok = root.getJSONObject("ok")
+        if (ok.has("build_id")) {
+            return RuntimeReply.Capabilities(
+                buildId = ok.getString("build_id"),
+            )
+        }
+        if (ok.has("packages")) {
+            return RuntimeReply.Packages(parsePackages(ok.getJSONArray("packages")))
+        }
+        return RuntimeReply.Package(parsePackage(ok.getJSONObject("package")))
+    }
+
+    private fun parsePackages(array: JSONArray): List<PackageSnapshot> =
+        List(array.length()) { index -> parsePackage(array.getJSONObject(index)) }
+
+    private fun parsePackage(json: JSONObject): PackageSnapshot =
+        PackageSnapshot(
+            packageName = json.getString("package"),
+            activeSlot = json.getString("active_slot"),
+            slots = parseSlots(json.getJSONArray("slots")),
+        )
+
+    private fun parseSlots(array: JSONArray): List<SlotSnapshot> =
+        List(array.length()) { index ->
+            val slot = array.getJSONObject(index)
+            SlotSnapshot(
+                id = slot.getString("id"),
+                name = slot.getString("name"),
+            )
+        }
+}
