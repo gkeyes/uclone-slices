@@ -54,13 +54,15 @@ impl PackageStore for FilePackageStore {
         match fs::read(path) {
             Ok(bytes) => {
                 let aggregate: PackageAggregate = serde_json::from_slice(&bytes)
-                    .map_err(|error| AdapterError::new(error.to_string()))?;
+                    .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
                 aggregate
                     .validate()
-                    .map_err(|error| AdapterError::new(error.to_string()))?;
+                    .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
                 (aggregate.package() == package)
                     .then_some(Some(aggregate))
-                    .ok_or_else(|| AdapterError::new("aggregate package does not match its path"))
+                    .ok_or_else(|| {
+                        AdapterError::state_conflict("aggregate package does not match its path")
+                    })
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(io_error(error)),
@@ -70,7 +72,7 @@ impl PackageStore for FilePackageStore {
     fn save(&mut self, aggregate: &PackageAggregate) -> Result<(), AdapterError> {
         aggregate
             .validate()
-            .map_err(|error| AdapterError::new(error.to_string()))?;
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
         let path = self.aggregate_path(aggregate.package());
         let parent = path
             .parent()
@@ -183,9 +185,8 @@ impl SlotStorage for FileSlotStorage {
     }
 
     fn discard(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError> {
-        let (ce, de) = self.slot_paths(package, slot);
-        let ce_result = remove_tree_if_exists(&ce);
-        let de_result = remove_tree_if_exists(&de);
+        let ce_result = remove_slot_artifacts(&self.ce_slots_root, package, slot);
+        let de_result = remove_slot_artifacts(&self.de_slots_root, package, slot);
         match (ce_result, de_result) {
             (Err(error), _) | (Ok(()), Err(error)) => Err(error),
             (Ok(()), Ok(())) => Ok(()),
@@ -306,6 +307,52 @@ fn remove_tree_if_exists(path: &Path) -> Result<(), AdapterError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error(error)),
     }
+}
+
+fn remove_slot_artifacts(
+    slots_root: &Path,
+    package: &PackageName,
+    slot: &SlotId,
+) -> Result<(), AdapterError> {
+    let package_root = slots_root.join(package.as_str());
+    let mut first_error = remove_tree_if_exists(&package_root.join(slot.as_str())).err();
+    let entries = match fs::read_dir(&package_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return first_error.map_or(Ok(()), Err);
+        }
+        Err(error) => {
+            if first_error.is_none() {
+                first_error = Some(io_error(error));
+            }
+            return first_error.map_or(Ok(()), Err);
+        }
+    };
+    let temporary_prefix = format!(".{}.tmp-", slot.as_str());
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(io_error(error));
+                }
+                continue;
+            }
+        };
+        let matches = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(&temporary_prefix));
+        let is_directory = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if matches
+            && is_directory
+            && let Err(error) = remove_tree_if_exists(&entry.path())
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 fn io_error(error: std::io::Error) -> AdapterError {
@@ -431,5 +478,37 @@ mod tests {
         let (target_ce, target_de) = storage.slot_paths(&package, slot.id());
         assert!(!target_ce.exists());
         assert!(!target_de.exists());
+    }
+
+    #[test]
+    fn discard_removes_published_and_stale_temporary_slot_artifacts() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let slot = SlotId::numbered(1);
+        let ce_slots = root.path().join("slots-ce");
+        let de_slots = root.path().join("slots-de");
+        let ce_package = ce_slots.join(package.as_str());
+        let de_package = de_slots.join(package.as_str());
+        let published_ce = ce_package.join(slot.as_str());
+        let stale_ce = ce_package.join(".slot-1.tmp-111");
+        let stale_de = de_package.join(".slot-1.tmp-222");
+        let unrelated = de_package.join(".slot-10.tmp-333");
+        for directory in [&published_ce, &stale_ce, &stale_de, &unrelated] {
+            fs::create_dir_all(directory).unwrap();
+        }
+        let mut storage = FileSlotStorage::open(
+            &ce_slots,
+            &de_slots,
+            root.path().join("base-ce"),
+            root.path().join("base-de"),
+        )
+        .unwrap();
+
+        storage.discard(&package, &slot).unwrap();
+
+        assert!(!published_ce.exists());
+        assert!(!stale_ce.exists());
+        assert!(!stale_de.exists());
+        assert!(unrelated.exists());
     }
 }

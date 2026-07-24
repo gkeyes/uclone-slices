@@ -43,7 +43,7 @@ impl PackageStore for MemoryPackageStore {
         }
         aggregate
             .validate()
-            .map_err(|error| AdapterError::new(error.to_string()))?;
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
         self.packages
             .insert(aggregate.package().clone(), aggregate.clone());
         Ok(())
@@ -55,7 +55,6 @@ pub(crate) enum SlotFailure {
     MaterializeCe,
     MaterializeDe,
     Discard,
-    Require,
 }
 
 #[derive(Debug, Default)]
@@ -126,9 +125,6 @@ impl SlotStorage for MemorySlotStorage {
         package: &PackageName,
         slot: &SlotId,
     ) -> Result<(), AdapterError> {
-        if self.failures.front() == Some(&SlotFailure::Require) {
-            return Err(AdapterError::new("injected pair verification failure"));
-        }
         self.contains(package, slot)
             .then_some(())
             .ok_or_else(|| AdapterError::new("slot CE/DE pair is incomplete"))
@@ -139,7 +135,6 @@ impl SlotStorage for MemorySlotStorage {
 pub(crate) enum AndroidFailure {
     Inspect,
     ForceStop,
-    Observe,
     Apply,
     Launch,
 }
@@ -267,6 +262,7 @@ impl AndroidOps for MemoryAndroidOps {
         self.calls.push(AndroidCall::ForceStop(package.clone()));
         self.require_installed(package)?;
         if self.take_failure(AndroidFailure::ForceStop) {
+            self.running.remove(package);
             return Err(AdapterError::new("injected force-stop failure"));
         }
         self.running.remove(package);
@@ -276,9 +272,6 @@ impl AndroidOps for MemoryAndroidOps {
     fn observe_view(&mut self, package: &PackageName) -> Result<ObservedView, AdapterError> {
         self.calls.push(AndroidCall::Observe(package.clone()));
         self.require_installed(package)?;
-        if self.take_failure(AndroidFailure::Observe) {
-            return Err(AdapterError::new("injected view observation failure"));
-        }
         self.views
             .get(package)
             .cloned()

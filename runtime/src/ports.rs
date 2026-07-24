@@ -8,14 +8,27 @@ use crate::model::{
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{message}")]
 pub(crate) struct AdapterError {
+    state_conflict: bool,
     message: String,
 }
 
 impl AdapterError {
     pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
+            state_conflict: false,
             message: message.into(),
         }
+    }
+
+    pub(crate) fn state_conflict(message: impl Into<String>) -> Self {
+        Self {
+            state_conflict: true,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn is_state_conflict(&self) -> bool {
+        self.state_conflict
     }
 }
 

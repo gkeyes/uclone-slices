@@ -185,10 +185,7 @@ where
             .map_err(|error| logged_adapter("activate_slot", package, "save_intent", error))?;
         if let Err(error) = self.android.force_stop(package) {
             log_adapter("activate_slot", package, "force_stop", &error);
-            aggregate.abort_activation(&previous).map_err(model_error)?;
-            self.packages
-                .save(&aggregate)
-                .map_err(|save| logged_adapter("activate_slot", package, "abort_intent", save))?;
+            self.restore_after_failed_stop(&mut aggregate, &previous, inspection.was_running)?;
             return Err(RuntimeError::OperationFailed);
         }
         if let Err(error) = self.android.apply_view(package, target) {
@@ -224,7 +221,21 @@ where
         &mut self,
         package: &PackageName,
     ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
-        let mut aggregate = self
+        let (mut aggregate, inspection) = self.load_validated(package)?;
+        let recovering_activation = aggregate.pending_activation().is_some();
+        self.recover(&mut aggregate)?;
+        if recovering_activation {
+            return Err(RuntimeError::StateConflict);
+        }
+        self.converge_ready_view(package, &aggregate, &inspection)?;
+        Ok((aggregate, inspection))
+    }
+
+    fn load_validated(
+        &mut self,
+        package: &PackageName,
+    ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
+        let aggregate = self
             .packages
             .load(package)
             .map_err(adapter_error)?
@@ -243,11 +254,15 @@ where
             );
             return Err(RuntimeError::StateConflict);
         }
-        let recovering_activation = aggregate.pending_activation().is_some();
-        self.recover(&mut aggregate)?;
-        if recovering_activation {
-            return Err(RuntimeError::StateConflict);
-        }
+        Ok((aggregate, inspection))
+    }
+
+    fn converge_ready_view(
+        &mut self,
+        package: &PackageName,
+        aggregate: &PackageAggregate,
+        inspection: &PackageInspection,
+    ) -> Result<(), RuntimeError> {
         let observed = self
             .android
             .observe_view(package)
@@ -286,7 +301,7 @@ where
                     })?;
             }
         }
-        Ok((aggregate, inspection))
+        Ok(())
     }
 
     fn recover(&mut self, aggregate: &mut PackageAggregate) -> Result<(), RuntimeError> {
@@ -420,6 +435,32 @@ where
         }
         Ok(())
     }
+
+    fn restore_after_failed_stop(
+        &mut self,
+        aggregate: &mut PackageAggregate,
+        previous: &SlotId,
+        restore_running: bool,
+    ) -> Result<(), RuntimeError> {
+        let package = aggregate.package().clone();
+        let observed = self.android.observe_view(&package).map_err(|error| {
+            logged_adapter("activate_slot", &package, "failed_stop_observe", error)
+        })?;
+        if !observed.matches(previous) {
+            return Err(RuntimeError::OperationFailed);
+        }
+        if restore_running {
+            self.android
+                .launch_verified(&package, previous)
+                .map_err(|error| {
+                    logged_adapter("activate_slot", &package, "failed_stop_launch", error)
+                })?;
+        }
+        aggregate.abort_activation(previous).map_err(model_error)?;
+        self.packages
+            .save(aggregate)
+            .map_err(|error| logged_adapter("activate_slot", &package, "failed_stop_save", error))
+    }
 }
 
 fn model_error(error: ModelError) -> RuntimeError {
@@ -432,8 +473,12 @@ fn model_error(error: ModelError) -> RuntimeError {
     }
 }
 
-fn adapter_error(_error: AdapterError) -> RuntimeError {
-    RuntimeError::OperationFailed
+fn adapter_error(error: AdapterError) -> RuntimeError {
+    if error.is_state_conflict() {
+        RuntimeError::StateConflict
+    } else {
+        RuntimeError::OperationFailed
+    }
 }
 
 fn logged_adapter(
@@ -443,7 +488,7 @@ fn logged_adapter(
     error: AdapterError,
 ) -> RuntimeError {
     log_adapter(operation, package, step, &error);
-    RuntimeError::OperationFailed
+    adapter_error(error)
 }
 
 fn logged_conflict(
@@ -466,8 +511,8 @@ mod tests {
 
     use super::*;
     use crate::adapters::{
-        AndroidCall, AndroidFailure, MemoryAndroidOps, MemoryPackageStore, MemorySlotStorage,
-        SlotFailure,
+        AndroidCall, AndroidFailure, FilePackageStore, MemoryAndroidOps, MemoryPackageStore,
+        MemorySlotStorage, SlotFailure,
     };
 
     type TestRuntime = Runtime<MemoryPackageStore, MemorySlotStorage, MemoryAndroidOps>;
@@ -591,6 +636,24 @@ mod tests {
     }
 
     #[test]
+    fn stale_target_discard_failure_aborts_before_materialization() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone()).unwrap();
+        let (packages, mut slots, android) = runtime.into_parts();
+        slots.fail_next(SlotFailure::Discard);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let result =
+            runtime.create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank);
+
+        assert_eq!(result, Err(RuntimeError::OperationFailed));
+        let (packages, slots, _android) = runtime.into_parts();
+        assert!(!slots.contains(&package, &SlotId::numbered(1)));
+        assert!(packages.load(&package).unwrap().unwrap().is_ready());
+    }
+
+    #[test]
     fn interrupted_creation_discards_pair_and_restores_running_app() {
         let package = package();
         let mut runtime = runtime();
@@ -664,6 +727,42 @@ mod tests {
         assert_eq!(
             packages.load(&package).unwrap().unwrap().active_slot(),
             &SlotId::base()
+        );
+    }
+
+    #[test]
+    fn force_stop_failure_restores_the_previous_running_state() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.fail_next(AndroidFailure::ForceStop);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let result = runtime.activate_slot(&package, &target);
+
+        assert_eq!(result, Err(RuntimeError::OperationFailed));
+        let (packages, _slots, android) = runtime.into_parts();
+        assert!(android.is_running(&package));
+        let aggregate = packages.load(&package).unwrap().unwrap();
+        assert!(aggregate.is_ready());
+        assert_eq!(aggregate.active_slot(), &SlotId::base());
+    }
+
+    #[test]
+    fn invalid_persisted_aggregate_is_a_state_conflict() {
+        let root = tempfile::tempdir().unwrap();
+        let package = package();
+        let packages = FilePackageStore::open(root.path()).unwrap();
+        let package_root = root.path().join("packages").join(package.as_str());
+        std::fs::create_dir_all(&package_root).unwrap();
+        std::fs::write(package_root.join("aggregate.json"), b"{not-json").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        android.install(package.clone());
+        let mut runtime = Runtime::new(packages, MemorySlotStorage::default(), android);
+
+        assert_eq!(
+            runtime.get_package(&package),
+            Err(RuntimeError::StateConflict)
         );
     }
 
