@@ -111,8 +111,22 @@ impl SystemAndroidOps {
             "/system/bin/cmd",
             &["package", "list", "packages", "-3", "-U", "--user", "0"],
         )?;
-        parse_package_uid(&output.stdout, package)
-            .ok_or_else(|| AdapterError::new("package is not an ordinary user0 third-party app"))
+        let rows: Vec<_> = output
+            .stdout
+            .lines()
+            .filter_map(parse_package_uid_row)
+            .collect();
+        let uid = rows
+            .iter()
+            .find_map(|(name, uid)| (*name == package.as_str()).then_some(*uid))
+            .ok_or_else(|| AdapterError::new("package is not an ordinary user0 third-party app"))?;
+        if rows
+            .iter()
+            .any(|(name, owner_uid)| *name != package.as_str() && *owner_uid == uid)
+        {
+            return Err(AdapterError::new("package UID is shared by another app"));
+        }
+        Ok(uid)
     }
 
     fn apk_path(&mut self, package: &PackageName) -> Result<PathBuf, AdapterError> {
@@ -158,6 +172,36 @@ impl SystemAndroidOps {
             &self.canonical_ce_root,
             &self.canonical_de_root,
         ))
+    }
+
+    fn package_processes(&self, uid: u32) -> Result<Vec<PathBuf>, AdapterError> {
+        let entries =
+            fs::read_dir(&self.proc_root).map_err(|error| AdapterError::new(error.to_string()))?;
+        let mut processes = Vec::new();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(AdapterError::new(error.to_string())),
+            };
+            let name = entry.file_name();
+            let Some(pid) = name.to_str() else {
+                continue;
+            };
+            if !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+                continue;
+            }
+            let status = match fs::read_to_string(entry.path().join("status")) {
+                Ok(status) => status,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(AdapterError::new(error.to_string())),
+            };
+            if status_uid(&status) == Some(uid) {
+                processes.push(entry.path());
+            }
+        }
+        processes.sort();
+        Ok(processes)
     }
 
     fn ensure_unmounted(&mut self, mount_point: &Path) -> Result<(), AdapterError> {
@@ -238,10 +282,9 @@ impl AndroidOps for SystemAndroidOps {
             metadata.ino(),
         )
         .map_err(|error| AdapterError::new(error.to_string()))?;
-        let running = self.run("/system/bin/pidof", &[package.as_str()])?;
         Ok(PackageInspection {
             identity,
-            was_running: running.success && !running.stdout.trim().is_empty(),
+            was_running: !self.package_processes(uid)?.is_empty(),
         })
     }
 
@@ -304,17 +347,19 @@ impl AndroidOps for SystemAndroidOps {
             "/system/bin/am",
             &["start", "-W", "--user", "0", "-n", &component],
         )?;
-        let pid_output = self.required("/system/bin/pidof", &[package.as_str()])?;
-        let pids: Vec<_> = pid_output.stdout.split_whitespace().collect();
-        if pids.is_empty() {
+        let uid = self.package_uid(package)?;
+        let processes = self.package_processes(uid)?;
+        if processes.is_empty() {
             return Err(AdapterError::new("launched package has no App process"));
         }
-        for pid in pids {
-            if !pid.bytes().all(|byte| byte.is_ascii_digit()) {
-                return Err(AdapterError::new("pidof returned an invalid PID"));
-            }
-            let mountinfo = fs::read_to_string(self.proc_root.join(pid).join("mountinfo"))
-                .map_err(|error| AdapterError::new(error.to_string()))?;
+        let mut verified = 0_usize;
+        for process in processes {
+            let mountinfo = match fs::read_to_string(process.join("mountinfo")) {
+                Ok(mountinfo) => mountinfo,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(AdapterError::new(error.to_string())),
+            };
+            verified += 1;
             let observed = app_view_from_mountinfo(
                 &mountinfo,
                 package,
@@ -322,20 +367,32 @@ impl AndroidOps for SystemAndroidOps {
                 &self.canonical_de_root,
             );
             if !observed.matches(expected) {
+                let pid = process
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("unknown");
                 return Err(AdapterError::new(format!(
                     "App PID {pid} did not observe the requested CE/DE view"
                 )));
             }
         }
-        Ok(())
+        (verified != 0)
+            .then_some(())
+            .ok_or_else(|| AdapterError::new("launched package processes exited before verify"))
     }
 }
 
-fn parse_package_uid(content: &str, package: &PackageName) -> Option<u32> {
-    let prefix = format!("package:{} uid:", package.as_str());
-    content
-        .lines()
-        .find_map(|line| line.trim().strip_prefix(&prefix)?.parse().ok())
+fn parse_package_uid_row(line: &str) -> Option<(&str, u32)> {
+    let line = line.trim().strip_prefix("package:")?;
+    let (package, uid) = line.rsplit_once(" uid:")?;
+    Some((package, uid.parse().ok()?))
+}
+
+fn status_uid(content: &str) -> Option<u32> {
+    content.lines().find_map(|line| {
+        let values = line.strip_prefix("Uid:")?;
+        values.split_whitespace().next()?.parse().ok()
+    })
 }
 
 fn parse_launcher_component(content: &str, package: &PackageName) -> Option<String> {
@@ -582,6 +639,7 @@ mod tests {
         fs::write(&apk, b"apk").unwrap();
         fs::create_dir_all(root.path().join("canonical-ce").join(package.as_str())).unwrap();
         fs::create_dir_all(root.path().join("canonical-de").join(package.as_str())).unwrap();
+        fs::create_dir_all(root.path().join("proc")).unwrap();
         fs::write(root.path().join("mountinfo"), b"").unwrap();
         let commands = Rc::new(RefCell::new(Vec::new()));
         let runner = RecordingRunner {
@@ -589,11 +647,6 @@ mod tests {
                 output(format!("package:{package} uid:10123\n")),
                 output(format!("package:{}\n", apk.display())),
                 output(format!("{package}/.MainActivity\n")),
-                CommandOutput {
-                    success: false,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                },
             ]),
             commands: Rc::clone(&commands),
         };
@@ -637,12 +690,40 @@ mod tests {
                     .map(str::to_owned)
                     .collect(),
                 ),
-                (
-                    "/system/bin/pidof".to_owned(),
-                    vec![package.as_str().to_owned()],
-                ),
             ]
         );
+    }
+
+    #[test]
+    fn inspect_rejects_a_uid_shared_by_another_package() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let apk = root.path().join("base.apk");
+        fs::write(&apk, b"apk").unwrap();
+        fs::create_dir_all(root.path().join("canonical-ce").join(package.as_str())).unwrap();
+        fs::create_dir_all(root.path().join("canonical-de").join(package.as_str())).unwrap();
+        fs::write(root.path().join("mountinfo"), b"").unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([
+                output(format!(
+                    "package:{package} uid:10123\npackage:com.example.shared uid:10123\n"
+                )),
+                output(format!("package:{}\n", apk.display())),
+                output(format!("{package}/.MainActivity\n")),
+                CommandOutput {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+            ]),
+            commands,
+        };
+        let (mut android, _recorded) = system_with_runner(root.path(), runner);
+
+        let result = android.inspect(&package);
+
+        assert!(result.is_err());
     }
 
     #[test]
@@ -729,6 +810,11 @@ mod tests {
             let directory = root.path().join("proc").join(pid);
             fs::create_dir_all(&directory).unwrap();
             fs::write(
+                directory.join("status"),
+                "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+            )
+            .unwrap();
+            fs::write(
                 directory.join("mountinfo"),
                 format!(
                     "1 0 0:1 /uclone-slices-v2/slots/{package}/{slot} {}/{} rw - ext4 none rw\n2 0 0:1 /uclone-slices-v2/slots/{package}/{slot} {}/{} rw - ext4 none rw\n",
@@ -745,7 +831,7 @@ mod tests {
             outputs: VecDeque::from([
                 output(format!("{package}/.MainActivity\n")),
                 output("Status: ok\n"),
-                output("123 456\n"),
+                output(format!("package:{package} uid:10123\n")),
             ]),
             commands: Rc::clone(&commands),
         };
@@ -767,6 +853,50 @@ mod tests {
                 ],
             )
         );
+    }
+
+    #[test]
+    fn launch_rejects_a_remote_process_with_the_wrong_view() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let slot = SlotId::numbered(3);
+        for (pid, root_path) in [
+            ("123", format!("/uclone-slices-v2/slots/{package}/{slot}")),
+            ("456", "/wrong-view".to_owned()),
+        ] {
+            let directory = root.path().join("proc").join(pid);
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(
+                directory.join("status"),
+                "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+            )
+            .unwrap();
+            fs::write(
+                directory.join("mountinfo"),
+                format!(
+                    "1 0 0:1 {root_path} {}/{} rw - ext4 none rw\n2 0 0:1 {root_path} {}/{} rw - ext4 none rw\n",
+                    root.path().join("canonical-ce").display(),
+                    package,
+                    root.path().join("canonical-de").display(),
+                    package,
+                ),
+            )
+            .unwrap();
+        }
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([
+                output(format!("{package}/.MainActivity\n")),
+                output("Status: ok\n"),
+                output(format!("package:{package} uid:10123\n")),
+            ]),
+            commands,
+        };
+        let (mut android, _recorded) = system_with_runner(root.path(), runner);
+
+        let error = android.launch_verified(&package, &slot).unwrap_err();
+
+        assert!(error.to_string().contains("PID 456"));
     }
 
     #[test]
