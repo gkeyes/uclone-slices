@@ -1,14 +1,14 @@
-# 0.1.4 真机验收清单
+# 0.1.5 真机验收清单
 
 这份清单由用户在当前 Android 16 / API 36 / arm64 KernelSU 设备执行。失败时先取证，不先运行强启脚本。
 
 ## 安装
 
-1. 安装 `uclone-slices-v2-manager-0.1.4-compact.apk`。
-2. 安装 `uclone-slices-v2-fixture-0.1.4-debug.apk`。
+1. 安装 `uclone-slices-v2-manager-0.1.5.apk`。
+2. 安装 `uclone-slices-v2-fixture-0.1.5-debug.apk`。
 3. 刷入 `uclone-slices-v2-kernelsu.zip`。
 4. 重启并解锁 user0，不运行 `force-start-runtime.sh`。
-5. 打开 Manager，确认显示 `Runtime 0.1.4`。
+5. 打开 Manager，确认显示 `Runtime 0.1.5`。
 
 ## Fixture 主链路
 
@@ -50,7 +50,7 @@
 
 1. 保持 Fixture 活动槽为普通槽并记录 CE/DE 内容。
 2. 再次重启、解锁，不运行强启脚本。
-3. 打开 Manager，确认仍显示 `Runtime 0.1.4`。
+3. 打开 Manager，确认仍显示 `Runtime 0.1.5`。
 4. 打开 Fixture 详情并点击当前槽“启动”，确认重启前的 CE/DE 内容恢复。
 5. 如果设备仍保留 `com.xingin.xhs` 的 V2 记录，确认它可以进入详情并启动当前槽。
 
@@ -94,4 +94,4 @@ sh /data/local/tmp/probe-registration.sh com.uclone.slices.fixture
 - Fixture 身份变化后可以由用户确认清理旧槽并恢复登记，Base 数据保持不变。
 - 小红书已有记录可以进入详情，或明确由探针证明是 App 身份变化。
 
-全部通过后，0.1.4 可以从预发布提升为正式 Release。
+全部通过后，0.1.5 可以从预发布提升为正式 Release。

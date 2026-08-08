@@ -5,7 +5,7 @@
 
 UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空间管理器。它让同一个 App 在系统原始数据与多个独立 CE/DE 数据空间之间切换，并由 Runtime 完成停止、挂载、验证和启动。
 
-当前版本为 **v0.1.4 预发布版**。主机门禁和当前在线真机链路已经验证；尚未关闭的重启与遗留 App 回归记录在 [to-do.md](to-do.md)。
+当前版本为 **v0.1.5 预发布版**。它以 v0.1.4 的完整功能闭环为基线，将 Manager 更新为 MIUIX 设计语言并补齐页面、按钮和展开区域的过渡反馈；尚未关闭的重启与遗留 App 回归记录在 [to-do.md](to-do.md)。
 
 ## 功能
 
@@ -17,6 +17,7 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 - App 更新或重装导致身份变化时，由用户确认清理旧空间并重新登记。
 - Runtime 事务中断后，根据持久化上下文继续收敛。
 - 首页账号展开状态保存在 Manager 本地，重启 Manager 后保持不变。
+- Manager 使用 MIUIX 组件、深浅色主题和原生过渡反馈，不改变 Runtime 操作语义。
 
 ## 运行条件
 
@@ -34,19 +35,19 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 
 在 [Releases](https://github.com/gkeyes/uclone-slices/releases) 下载同一版本的两个产品文件：
 
-1. `uclone-slices-v2-manager-0.1.4.apk`
-2. `uclone-slices-v2-kernelsu-0.1.4.zip`
+1. `uclone-slices-v2-manager-0.1.5.apk`
+2. `uclone-slices-v2-kernelsu-0.1.5.zip`
 
 安装步骤：
 
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.1.4`。
+4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.1.5`。
 
 Release 同时提供各文件的 `.xz` 极致压缩版本和 `SHA256SUMS.txt`。Fixture APK 与 QA 工具仅用于验证，不是产品运行依赖。
 
-> v0.1.4 Manager 使用当前设备已验证的开发签名，方便覆盖安装现有测试版本。
+> v0.1.5 Manager 沿用当前设备已验证的开发签名，方便覆盖安装现有测试版本。
 
 ## 基本使用
 

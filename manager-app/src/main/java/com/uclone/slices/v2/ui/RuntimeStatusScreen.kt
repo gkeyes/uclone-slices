@@ -1,6 +1,5 @@
 package com.uclone.slices.v2.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,9 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -61,21 +57,16 @@ internal fun RuntimeStatusScreen(
             RuntimeDetailsCard(state)
         }
         item {
-            Button(
+            SlicesActionButton(
+                text = if (state.runtimeReady) {
+                    stringResource(R.string.refresh_status)
+                } else {
+                    stringResource(R.string.reconnect)
+                },
                 onClick = { onIntent(UiIntent.Refresh) },
                 enabled = !state.busy,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(vertical = 13.dp),
-            ) {
-                Text(
-                    if (state.runtimeReady) {
-                        stringResource(R.string.refresh_status)
-                    } else {
-                        stringResource(R.string.reconnect)
-                    },
-                )
-            }
+            )
         }
     }
 }
@@ -83,12 +74,8 @@ internal fun RuntimeStatusScreen(
 @Composable
 private fun RuntimeOverviewCard(runtimeReady: Boolean) {
     val accent = if (runtimeReady) SlicesSuccess else SlicesWarning
-    Card(
+    SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Row(
             modifier = Modifier.padding(20.dp),
@@ -127,12 +114,9 @@ private fun RuntimeOverviewCard(runtimeReady: Boolean) {
 
 @Composable
 private fun RuntimeDetailsCard(state: SlotsUiState) {
-    Card(
+    SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        cornerRadius = 18.dp,
     ) {
         RuntimeDetailRow(
             label = stringResource(R.string.runtime_connection),

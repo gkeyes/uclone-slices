@@ -1,7 +1,10 @@
 package com.uclone.slices.v2.ui
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,22 +16,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -38,7 +31,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -47,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.runtime.PackageSnapshot
+import top.yukonga.miuix.kmp.basic.IconButton
 
 @Composable
 internal fun AppListScreen(
@@ -84,48 +77,26 @@ internal fun AppListScreen(
             )
         }
         item {
-            FilledTonalButton(
+            SlicesActionButton(
+                text = stringResource(R.string.add_app),
                 onClick = { onIntent(UiIntent.OpenAddApps) },
                 enabled = !state.busy,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(vertical = 13.dp),
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_add),
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp),
-                )
-                Text(
-                    text = stringResource(R.string.add_app),
-                    modifier = Modifier.padding(start = 8.dp),
-                )
-            }
+                primary = false,
+                icon = painterResource(R.drawable.ic_add),
+            )
         }
 
         if (!state.initialLoadComplete) {
             item { LoadingAppsMessage() }
         } else {
             item {
-                OutlinedTextField(
+                SlicesSearchField(
                     value = query,
                     onValueChange = { query = it },
+                    label = stringResource(R.string.search_configured_apps),
+                    iconRes = R.drawable.ic_search,
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    leadingIcon = {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_search),
-                            contentDescription = null,
-                        )
-                    },
-                    placeholder = { Text(stringResource(R.string.search_configured_apps)) },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surface,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                    ),
                 )
             }
             item {
@@ -141,7 +112,14 @@ internal fun AppListScreen(
                         modifier = Modifier.weight(1f),
                     )
                     if (managedApps.isNotEmpty()) {
-                        TextButton(
+                        SlicesHeaderButton(
+                            text = stringResource(
+                                if (state.configuredAccountsExpanded) {
+                                    R.string.collapse_accounts
+                                } else {
+                                    R.string.expand_accounts
+                                },
+                            ),
                             onClick = {
                                 onIntent(
                                     UiIntent.SetConfiguredAccountsExpanded(
@@ -149,17 +127,7 @@ internal fun AppListScreen(
                                     ),
                                 )
                             },
-                        ) {
-                            Text(
-                                stringResource(
-                                    if (state.configuredAccountsExpanded) {
-                                        R.string.collapse_accounts
-                                    } else {
-                                        R.string.expand_accounts
-                                    },
-                                ),
-                            )
-                        }
+                        )
                     }
                 }
             }
@@ -244,19 +212,14 @@ private fun ManagedAppsCard(
             key(app.packageName) {
                 val snapshot = packageByName.getValue(app.packageName)
                 var menuExpanded by remember(app.packageName) { mutableStateOf(false) }
-                Card(
+                SlicesPanel(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                    ),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    enabled = enabled,
+                    onClick = { onOpen(app.packageName) },
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = enabled) { onOpen(app.packageName) }
                             .padding(
                                 start = 16.dp,
                                 top = 14.dp,
@@ -358,61 +321,36 @@ private fun ManagedAppsCard(
                             }
                         }
                     }
-                    if (accountsExpanded) {
+                    AnimatedVisibility(
+                        visible = accountsExpanded,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut(),
+                    ) {
                         FlowRow(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(start = 12.dp, top = 2.dp, end = 12.dp, bottom = 10.dp),
+                                .padding(start = 12.dp, top = 14.dp, end = 12.dp, bottom = 10.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
                             quickSwitchSlots(snapshot).forEach { slot ->
                                 val selected = snapshot.activeSlot == slot.id
-                                val chipShape = RoundedCornerShape(50)
-                                FilterChip(
+                                SlicesSlotButton(
+                                    text = if (slot.id == BASE_SLOT_ID) {
+                                        stringResource(R.string.original_space)
+                                    } else {
+                                        spaceDisplayName(slot)
+                                    },
+                                    icon = painterResource(
+                                        if (slot.id == BASE_SLOT_ID) {
+                                            R.drawable.ic_layers
+                                        } else {
+                                            R.drawable.ic_phone
+                                        },
+                                    ),
                                     selected = selected,
                                     onClick = { onActivate(app.packageName, slot.id) },
                                     enabled = enabled,
-                                    modifier = Modifier.shadow(
-                                        elevation = if (selected) 7.dp else 0.dp,
-                                        shape = chipShape,
-                                        ambientColor = SlicesWatermelon.copy(alpha = 0.28f),
-                                        spotColor = SlicesWatermelon.copy(alpha = 0.28f),
-                                    ),
-                                    shape = chipShape,
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = SlicesWatermelon,
-                                        selectedLabelColor = MaterialTheme.colorScheme.onError,
-                                    ),
-                                    leadingIcon = {
-                                        Icon(
-                                            painter = painterResource(
-                                                if (slot.id == BASE_SLOT_ID) {
-                                                    R.drawable.ic_layers
-                                                } else {
-                                                    R.drawable.ic_phone
-                                                },
-                                            ),
-                                            contentDescription = null,
-                                            tint = if (selected) {
-                                                MaterialTheme.colorScheme.onError
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurfaceVariant
-                                            },
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                    },
-                                    label = {
-                                        Text(
-                                            text = if (slot.id == BASE_SLOT_ID) {
-                                                stringResource(R.string.original_space)
-                                            } else {
-                                                spaceDisplayName(slot)
-                                            },
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    },
                                 )
                             }
                         }
@@ -427,12 +365,9 @@ private fun ManagedAppsCard(
 private fun EmptyConfiguredApps(
     hasQuery: Boolean,
 ) {
-    Card(
+    SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        cornerRadius = 18.dp,
     ) {
         Column(
             modifier = Modifier

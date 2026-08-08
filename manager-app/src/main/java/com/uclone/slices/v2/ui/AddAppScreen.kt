@@ -1,27 +1,19 @@
 package com.uclone.slices.v2.ui
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,6 +29,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.extra.SuperArrow
 
 @Composable
 internal fun AddAppScreen(
@@ -74,25 +68,12 @@ internal fun AddAppScreen(
             }
         }
         item {
-            OutlinedTextField(
+            SlicesSearchField(
                 value = query,
                 onValueChange = { query = it },
+                label = stringResource(R.string.search_available_apps),
+                iconRes = R.drawable.ic_search,
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                leadingIcon = {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_search),
-                        contentDescription = null,
-                    )
-                },
-                placeholder = { Text(stringResource(R.string.search_available_apps)) },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                ),
             )
         }
         item {
@@ -164,52 +145,24 @@ private fun AvailableAppsCard(
     enabled: Boolean,
     onConfigure: (String) -> Unit,
 ) {
-    Card(
+    SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        cornerRadius = 18.dp,
     ) {
         apps.forEachIndexed { index, app ->
-            ListItem(
-                headlineContent = {
-                    Text(
-                        text = app.label,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                supportingContent = {
-                    Column {
-                        Text(
-                            text = app.packageName,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = stringResource(R.string.not_configured),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 2.dp),
-                        )
+            SuperArrow(
+                title = app.label,
+                summary = "${app.packageName}\n${stringResource(R.string.not_configured)}",
+                leftAction = {
+                    Row {
+                        AppIcon(app.label, app.icon, 48.dp)
+                        Spacer(Modifier.width(14.dp))
                     }
                 },
-                leadingContent = { AppIcon(app.label, app.icon, 48.dp) },
-                trailingContent = {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_chevron_right),
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(enabled = enabled) { onConfigure(app.packageName) },
-                colors = ListItemDefaults.colors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ),
+                enabled = enabled,
+                onClick = { onConfigure(app.packageName) },
+                modifier = Modifier.fillMaxWidth(),
+                insideMargin = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             )
             if (index < apps.lastIndex) {
                 HorizontalDivider(
@@ -223,12 +176,9 @@ private fun AvailableAppsCard(
 
 @Composable
 private fun EmptyAvailableApps(hasQuery: Boolean) {
-    Card(
+    SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        cornerRadius = 18.dp,
     ) {
         Column(
             modifier = Modifier

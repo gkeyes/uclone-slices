@@ -71,11 +71,11 @@
     <string name="delete_space_data_warning">该空间的凭据、设置和其他 CE/DE 独立数据将永久删除。</string>
     <string name="delete_space_current_preserved">当前正在使用的数据空间不会受到影响。</string>
     <string name="delete_space_confirm">永久删除</string>
-    <string name="unenroll_app_title">取消配置并删除分空间？</string>
-    <string name="unenroll_app_message">“%1$s”（%2$s）将停止并切回系统原始空间。</string>
+    <string name="unenroll_app_title">取消配置？</string>
+    <string name="unenroll_app_message">%1$s · %2$s</string>
     <string name="unenroll_affected_spaces">将永久删除：%1$s</string>
     <string name="unenroll_no_spaces">该应用没有独立空间，将只删除配置记录。</string>
-    <string name="unenroll_base_preserved">应用本身及系统原始空间中的数据不会删除。完成后可重新配置该应用。</string>
+    <string name="unenroll_base_preserved">应用本身及系统原始空间中的数据会保留。</string>
     <string name="unenroll_confirmation_label">输入“删除”以确认</string>
     <string name="unenroll_confirmation_hint">所有独立空间数据都会永久删除</string>
     <string name="unenroll_confirm">取消配置并删除</string>

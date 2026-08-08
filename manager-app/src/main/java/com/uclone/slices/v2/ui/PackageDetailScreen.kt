@@ -1,6 +1,5 @@
 package com.uclone.slices.v2.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,20 +14,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,8 +38,9 @@ import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.SeedMode
 import com.uclone.slices.v2.runtime.SlotSnapshot
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.extra.SuperBottomSheet
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PackageDetailScreen(
     state: SlotsUiState,
@@ -122,22 +113,14 @@ internal fun PackageDetailScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                OutlinedButton(
+                SlicesActionButton(
+                    text = stringResource(R.string.create_space_short),
                     onClick = { createSheetVisible = true },
                     enabled = !state.busy && state.runtimeReady,
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_add),
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = stringResource(R.string.create_space_short),
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                }
+                    primary = false,
+                    compact = true,
+                    icon = painterResource(R.drawable.ic_add),
+                )
             }
         }
         if (otherSlots.isEmpty()) {
@@ -231,12 +214,8 @@ private fun CurrentSpaceCard(
     onLaunch: () -> Unit,
     onRename: (() -> Unit)?,
 ) {
-    Card(
+    SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(Modifier.padding(18.dp)) {
             Row(
@@ -301,17 +280,14 @@ private fun CurrentSpaceCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp),
             )
-            Button(
+            SlicesActionButton(
+                text = stringResource(R.string.launch_app),
                 onClick = onLaunch,
                 enabled = enabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 18.dp),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(vertical = 12.dp),
-            ) {
-                Text(stringResource(R.string.launch_app))
-            }
+            )
         }
     }
 }
@@ -324,12 +300,9 @@ private fun OtherSpaceCard(
     onRename: (() -> Unit)?,
     onDelete: (() -> Unit)?,
 ) {
-    Card(
+    SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        cornerRadius = 18.dp,
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -374,16 +347,15 @@ private fun OtherSpaceCard(
                     )
                 }
             }
-            OutlinedButton(
+            SlicesActionButton(
+                text = stringResource(R.string.switch_and_launch),
                 onClick = onActivate,
                 enabled = enabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 14.dp),
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Text(stringResource(R.string.switch_and_launch))
-            }
+                primary = false,
+            )
         }
     }
 }
@@ -437,12 +409,9 @@ private fun SpaceActionsMenu(
 
 @Composable
 private fun NoOtherSpacesCard() {
-    Card(
+    SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        cornerRadius = 18.dp,
     ) {
         Column(
             modifier = Modifier
@@ -464,7 +433,6 @@ private fun NoOtherSpacesCard() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CreateSpaceSheet(
     state: SlotsUiState,
@@ -473,32 +441,29 @@ private fun CreateSpaceSheet(
     onIntent: (UiIntent) -> Unit,
     onCreate: () -> Unit,
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
+    val show = remember { mutableStateOf(true) }
+    SuperBottomSheet(
+        show = show,
+        title = stringResource(R.string.create_space),
+        onDismissRequest = {
+            show.value = false
+            onDismiss()
+        },
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
+            modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Text(
-                text = stringResource(R.string.create_space),
-                style = MaterialTheme.typography.titleLarge,
-            )
             Text(
                 text = stringResource(R.string.create_space_description),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            OutlinedTextField(
+            SlicesInputField(
                 value = state.slotName,
                 onValueChange = { onIntent(UiIntent.SlotNameChanged(it)) },
+                label = stringResource(R.string.space_name),
                 modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                label = { Text(stringResource(R.string.space_name)) },
-                shape = RoundedCornerShape(12.dp),
             )
             Text(
                 text = stringResource(R.string.initial_data),
@@ -506,16 +471,19 @@ private fun CreateSpaceSheet(
                 modifier = Modifier.padding(top = 4.dp),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
+                SlicesSlotButton(
+                    text = stringResource(R.string.blank_space),
                     selected = state.seed == SeedMode.Blank,
+                    enabled = true,
                     onClick = { onIntent(UiIntent.SeedChanged(SeedMode.Blank)) },
-                    label = { Text(stringResource(R.string.blank_space)) },
+                    modifier = Modifier.weight(1f),
                 )
-                FilterChip(
+                SlicesSlotButton(
+                    text = stringResource(R.string.clone_system_space),
                     selected = state.seed == SeedMode.CloneBase,
                     enabled = canCloneBase,
                     onClick = { onIntent(UiIntent.SeedChanged(SeedMode.CloneBase)) },
-                    label = { Text(stringResource(R.string.clone_system_space)) },
+                    modifier = Modifier.weight(1f),
                 )
             }
             Text(
@@ -528,15 +496,15 @@ private fun CreateSpaceSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(4.dp))
-            Button(
-                onClick = onCreate,
+            SlicesActionButton(
+                text = stringResource(R.string.create),
+                onClick = {
+                    show.value = false
+                    onCreate()
+                },
                 enabled = state.slotName.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(vertical = 12.dp),
-            ) {
-                Text(stringResource(R.string.create))
-            }
+            )
         }
     }
 }

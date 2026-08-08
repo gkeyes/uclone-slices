@@ -2,31 +2,30 @@ package com.uclone.slices.v2.ui
 
 import android.graphics.drawable.Drawable
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,10 +35,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.core.graphics.drawable.toBitmap
 import com.uclone.slices.v2.R
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator as MiuixCircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.extra.SuperDialog
+import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
 internal fun SlicesScreen(
@@ -53,7 +56,7 @@ internal fun SlicesScreen(
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = MiuixTheme.colorScheme.surface,
         bottomBar = {
             state.notice?.let { notice ->
                 NoticeBar(
@@ -63,33 +66,55 @@ internal fun SlicesScreen(
             }
         },
     ) { contentPadding ->
-        when (state.destination) {
-            ManagerDestination.Spaces -> AppListScreen(
-                state = state,
-                contentPadding = contentPadding,
-                onIntent = onIntent,
-            )
-            ManagerDestination.AddApp -> AddAppScreen(
-                state = state,
-                contentPadding = contentPadding,
-                onIntent = onIntent,
-            )
-            ManagerDestination.PackageDetails -> state.selected?.let { selected ->
-                PackageDetailScreen(
+        AnimatedContent(
+            targetState = state.destination,
+            transitionSpec = {
+                val forward = targetState != ManagerDestination.Spaces
+                val enterOffset: (Int) -> Int = { width ->
+                    if (forward) width / 5 else -width / 5
+                }
+                val exitOffset: (Int) -> Int = { width ->
+                    if (forward) -width / 8 else width / 8
+                }
+                (
+                    slideInHorizontally(tween(220), enterOffset) +
+                        fadeIn(tween(180))
+                    ) togetherWith (
+                    slideOutHorizontally(tween(180), exitOffset) +
+                        fadeOut(tween(140))
+                    )
+            },
+            label = "manager_destination",
+            modifier = Modifier.fillMaxSize(),
+        ) { destination ->
+            when (destination) {
+                ManagerDestination.Spaces -> AppListScreen(
                     state = state,
-                    packageSnapshot = selected,
-                    installedApp = state.installedApps.firstOrNull {
-                        it.packageName == selected.packageName
-                    },
+                    contentPadding = contentPadding,
+                    onIntent = onIntent,
+                )
+                ManagerDestination.AddApp -> AddAppScreen(
+                    state = state,
+                    contentPadding = contentPadding,
+                    onIntent = onIntent,
+                )
+                ManagerDestination.PackageDetails -> state.selected?.let { selected ->
+                    PackageDetailScreen(
+                        state = state,
+                        packageSnapshot = selected,
+                        installedApp = state.installedApps.firstOrNull {
+                            it.packageName == selected.packageName
+                        },
+                        contentPadding = contentPadding,
+                        onIntent = onIntent,
+                    )
+                }
+                ManagerDestination.RuntimeStatus -> RuntimeStatusScreen(
+                    state = state,
                     contentPadding = contentPadding,
                     onIntent = onIntent,
                 )
             }
-            ManagerDestination.RuntimeStatus -> RuntimeStatusScreen(
-                state = state,
-                contentPadding = contentPadding,
-                onIntent = onIntent,
-            )
         }
     }
 
@@ -157,35 +182,48 @@ private fun RenameSpaceDialog(
     onDismiss: () -> Unit,
 ) {
     val normalized = rename.name.trim()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        title = { Text(stringResource(R.string.rename_space_title)) },
-        text = {
-            OutlinedTextField(
-                value = rename.name,
-                onValueChange = onNameChanged,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                label = { Text(stringResource(R.string.space_name)) },
-                supportingText = { Text(stringResource(R.string.rename_space_hint)) },
-                shape = RoundedCornerShape(12.dp),
+    val show = remember(rename.packageName, rename.slotId) { mutableStateOf(true) }
+    SuperDialog(
+        show = show,
+        title = stringResource(R.string.rename_space_title),
+        summary = stringResource(R.string.rename_space_hint),
+        onDismissRequest = {
+            show.value = false
+            onDismiss()
+        },
+    ) {
+        SlicesInputField(
+            value = rename.name,
+            onValueChange = onNameChanged,
+            label = stringResource(R.string.space_name),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SlicesTextAction(
+                text = stringResource(R.string.cancel),
+                onClick = {
+                    show.value = false
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f),
             )
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
+            SlicesTextAction(
+                text = stringResource(R.string.save),
+                onClick = {
+                    show.value = false
+                    onConfirm()
+                },
                 enabled = normalized.isNotEmpty() && normalized != rename.originalName,
-            ) {
-                Text(stringResource(R.string.save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
-    )
+                primary = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -194,50 +232,61 @@ private fun DeleteSpaceDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        title = { Text(stringResource(R.string.delete_space_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = stringResource(R.string.delete_space_message, deletion.name),
-                )
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                ) {
-                    Text(
-                        text = stringResource(R.string.delete_space_data_warning),
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.delete_space_current_preserved),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+    val show = remember(deletion.packageName, deletion.slotId) { mutableStateOf(true) }
+    SuperDialog(
+        show = show,
+        title = stringResource(R.string.delete_space_title),
+        onDismissRequest = {
+            show.value = false
+            onDismiss()
         },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                ),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(R.string.delete_space_message, deletion.name),
+            )
+            SlicesPanel(
+                insideMargin = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                cornerRadius = 14.dp,
+                color = MaterialTheme.colorScheme.errorContainer,
             ) {
-                Text(stringResource(R.string.delete_space_confirm))
+                Text(
+                    text = stringResource(R.string.delete_space_data_warning),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
-    )
+            Text(
+                text = stringResource(R.string.delete_space_current_preserved),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SlicesTextAction(
+                text = stringResource(R.string.cancel),
+                onClick = {
+                    show.value = false
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            SlicesTextAction(
+                text = stringResource(R.string.delete_space_confirm),
+                onClick = {
+                    show.value = false
+                    onConfirm()
+                },
+                danger = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -255,66 +304,71 @@ private fun UnenrollAppDialog(
             unenrollment.affectedSpaces.joinToString("、"),
         )
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        title = { Text(stringResource(R.string.unenroll_app_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = stringResource(
-                        R.string.unenroll_app_message,
-                        unenrollment.appLabel,
-                        unenrollment.packageName,
-                    ),
-                )
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                ) {
-                    Text(
-                        text = affectedSummary,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.unenroll_base_preserved),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedTextField(
-                    value = unenrollment.confirmation,
-                    onValueChange = onConfirmationChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.unenroll_confirmation_label)) },
-                    supportingText = {
-                        Text(stringResource(R.string.unenroll_confirmation_hint))
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                )
-            }
+    val show = remember(unenrollment.packageName) { mutableStateOf(true) }
+    SuperDialog(
+        show = show,
+        title = stringResource(R.string.unenroll_app_title),
+        summary = stringResource(
+            R.string.unenroll_app_message,
+            unenrollment.appLabel,
+            unenrollment.packageName,
+        ),
+        insideMargin = DpSize(22.dp, 16.dp),
+        onDismissRequest = {
+            show.value = false
+            onDismiss()
         },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = unenrollment.confirmation == RECOVERY_CONFIRMATION,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                ),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SlicesPanel(
+                insideMargin = androidx.compose.foundation.layout.PaddingValues(10.dp),
+                cornerRadius = 12.dp,
+                color = MaterialTheme.colorScheme.errorContainer,
             ) {
-                Text(stringResource(R.string.unenroll_confirm))
+                Text(
+                    text = affectedSummary,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
-    )
+            Text(
+                text = stringResource(R.string.unenroll_base_preserved),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SlicesInputField(
+                value = unenrollment.confirmation,
+                onValueChange = onConfirmationChanged,
+                label = stringResource(R.string.unenroll_confirmation_label),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SlicesTextAction(
+                text = stringResource(R.string.cancel),
+                onClick = {
+                    show.value = false
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            SlicesTextAction(
+                text = stringResource(R.string.unenroll_confirm),
+                onClick = {
+                    show.value = false
+                    onConfirm()
+                },
+                enabled = unenrollment.confirmation == RECOVERY_CONFIRMATION,
+                danger = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -324,39 +378,51 @@ private fun ConfigureAppDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        title = { Text(stringResource(R.string.configure_app_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = appLabel,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = packageName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = stringResource(R.string.configure_app_message),
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
+    val show = remember(packageName) { mutableStateOf(true) }
+    SuperDialog(
+        show = show,
+        title = stringResource(R.string.configure_app_title),
+        summary = packageName,
+        onDismissRequest = {
+            show.value = false
+            onDismiss()
         },
-        confirmButton = {
-            Button(onClick = onConfirm) {
-                Text(stringResource(R.string.configure_app))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
-    )
+    ) {
+        Text(
+            text = appLabel,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = stringResource(R.string.configure_app_message),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SlicesTextAction(
+                text = stringResource(R.string.cancel),
+                onClick = {
+                    show.value = false
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            SlicesTextAction(
+                text = stringResource(R.string.configure_app),
+                onClick = {
+                    show.value = false
+                    onConfirm()
+                },
+                primary = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -374,65 +440,76 @@ private fun RegistrationRecoveryDialog(
             recovery.affectedSpaces.joinToString("、"),
         )
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        title = { Text(stringResource(R.string.reset_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = stringResource(
-                        R.string.reset_message,
-                        recovery.packageName,
-                    ),
-                )
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                ) {
-                    Text(
-                        text = affectedSummary,
-                        color = MaterialTheme.colorScheme.onErrorContainer,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.reset_base_preserved),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedTextField(
-                    value = recovery.confirmation,
-                    onValueChange = onConfirmationChanged,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.reset_confirmation_label)) },
-                    supportingText = {
-                        Text(stringResource(R.string.reset_confirmation_hint))
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                )
-            }
+    val show = remember(recovery.packageName) { mutableStateOf(true) }
+    SuperDialog(
+        show = show,
+        title = stringResource(R.string.reset_title),
+        onDismissRequest = {
+            show.value = false
+            onDismiss()
         },
-        confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = recovery.confirmation == RECOVERY_CONFIRMATION,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(
+                    R.string.reset_message,
+                    recovery.packageName,
                 ),
+            )
+            SlicesPanel(
+                insideMargin = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                cornerRadius = 14.dp,
+                color = MaterialTheme.colorScheme.errorContainer,
             ) {
-                Text(stringResource(R.string.reset_confirm))
+                Text(
+                    text = affectedSummary,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.cancel))
-            }
-        },
-    )
+            Text(
+                text = stringResource(R.string.reset_base_preserved),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SlicesInputField(
+                value = recovery.confirmation,
+                onValueChange = onConfirmationChanged,
+                label = stringResource(R.string.reset_confirmation_label),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = stringResource(R.string.reset_confirmation_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            SlicesTextAction(
+                text = stringResource(R.string.cancel),
+                onClick = {
+                    show.value = false
+                    onDismiss()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            SlicesTextAction(
+                text = stringResource(R.string.reset_confirm),
+                onClick = {
+                    show.value = false
+                    onConfirm()
+                },
+                enabled = recovery.confirmation == RECOVERY_CONFIRMATION,
+                danger = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
 }
 
 @Composable
@@ -460,33 +537,21 @@ private fun OperationDialog(operation: OperationUiState) {
         is OperationUiState.RepairingConfiguration ->
             stringResource(R.string.operation_repairing)
     }
-    Dialog(onDismissRequest = {}) {
-        Surface(
-            shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    val show = remember(operation) { mutableStateOf(true) }
+    SuperDialog(
+        show = show,
+        title = message,
+        summary = stringResource(R.string.operation_wait_hint),
+        enableWindowDim = true,
+        onDismissRequest = null,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 22.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    strokeWidth = 2.5.dp,
-                )
-                Column {
-                    Text(
-                        text = message,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = stringResource(R.string.operation_wait_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            MiuixCircularProgressIndicator(modifier = Modifier.size(28.dp))
         }
     }
 }
@@ -515,17 +580,11 @@ internal fun RuntimeStatusCard(
         stringResource(R.string.environment_unavailable_description)
     }
 
-    Card(
+    SlicesPanel(
         modifier = modifier.fillMaxWidth(),
         enabled = enabled,
         onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-            disabledContainerColor = MaterialTheme.colorScheme.surface,
-        ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        cornerRadius = 18.dp,
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
@@ -642,13 +701,17 @@ private fun NoticeBar(
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier.weight(1f),
             )
-            TextButton(
+            SlicesInlineAction(
+                text = actionLabel,
                 onClick = {
                     onIntent(if (retry) UiIntent.Refresh else UiIntent.DismissNotice)
                 },
-            ) {
-                Text(actionLabel)
-            }
+                color = if (success) {
+                    SlicesSuccess
+                } else {
+                    MaterialTheme.colorScheme.onErrorContainer
+                },
+            )
         }
     }
 }

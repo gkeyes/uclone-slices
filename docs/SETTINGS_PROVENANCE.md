@@ -41,7 +41,10 @@
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.1.4`、versionCode `5` | 在 0.1.3 候选基线上增加首页快捷切换、持久展开偏好和可恢复取消配置闭环，Manager 与 Runtime 成对交付 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
+| 版本 `0.1.5`、versionCode `6` | 以 0.1.4 功能闭环为基线完成 MIUIX Manager 界面与过渡反馈升级，Runtime 行为和 wire 不变，Manager 与 Runtime 继续成对交付 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
+| MIUIX `0.7.2` | 用户明确指定 MIUIX 设计语言；该版本使用 Kotlin 2.2.x，能够保持项目既有 Kotlin 2.2.0 工具链，避免为 UI 升级引入构建系统迁移 | Manager compile、unit、lint、assemble 与真机界面验收 |
+| Manager `windowSoftInputMode=adjustResize` | 真机 `dumpsys window` 证实默认 `adjustPan` 会与 MIUIX `SuperDialog` 自带的 `imePadding()` 叠加，导致删除确认弹窗在键盘出现时被双重上移 | 输入“删除”时的真机窗口属性与弹窗位置验收 |
+| Manager Release 复用既有开发签名 | v0.1.4 产品 APK 与本机项目开发签名证书摘要一致；v0.1.5 需要保持覆盖安装，同时使用 R8 与资源压缩生成小体积 APK | `apksigner verify --print-certs` 对比 0.1.4 与 0.1.5，设备覆盖安装 |
 | UI 的 8 dp 网格间距 | Material 布局网格，仅影响首个真实入口的排版，不进入业务或协议 | Android lint、assemble |
 | 首页当前空间高亮色 `#D83B50` | 用户明确要求当前账号使用西瓜红；只影响首页 Chip 的真实当前快照展示 | Manager 真机截图、Android lint、assemble |
 | GitHub Action commit SHA | 旧版 CI 中已使用的 v3/v4 action 固定提交 | CI workflow |

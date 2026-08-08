@@ -4,10 +4,10 @@
 
 这里仅记录尚未完成的工作。已经解决的问题由 Git 提交和回归测试保存，不继续以陈旧行号、设备二进制大小或一次性热修过程污染待办。
 
-## 0.1.4 正式发布门禁
+## 0.1.5 正式发布门禁
 
 - [ ] 用户按 [`docs/DEVICE_QA.md`](docs/DEVICE_QA.md) 完成两次重启和 Fixture 主链路验收。
-- [ ] 确认刷入 0.1.4 后，无需 `force-start-runtime.sh` 即可连接 Runtime。
+- [ ] 确认刷入 0.1.5 后，无需 `force-start-runtime.sh` 即可连接 Runtime。
   - 当前状态：PID/socket/probe 复用逻辑是候选修复；故障发生时没有保留强启前的完整探针输出，因此根因不标记为已确认。
   - 再次失败时：先运行 `diagnose-runtime.sh` 并保存完整输出，再决定是否修改。
 - [ ] 确认已有 `com.xingin.xhs` 记录可以进入详情并启动当前槽。
