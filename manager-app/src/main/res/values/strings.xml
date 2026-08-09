@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">UClone 数据空间</string>
+    <string name="app_name">UClone Slices</string>
     <string name="spaces_title">数据空间</string>
     <string name="spaces_subtitle">为应用创建独立数据环境，按需切换使用状态</string>
     <string name="refresh">刷新</string>
