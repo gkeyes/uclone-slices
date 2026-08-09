@@ -47,13 +47,13 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
       - name: Validate Android apps
-        run: ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:assembleDebug :device-fixture-app:lintDebug :device-fixture-app:assembleDebug
+        run: ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:assembleRelease :device-fixture-app:lintDebug :device-fixture-app:assembleDebug
 
-      - name: Upload Manager APK
+      - name: Upload Manager Release APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: uclone-slices-v2-manager-${{ github.sha }}
-          path: manager-app/build/outputs/apk/debug/manager-app-debug.apk
+          name: uclone-slices-v2-manager-release-${{ github.sha }}
+          path: manager-app/build/outputs/apk/release/manager-app-release.apk
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
