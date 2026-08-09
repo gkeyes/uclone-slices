@@ -49,6 +49,15 @@ jobs:
       - name: Validate Android apps
         run: ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:assembleDebug :device-fixture-app:lintDebug :device-fixture-app:assembleDebug
 
+      - name: Upload Manager APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: uclone-slices-v2-manager-${{ github.sha }}
+          path: manager-app/build/outputs/apk/debug/manager-app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
       - name: Validate KernelSU startup layer
         run: |
           ./tools/check-decision-alignment.sh
