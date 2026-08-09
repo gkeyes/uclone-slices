@@ -276,6 +276,21 @@ where
         aggregate.snapshot().map_err(model_error)
     }
 
+    pub fn set_launch_after_reboot(
+        &mut self,
+        package: &PackageName,
+        enabled: bool,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        let (mut aggregate, _inspection) = self.load_ready(package)?;
+        aggregate
+            .set_launch_after_reboot(enabled)
+            .map_err(model_error)?;
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("set_launch_after_reboot", package, "save", error))?;
+        aggregate.snapshot().map_err(model_error)
+    }
+
     pub fn activate_slot(
         &mut self,
         package: &PackageName,
@@ -359,7 +374,7 @@ where
         if recovering_activation {
             return Err(RuntimeError::StateConflict);
         }
-        self.converge_ready_view(package, &aggregate, &inspection)?;
+        self.converge_ready_view(package, &aggregate)?;
         Ok((aggregate, inspection))
     }
 
@@ -393,7 +408,6 @@ where
         &mut self,
         package: &PackageName,
         aggregate: &PackageAggregate,
-        inspection: &PackageInspection,
     ) -> Result<(), RuntimeError> {
         let observed = self
             .android
@@ -425,7 +439,7 @@ where
                 );
                 return Err(RuntimeError::StateConflict);
             }
-            if inspection.was_running {
+            if aggregate.launch_after_reboot() {
                 self.android
                     .launch_verified(package, aggregate.active_slot())
                     .map_err(|error| {
@@ -1401,7 +1415,6 @@ mod tests {
         let (mut runtime, target) = with_slot();
         runtime.activate_slot(&package, &target).unwrap();
         let (packages, slots, mut android) = runtime.into_parts();
-        android.force_stop(&package).unwrap();
         android.set_view(&package, ObservedView::Base);
         let starting_calls = android.calls().len();
         let mut runtime = Runtime::new(packages, slots, android);
@@ -1425,6 +1438,105 @@ mod tests {
                 AndroidCall::Observe(package),
             ]
         );
+    }
+
+    #[test]
+    fn ready_slot_launches_after_restore_only_when_enabled() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime.activate_slot(&package, &target).unwrap();
+        let updated = runtime.set_launch_after_reboot(&package, true).unwrap();
+        assert!(updated.launch_after_reboot);
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.set_view(&package, ObservedView::Base);
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let snapshot = runtime.get_package(&package).unwrap();
+
+        assert_eq!(snapshot.active_slot, target);
+        assert!(snapshot.launch_after_reboot);
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert!(android.is_running(&package));
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[
+                AndroidCall::Inspect(package.clone()),
+                AndroidCall::Observe(package.clone()),
+                AndroidCall::ForceStop(package.clone()),
+                AndroidCall::Apply(package.clone(), target.clone()),
+                AndroidCall::Observe(package.clone()),
+                AndroidCall::Launch(package, target),
+            ]
+        );
+    }
+
+    #[test]
+    fn base_never_auto_launches_even_when_enabled() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false).unwrap();
+        runtime.set_launch_after_reboot(&package, true).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.force_stop(&package).unwrap();
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let snapshot = runtime.get_package(&package).unwrap();
+
+        assert_eq!(snapshot.active_slot, SlotId::base());
+        assert!(snapshot.launch_after_reboot);
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert!(!android.is_running(&package));
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[
+                AndroidCall::Inspect(package.clone()),
+                AndroidCall::Observe(package),
+            ]
+        );
+    }
+
+    #[test]
+    fn package_listing_launches_only_opted_in_restored_apps() {
+        let opted_in = PackageName::new("com.example.opted.in").unwrap();
+        let opted_out = PackageName::new("com.example.opted.out").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        android.install(opted_in.clone());
+        android.install(opted_out.clone());
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            android,
+        );
+        let mut targets = Vec::new();
+        for package in [&opted_in, &opted_out] {
+            runtime.enroll(package.clone(), false).unwrap();
+            let target = runtime
+                .create_slot(package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+                .unwrap()
+                .slots[1]
+                .id
+                .clone();
+            runtime.activate_slot(package, &target).unwrap();
+            targets.push((package.clone(), target));
+        }
+        runtime.set_launch_after_reboot(&opted_in, true).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        for (package, _) in &targets {
+            android.set_view(package, ObservedView::Base);
+        }
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let snapshots = runtime.list_packages().unwrap();
+
+        assert_eq!(snapshots.len(), 2);
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert!(android.is_running(&opted_in));
+        assert!(!android.is_running(&opted_out));
+        for (package, target) in targets {
+            assert_eq!(android.view(&package), Some(&ObservedView::Slot(target)));
+        }
     }
 
     #[test]

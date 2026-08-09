@@ -15,6 +15,10 @@ class RuntimeProtocolTest {
             "enroll" to RuntimeCommand.Enroll("com.example.app"),
             "enroll_reset" to RuntimeCommand.ResetEnrollment("com.example.app"),
             "unenroll" to RuntimeCommand.Unenroll("com.example.app"),
+            "set_launch_after_reboot" to RuntimeCommand.SetLaunchAfterReboot(
+                "com.example.app",
+                true,
+            ),
             "get_package" to RuntimeCommand.GetPackage("com.example.app"),
             "create_slot" to RuntimeCommand.CreateSlot(
                 "com.example.app",
@@ -62,6 +66,15 @@ class RuntimeProtocolTest {
         assertFails {
             RuntimeProtocol.decode("""{"error":{"code":"future_error"}}""")
         }
+    }
+
+    @Test
+    fun missingRebootLaunchFieldDefaultsOffForOldRuntimeResponses() {
+        val response = RuntimeProtocol.decode(
+            """{"ok":{"package":{"package":"com.example.app","active_slot":"base","slots":[]}}}""",
+        ) as RuntimeReply.Package
+
+        assertEquals(false, response.packageSnapshot.launchAfterReboot)
     }
 
     private fun resource(name: String): String =

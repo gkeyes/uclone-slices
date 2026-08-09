@@ -5,7 +5,7 @@
 
 UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空间管理器。它让同一个 App 在系统原始数据与多个独立 CE/DE 数据空间之间切换，并由 Runtime 完成停止、挂载、验证和启动。
 
-当前版本为 **v0.1.5 预发布版**。它以 v0.1.4 的完整功能闭环为基线，将 Manager 更新为 MIUIX 设计语言并补齐页面、按钮和展开区域的过渡反馈；尚未关闭的重启与遗留 App 回归记录在 [to-do.md](to-do.md)。
+当前版本为 **v0.1.6 预发布版**。它在 v0.1.5 的 MIUIX Manager 基线上增加每 App 重启启动策略：重启恢复默认只切换数据空间，只有用户明确开启的非 Base 当前空间才会在恢复后启动 App；尚未关闭的真机回归记录在 [to-do.md](to-do.md)。
 
 ## 功能
 
@@ -16,6 +16,7 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 - 取消 App 配置：切回系统原始空间，删除全部独立空间和登记记录，保留 APK 与原始数据。
 - App 更新或重装导致身份变化时，由用户确认清理旧空间并重新登记。
 - Runtime 事务中断后，根据持久化上下文继续收敛。
+- 重启后恢复非 Base 当前空间；每个 App 可独立选择恢复后是否自动启动，默认关闭。
 - 首页账号展开状态保存在 Manager 本地，重启 Manager 后保持不变。
 - Manager 使用 MIUIX 组件、深浅色主题和原生过渡反馈，不改变 Runtime 操作语义。
 
@@ -33,21 +34,21 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 
 ## 下载与安装
 
-在 [Releases](https://github.com/gkeyes/uclone-slices/releases) 下载同一版本的两个产品文件：
+正式发布后，可在 [Releases](https://github.com/gkeyes/uclone-slices/releases) 下载同一版本的两个产品文件：
 
-1. `uclone-slices-v2-manager-0.1.5.apk`
-2. `uclone-slices-v2-kernelsu-0.1.5.zip`
+1. `uclone-slices-v2-manager-0.1.6.apk`
+2. `uclone-slices-v2-kernelsu-0.1.6.zip`
 
 安装步骤：
 
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.1.5`。
+4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.1.6`。
 
 Release 同时提供各文件的 `.xz` 极致压缩版本和 `SHA256SUMS.txt`。Fixture APK 与 QA 工具仅用于验证，不是产品运行依赖。
 
-> v0.1.5 Manager 沿用当前设备已验证的开发签名，方便覆盖安装现有测试版本。
+> v0.1.6 Manager 沿用当前设备已验证的开发签名，方便覆盖安装现有测试版本。
 
 ## 基本使用
 
@@ -56,7 +57,8 @@ Release 同时提供各文件的 `.xz` 极致压缩版本和 `SHA256SUMS.txt`。
 3. 返回首页并展开账号，点击空间按钮即可切换并启动 App。
 4. 当前空间使用西瓜红高亮；再次点击当前空间只重新启动 App。
 5. 普通空间可在详情页重命名或删除。
-6. 已配置 App 的菜单可执行“取消配置并删除分空间”。
+6. 已配置 App 的菜单可开启“重启后自动切换并打开 App”；默认关闭时重启恢复只切换空间，不启动 App。
+7. 同一菜单可执行“取消配置并删除分空间”。
 
 取消配置只删除 UClone 管理的独立 CE/DE 空间和登记记录，不卸载 App，也不删除系统原始数据。
 
@@ -77,9 +79,9 @@ flowchart LR
 - KernelSU Shell 只负责在 init mount namespace 启动 Runtime。
 - Runtime 只保留 `PackageStore`、`SlotStorage`、`AndroidOps` 三个底层端口。
 
-当前 wire 只有九个操作：
+当前 wire 只有十个操作：
 
-`probe`、`list_packages`、`get_package`、`enroll`、`create_slot`、`activate_slot`、`rename_slot`、`delete_slot`、`unenroll`
+`probe`、`list_packages`、`get_package`、`enroll`、`create_slot`、`activate_slot`、`rename_slot`、`delete_slot`、`unenroll`、`set_launch_after_reboot`
 
 错误码固定为：
 

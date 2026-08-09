@@ -1,13 +1,13 @@
 # UClone Slices V2 待办
 
-更新日期：2026-07-25。
+更新日期：2026-08-09。
 
 这里仅记录尚未完成的工作。已经解决的问题由 Git 提交和回归测试保存，不继续以陈旧行号、设备二进制大小或一次性热修过程污染待办。
 
-## 0.1.5 正式发布门禁
+## 0.1.6 正式发布门禁
 
 - [ ] 用户按 [`docs/DEVICE_QA.md`](docs/DEVICE_QA.md) 完成两次重启和 Fixture 主链路验收。
-- [ ] 确认刷入 0.1.5 后，无需 `force-start-runtime.sh` 即可连接 Runtime。
+- [ ] 确认刷入 0.1.6 后，无需 `force-start-runtime.sh` 即可连接 Runtime。
   - 当前状态：PID/socket/probe 复用逻辑是候选修复；故障发生时没有保留强启前的完整探针输出，因此根因不标记为已确认。
   - 再次失败时：先运行 `diagnose-runtime.sh` 并保存完整输出，再决定是否修改。
 - [ ] 确认已有 `com.xingin.xhs` 记录可以进入详情并启动当前槽。
@@ -21,7 +21,7 @@
   - 重启前 Fixture 为 `active_slot=slot-1`，CE/DE 均挂载 `slot-1`，标识均为 `reboot-slot-1`。
   - 将 Manager `force-stop` 后重启，Runtime `0.1.2` 已连接且 Manager 无进程，但连续两次探针均得到 `active_slot=slot-1`、CE/DE 为 Base、Base 标识可见，结果为 `persisted_slot_but_base`。
   - 仅发送一次现有 `list_packages` 后，CE/DE 与两个标识立即恢复为 `slot-1`，结果为 `matched_persisted_view`；因此根因已定位为开机只启动 daemon，包读取前没有主动收敛。
-  - 后续修复不得增加 wire 命令；先确定开机恢复触发点，并用该探针覆盖“恢复前为红、恢复后为绿”。
+  - 0.1.6 新增的 `set_launch_after_reboot` 只持久化用户策略；恢复触发仍复用既有包读取链路，不增加专用恢复命令。使用同一探针覆盖“恢复前为红、恢复后为绿”。
 - [ ] 只有在探针确认 Runtime 成功启动后仍会自行退出时，再设计常驻收敛入口。
   - 当前 KernelSU 处理启动时已有 PID/socket 失效，不预先增加 supervisor、重试次数或超时策略。
 
@@ -37,6 +37,6 @@
 ## 固定约束
 
 - Bug 先有只读探针或稳定失败测试，再修改生产代码。
-- wire 在当前里程碑保持九个命令和四个错误码。
+- wire 在当前里程碑保持十个命令和四个错误码。
 - 不采用文件行数、覆盖率、循环次数、经验重试次数或经验超时作为完成标准。
 - 真机门禁未全部关闭时只发布明确标注的预发布版，不把设备行为写成已经正式验收。

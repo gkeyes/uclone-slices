@@ -1,14 +1,14 @@
-# 0.1.5 真机验收清单
+# 0.1.6 真机验收清单
 
 这份清单由用户在当前 Android 16 / API 36 / arm64 KernelSU 设备执行。失败时先取证，不先运行强启脚本。
 
 ## 安装
 
-1. 安装 `uclone-slices-v2-manager-0.1.5.apk`。
-2. 安装 `uclone-slices-v2-fixture-0.1.5-debug.apk`。
+1. 安装 `uclone-slices-v2-manager-0.1.6.apk`。
+2. 安装 `uclone-slices-v2-fixture-0.1.6-debug.apk`。
 3. 刷入 `uclone-slices-v2-kernelsu.zip`。
 4. 重启并解锁 user0，不运行 `force-start-runtime.sh`。
-5. 打开 Manager，确认显示 `Runtime 0.1.5`。
+5. 打开 Manager，确认显示 `Runtime 0.1.6`。
 
 ## Fixture 主链路
 
@@ -46,13 +46,16 @@
    - `/data/adb/uclone-slices-v2/packages/com.uclone.slices.fixture`
 8. 直接打开 Fixture，确认 Base 的 CE/DE 标识仍存在；确认 APK 未卸载，其他已配置应用不受影响。
 
-## 重启与已有 App 回归
+## 重启恢复与单 App 启动开关
 
-1. 保持 Fixture 活动槽为普通槽并记录 CE/DE 内容。
-2. 再次重启、解锁，不运行强启脚本。
-3. 打开 Manager，确认仍显示 `Runtime 0.1.5`。
-4. 打开 Fixture 详情并点击当前槽“启动”，确认重启前的 CE/DE 内容恢复。
-5. 如果设备仍保留 `com.xingin.xhs` 的 V2 记录，确认它可以进入详情并启动当前槽。
+1. 准备 Fixture 和另一个普通第三方 App，两者都保持普通分空间为当前空间，并记录当前空间及可识别数据。
+2. 在 Fixture 的三点菜单关闭“重启后自动切换并打开 App”，在另一个 App 的三点菜单开启；强制停止并重新打开 Manager，确认两个 Switch 状态保持不变。
+3. 重启、解锁，不运行强启脚本，也不手动打开这两个目标 App。
+4. 打开 Manager，确认仍显示 `Runtime 0.1.6`，两个 App 均恢复到重启前的普通分空间。
+5. 使用 `pidof <package>` 确认只有开启开关的 App 已启动；Fixture 没有进程，但 CE/DE 已切换到重启前空间。
+6. 在首页点击 Fixture 当前账户，确认仍会启动 Fixture 且读取到目标 CE/DE 数据，证明手动“点击账户 → 切换并启动”不受开关影响。
+7. 保持另一个 App 的开关开启，手动切回系统原始空间后再次重启；打开 Manager，确认该 App 不会因开关开启而自动启动。
+8. 如果设备仍保留 `com.xingin.xhs` 的 V2 记录，确认它可以进入详情并手动启动当前槽。
 
 ## 异常登记恢复
 
@@ -90,8 +93,10 @@ sh /data/local/tmp/probe-registration.sh com.uclone.slices.fixture
 - 普通槽重命名不改变数据，非活动普通槽删除会同时清理 CE/DE。
 - Base 和当前活动槽不能删除。
 - 首页展开状态持久化，快捷切换留在首页并且只高亮真实 Runtime 快照中的当前空间。
+- 重启后所有非 Base 当前空间都会恢复；默认关闭时不启动 App，仅开启开关的非 Base App 会启动，Base 永不自动启动。
+- 关闭重启启动开关不会影响首页或详情页手动点击账户后的切换与启动。
 - 取消配置会先回到 Base，再删除该 App 的全部 CE/DE 分空间和登记；APK、Base 与其他包保持不变。
 - Fixture 身份变化后可以由用户确认清理旧槽并恢复登记，Base 数据保持不变。
 - 小红书已有记录可以进入详情，或明确由探针证明是 App 身份变化。
 
-全部通过后，0.1.5 可以从预发布提升为正式 Release。
+全部通过后，0.1.6 可以从预发布提升为正式 Release。

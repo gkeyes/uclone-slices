@@ -52,6 +52,7 @@ sealed interface OperationUiState {
         val packageName: String,
         val appLabel: String,
     ) : OperationUiState
+    data class SavingRebootLaunch(val packageName: String) : OperationUiState
     data class RepairingConfiguration(val packageName: String) : OperationUiState
 }
 
@@ -129,6 +130,10 @@ sealed interface UiIntent {
     data object OpenRuntimeStatus : UiIntent
     data class OpenPackage(val packageName: String) : UiIntent
     data class SetConfiguredAccountsExpanded(val expanded: Boolean) : UiIntent
+    data class SetLaunchAfterReboot(
+        val packageName: String,
+        val enabled: Boolean,
+    ) : UiIntent
     data class QuickActivateSlot(val packageName: String, val slotId: String) : UiIntent
     data object NavigateBack : UiIntent
     data class RequestConfigureApp(val packageName: String) : UiIntent
@@ -187,6 +192,8 @@ internal class SlotsViewModel(
                     it.copy(configuredAccountsExpanded = intent.expanded)
                 }
             }
+            is UiIntent.SetLaunchAfterReboot ->
+                setLaunchAfterReboot(intent.packageName, intent.enabled)
             is UiIntent.QuickActivateSlot ->
                 quickActivateSlot(intent.packageName, intent.slotId)
             UiIntent.NavigateBack -> navigateBack()
@@ -374,6 +381,25 @@ internal class SlotsViewModel(
             applyHomePackageReply(
                 client.execute(RuntimeCommand.ActivateSlot(packageName, slotId)),
                 successNotice = UiNotice.SpaceActivated(targetName, switched),
+            )
+        }
+    }
+
+    private fun setLaunchAfterReboot(packageName: String, enabled: Boolean) {
+        val snapshot = state.value
+        if (!snapshot.runtimeReady) {
+            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+            return
+        }
+        if (snapshot.busy) return
+        if (snapshot.packages.none { it.packageName == packageName }) {
+            mutableState.update { it.copy(notice = UiNotice.MissingEntity) }
+            return
+        }
+        runOperation(OperationUiState.SavingRebootLaunch(packageName)) {
+            applyHomePackageReply(
+                client.execute(RuntimeCommand.SetLaunchAfterReboot(packageName, enabled)),
+                successNotice = null,
             )
         }
     }
@@ -723,7 +749,7 @@ internal class SlotsViewModel(
 
     private fun applyHomePackageReply(
         reply: RuntimeReply,
-        successNotice: UiNotice,
+        successNotice: UiNotice?,
     ) {
         when (reply) {
             is RuntimeReply.Package -> mutableState.update { current ->

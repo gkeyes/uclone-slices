@@ -20,6 +20,10 @@ pub enum Command {
     Unenroll {
         package: PackageName,
     },
+    SetLaunchAfterReboot {
+        package: PackageName,
+        enabled: bool,
+    },
     CreateSlot {
         package: PackageName,
         name: DisplayName,
@@ -105,6 +109,7 @@ fn decode_command(line: &str) -> Result<Command, ()> {
         "get_package" => &["op", "package"][..],
         "enroll" => &["op", "package", "reset"][..],
         "unenroll" => &["op", "package"][..],
+        "set_launch_after_reboot" => &["op", "package", "enabled"][..],
         "create_slot" => &["op", "package", "name", "seed"][..],
         "activate_slot" => &["op", "package", "slot"][..],
         "rename_slot" => &["op", "package", "slot", "name"][..],
@@ -144,6 +149,9 @@ where
         Command::Unenroll { package } => runtime
             .unenroll(&package)
             .map(|()| SuccessPayload::Empty {}),
+        Command::SetLaunchAfterReboot { package, enabled } => runtime
+            .set_launch_after_reboot(&package, enabled)
+            .map(|package| SuccessPayload::Package { package }),
         Command::CreateSlot {
             package,
             name,
@@ -212,6 +220,7 @@ mod tests {
             "get_package",
             "create_slot",
             "activate_slot",
+            "set_launch_after_reboot",
         ] {
             let request = fixture(format!("{name}.request.json"));
             let expected = fixture(format!("{name}.response.json"));
@@ -279,6 +288,22 @@ mod tests {
         let response = handle_line(
             &mut runtime,
             r#"{"op":"unenroll","package":"com.example.app","slot":"base"}"#,
+        );
+
+        assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
+    }
+
+    #[test]
+    fn reboot_launch_setting_requires_a_boolean() {
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            MemoryAndroidOps::default(),
+        );
+
+        let response = handle_line(
+            &mut runtime,
+            r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");

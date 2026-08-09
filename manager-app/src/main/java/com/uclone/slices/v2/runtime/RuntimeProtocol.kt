@@ -17,6 +17,7 @@ data class PackageSnapshot(
     val packageName: String,
     val activeSlot: String,
     val slots: List<SlotSnapshot>,
+    val launchAfterReboot: Boolean = false,
 )
 
 sealed interface RuntimeCommand {
@@ -26,6 +27,10 @@ sealed interface RuntimeCommand {
     data class Enroll(val packageName: String) : RuntimeCommand
     data class ResetEnrollment(val packageName: String) : RuntimeCommand
     data class Unenroll(val packageName: String) : RuntimeCommand
+    data class SetLaunchAfterReboot(
+        val packageName: String,
+        val enabled: Boolean,
+    ) : RuntimeCommand
     data class CreateSlot(
         val packageName: String,
         val name: String,
@@ -79,6 +84,10 @@ object RuntimeProtocol {
             is RuntimeCommand.Unenroll -> JSONObject()
                 .put("op", "unenroll")
                 .put("package", command.packageName)
+            is RuntimeCommand.SetLaunchAfterReboot -> JSONObject()
+                .put("op", "set_launch_after_reboot")
+                .put("package", command.packageName)
+                .put("enabled", command.enabled)
             is RuntimeCommand.CreateSlot -> JSONObject()
                 .put("op", "create_slot")
                 .put("package", command.packageName)
@@ -129,6 +138,7 @@ object RuntimeProtocol {
             packageName = json.getString("package"),
             activeSlot = json.getString("active_slot"),
             slots = parseSlots(json.getJSONArray("slots")),
+            launchAfterReboot = json.optBoolean("launch_after_reboot", false),
         )
 
     private fun parseSlots(array: JSONArray): List<SlotSnapshot> =

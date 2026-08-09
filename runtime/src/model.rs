@@ -252,6 +252,8 @@ pub struct PackageAggregate {
     identity: PackageIdentity,
     slots: Vec<Slot>,
     active_slot: SlotId,
+    #[serde(default)]
+    launch_after_reboot: bool,
     next_slot_number: u64,
     lifecycle: Lifecycle,
 }
@@ -266,6 +268,7 @@ impl PackageAggregate {
                 display_name: DisplayName("Base".to_owned()),
             }],
             active_slot: SlotId::base(),
+            launch_after_reboot: false,
             next_slot_number: 1,
             lifecycle: Lifecycle::Ready,
         }
@@ -334,6 +337,16 @@ impl PackageAggregate {
 
     pub fn active_slot(&self) -> &SlotId {
         &self.active_slot
+    }
+
+    pub fn launch_after_reboot(&self) -> bool {
+        self.launch_after_reboot
+    }
+
+    pub fn set_launch_after_reboot(&mut self, enabled: bool) -> Result<(), ModelError> {
+        self.require_ready()?;
+        self.launch_after_reboot = enabled;
+        self.validate()
     }
 
     pub fn has_slot(&self, id: &SlotId) -> bool {
@@ -540,6 +553,7 @@ impl PackageAggregate {
         Ok(PackageSnapshot {
             package: self.package.clone(),
             active_slot: self.active_slot.clone(),
+            launch_after_reboot: self.launch_after_reboot,
             slots: self
                 .slots
                 .iter()
@@ -568,6 +582,7 @@ pub struct SlotSnapshot {
 pub struct PackageSnapshot {
     pub package: PackageName,
     pub active_slot: SlotId,
+    pub launch_after_reboot: bool,
     pub slots: Vec<SlotSnapshot>,
 }
 
@@ -613,6 +628,34 @@ mod tests {
 
         assert_eq!(aggregate.active_slot(), &slot_id);
         assert_eq!(aggregate.snapshot().unwrap().slots.len(), 2);
+    }
+
+    #[test]
+    fn reboot_launch_defaults_off_and_survives_round_trip() {
+        let mut aggregate = PackageAggregate::enrolled(package(), identity());
+
+        assert!(!aggregate.launch_after_reboot());
+        aggregate.set_launch_after_reboot(true).unwrap();
+
+        let encoded = serde_json::to_string(&aggregate).unwrap();
+        let restored: PackageAggregate = serde_json::from_str(&encoded).unwrap();
+        assert!(restored.launch_after_reboot());
+        assert!(restored.snapshot().unwrap().launch_after_reboot);
+    }
+
+    #[test]
+    fn persisted_aggregate_without_reboot_launch_setting_migrates_off() {
+        let aggregate = PackageAggregate::enrolled(package(), identity());
+        let mut legacy = serde_json::to_value(aggregate).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("launch_after_reboot");
+
+        let restored: PackageAggregate = serde_json::from_value(legacy).unwrap();
+
+        assert!(!restored.launch_after_reboot());
+        assert!(!restored.snapshot().unwrap().launch_after_reboot);
     }
 
     #[test]

@@ -507,6 +507,36 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun rebootLaunchSettingUsesTheRuntimeSnapshotWithoutLaunchingTheApp() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.SetLaunchAfterReboot("com.example.app", true))
+
+        assertEquals(
+            RuntimeCommand.SetLaunchAfterReboot("com.example.app", true),
+            client.commands.last(),
+        )
+        assertTrue(viewModel.state.value.packages.single().launchAfterReboot)
+        assertTrue(client.commands.none { it is RuntimeCommand.ActivateSlot })
+        assertNull(viewModel.state.value.notice)
+    }
+
+    @Test
+    fun rebootLaunchSettingFailureKeepsThePreviousSwitchValue() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
+
+        viewModel.onIntent(UiIntent.SetLaunchAfterReboot("com.example.app", true))
+
+        assertFalse(viewModel.state.value.packages.single().launchAfterReboot)
+        assertEquals(UiNotice.OperationFailed, viewModel.state.value.notice)
+    }
+
+    @Test
     fun quickActivationFreezesArgumentsAndDropsASecondTapWhileBusy() = runBlocking {
         val client = BlockingQuickRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
@@ -668,6 +698,10 @@ private open class FakeRuntimeClient(
                 enrolled = false
                 RuntimeReply.Ack
             }
+            is RuntimeCommand.SetLaunchAfterReboot -> {
+                snapshot = snapshot.copy(launchAfterReboot = command.enabled)
+                RuntimeReply.Package(snapshot)
+            }
         }
     }
 }
@@ -719,6 +753,7 @@ private class BlockingRuntimeClient : RuntimeClient {
             is RuntimeCommand.DeleteSlot,
             is RuntimeCommand.ResetEnrollment,
             is RuntimeCommand.Unenroll,
+            is RuntimeCommand.SetLaunchAfterReboot,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }
@@ -752,6 +787,7 @@ private class BlockingResetRuntimeClient : RuntimeClient {
             is RuntimeCommand.RenameSlot,
             is RuntimeCommand.DeleteSlot,
             is RuntimeCommand.Unenroll,
+            is RuntimeCommand.SetLaunchAfterReboot,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }
@@ -780,6 +816,7 @@ private class BlockingQuickRuntimeClient : RuntimeClient {
             is RuntimeCommand.CreateSlot,
             is RuntimeCommand.RenameSlot,
             is RuntimeCommand.DeleteSlot,
+            is RuntimeCommand.SetLaunchAfterReboot,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }

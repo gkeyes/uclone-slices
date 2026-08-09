@@ -534,6 +534,8 @@ private fun OperationDialog(operation: OperationUiState) {
             stringResource(R.string.operation_deleting, operation.spaceName)
         is OperationUiState.UnenrollingApp ->
             stringResource(R.string.operation_unenrolling, operation.appLabel)
+        is OperationUiState.SavingRebootLaunch ->
+            stringResource(R.string.operation_saving_reboot_launch)
         is OperationUiState.RepairingConfiguration ->
             stringResource(R.string.operation_repairing)
     }

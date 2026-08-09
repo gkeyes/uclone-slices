@@ -24,6 +24,7 @@
     <string name="collapse_accounts">收起账号</string>
     <string name="original_space">原始空间</string>
     <string name="configured_app_actions">应用操作</string>
+    <string name="launch_after_reboot_action">重启后自动切换并打开 App</string>
     <string name="unenroll_app_action">取消配置并删除分空间</string>
     <string name="available_apps">可配置应用</string>
     <string name="configured_app_summary">%1$d 个独立空间 · 当前使用 %2$s</string>
@@ -102,6 +103,7 @@
     <string name="operation_renaming">正在重命名“%1$s”</string>
     <string name="operation_deleting">正在删除“%1$s”</string>
     <string name="operation_unenrolling">正在取消“%1$s”的配置</string>
+    <string name="operation_saving_reboot_launch">正在保存重启启动设置</string>
     <string name="operation_repairing">正在修复应用配置</string>
     <string name="operation_wait_hint">完成前请保持当前页面</string>
 

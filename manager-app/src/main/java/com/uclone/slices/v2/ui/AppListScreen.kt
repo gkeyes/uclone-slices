@@ -21,6 +21,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -149,6 +150,9 @@ internal fun AppListScreen(
                         onActivate = { packageName, slotId ->
                             onIntent(UiIntent.QuickActivateSlot(packageName, slotId))
                         },
+                        onSetLaunchAfterReboot = { packageName, enabled ->
+                            onIntent(UiIntent.SetLaunchAfterReboot(packageName, enabled))
+                        },
                         onUnenroll = { onIntent(UiIntent.RequestUnenrollApp(it)) },
                     )
                 }
@@ -205,6 +209,7 @@ private fun ManagedAppsCard(
     accountsExpanded: Boolean,
     onOpen: (String) -> Unit,
     onActivate: (String, String) -> Unit,
+    onSetLaunchAfterReboot: (String, Boolean) -> Unit,
     onUnenroll: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -307,6 +312,28 @@ private fun ManagedAppsCard(
                                         expanded = menuExpanded,
                                         onDismissRequest = { menuExpanded = false },
                                     ) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    stringResource(
+                                                        R.string.launch_after_reboot_action,
+                                                    ),
+                                                )
+                                            },
+                                            trailingIcon = {
+                                                Switch(
+                                                    checked = snapshot.launchAfterReboot,
+                                                    onCheckedChange = null,
+                                                )
+                                            },
+                                            onClick = {
+                                                menuExpanded = false
+                                                onSetLaunchAfterReboot(
+                                                    app.packageName,
+                                                    !snapshot.launchAfterReboot,
+                                                )
+                                            },
+                                        )
                                         DropdownMenuItem(
                                             text = {
                                                 Text(stringResource(R.string.unenroll_app_action))

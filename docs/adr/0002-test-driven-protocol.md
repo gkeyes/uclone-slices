@@ -16,4 +16,6 @@
 
 `rename_slot` 和 `delete_slot` 分别对应普通槽菜单中的重命名与永久删除。两者均复用包快照响应和现有四个错误码，并分别具备 Runtime 用例、共享 fixture、Kotlin 消费测试和真实 UI 入口。
 
-`unenroll` 对应首页“取消配置并删除分空间”，由 Runtime 单独完成切回 Base、删除全部 CE/DE 分空间和移除登记；它返回空 Ack，不增加诊断字段或错误码。首页快捷切换继续复用 `activate_slot`，不增加命令。当前 wire 因而包含九个操作。
+`unenroll` 对应首页“取消配置并删除分空间”，由 Runtime 单独完成切回 Base、删除全部 CE/DE 分空间和移除登记；它返回空 Ack，不增加诊断字段或错误码。首页快捷切换继续复用 `activate_slot`，不增加命令。
+
+`set_launch_after_reboot` 对应每个已配置 App 菜单中的重启启动开关。它只更新 `PackageAggregate` 中默认关闭的策略并返回最新包快照；自动恢复仍由 `list_packages` / `get_package` 收敛真实视图，手动 `activate_slot` 仍始终启动 App。当前 wire 因而包含十个操作。
