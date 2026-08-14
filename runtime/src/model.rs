@@ -231,15 +231,14 @@ impl SigningIdentity {
         if unique.len() != self.sha256.len() {
             return Err(ModelError::InvalidSigningIdentity);
         }
-        if self.kind == SigningKind::Multiple {
-            if self.sha256.len() < 2
+        if self.kind == SigningKind::Multiple
+            && (self.sha256.len() < 2
                 || !self
                     .sha256
                     .windows(2)
-                    .all(|pair| pair[0].as_str() < pair[1].as_str())
-            {
-                return Err(ModelError::InvalidSigningIdentity);
-            }
+                    .all(|pair| pair[0].as_str() < pair[1].as_str()))
+        {
+            return Err(ModelError::InvalidSigningIdentity);
         }
         Ok(())
     }
