@@ -2045,8 +2045,6 @@ mod tests {
         assert_eq!(
             &android.calls()[starting_calls..],
             &[
-                AndroidCall::Inspect(package.clone()),
-                AndroidCall::Observe(package.clone()),
                 AndroidCall::ForceStop(package.clone()),
                 AndroidCall::Apply(package.clone(), SlotId::base()),
                 AndroidCall::Observe(package),
@@ -2086,13 +2084,7 @@ mod tests {
         let (packages, slots, android) = runtime.into_parts();
         assert!(packages.load(&package).unwrap().unwrap().is_ready());
         assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
-        assert_eq!(
-            &android.calls()[starting_calls..],
-            &[
-                AndroidCall::Inspect(package.clone()),
-                AndroidCall::Observe(package),
-            ]
-        );
+        assert_eq!(&android.calls()[starting_calls..], &[]);
     }
 
     #[test]
