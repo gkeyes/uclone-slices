@@ -44,6 +44,7 @@ internal fun RuntimeStatusScreen(
         item {
             RuntimeOverviewCard(
                 runtimeReady = state.runtimeReady,
+                runtimeCompatible = state.runtimeCompatible,
             )
         }
         item {
@@ -72,8 +73,9 @@ internal fun RuntimeStatusScreen(
 }
 
 @Composable
-private fun RuntimeOverviewCard(runtimeReady: Boolean) {
-    val accent = if (runtimeReady) SlicesSuccess else SlicesWarning
+private fun RuntimeOverviewCard(runtimeReady: Boolean, runtimeCompatible: Boolean) {
+    val ready = runtimeReady && runtimeCompatible
+    val accent = if (ready) SlicesSuccess else SlicesWarning
     SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
     ) {
@@ -90,18 +92,20 @@ private fun RuntimeOverviewCard(runtimeReady: Boolean) {
             )
             Column {
                 Text(
-                    text = if (runtimeReady) {
-                        stringResource(R.string.environment_ready)
-                    } else {
-                        stringResource(R.string.environment_unavailable)
+                    text = when {
+                        runtimeReady && !runtimeCompatible ->
+                            stringResource(R.string.environment_version_mismatch)
+                        runtimeReady -> stringResource(R.string.environment_ready)
+                        else -> stringResource(R.string.environment_unavailable)
                     },
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
-                    text = if (runtimeReady) {
-                        stringResource(R.string.runtime_ready_long)
-                    } else {
-                        stringResource(R.string.runtime_unavailable_long)
+                    text = when {
+                        runtimeReady && !runtimeCompatible ->
+                            stringResource(R.string.runtime_version_mismatch_long)
+                        runtimeReady -> stringResource(R.string.runtime_ready_long)
+                        else -> stringResource(R.string.runtime_unavailable_long)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

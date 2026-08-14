@@ -3,7 +3,9 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::adapters::{FilePackageStore, FileSlotStorage, SystemAndroidOps};
-use crate::model::{Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode, SlotId};
+use crate::model::{
+    Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode, SigningIdentity, SlotId,
+};
 use crate::ports::AdapterError;
 use crate::usecases::{Runtime, RuntimeError};
 
@@ -45,8 +47,18 @@ impl ProductionRuntime {
         &mut self,
         package: PackageName,
         reset: bool,
+        signing: Option<SigningIdentity>,
     ) -> Result<PackageSnapshot, RuntimeError> {
-        self.inner.enroll(package, reset)
+        self.inner.enroll(package, reset, signing)
+    }
+
+    pub fn rebind_package(
+        &mut self,
+        package: &PackageName,
+        signing: SigningIdentity,
+        trust_legacy: bool,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        self.inner.rebind_package(package, signing, trust_legacy)
     }
 
     pub fn unenroll(&mut self, package: &PackageName) -> Result<(), RuntimeError> {

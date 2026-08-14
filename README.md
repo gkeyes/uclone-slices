@@ -5,7 +5,7 @@
 
 UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空间管理器。它让同一个 App 在系统原始数据与多个独立 CE/DE 数据空间之间切换，并由 Runtime 完成停止、挂载、验证和启动。
 
-当前版本为 **v0.1.6 预发布版**。它在 v0.1.5 的 MIUIX Manager 基线上增加每 App 重启启动策略：重启恢复默认只切换数据空间，只有用户明确开启的非 Base 当前空间才会在恢复后启动 App；尚未关闭的真机回归记录在 [to-do.md](to-do.md)。
+当前版本为 **v0.1.7 候选版**。同包名、同 UID 且签名谱系兼容的 App 覆盖升级或降级后，Runtime 会无损刷新 APK 身份并恢复原活动空间；0.1.6 遗留配置可由用户确认一次后保留账号重新绑定。
 
 ## 功能
 
@@ -14,7 +14,8 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 - 在首页或详情页快速切换空间，并启动目标 App。
 - 重命名普通空间，永久删除非活动普通空间。
 - 取消 App 配置：切回系统原始空间，删除全部独立空间和登记记录，保留 APK 与原始数据。
-- App 更新或重装导致身份变化时，由用户确认清理旧空间并重新登记。
+- App 正常升级或降级后自动无损重新绑定，保留账号名称、CE/DE 数据、当前账号和重启启动开关。
+- 0.1.6 旧配置缺少签名 sidecar 且 APK 已变化时，显示账号清单并要求一次“绑定”确认，不删除空间。
 - Runtime 事务中断后，根据持久化上下文继续收敛。
 - 重启后恢复非 Base 当前空间；每个 App 可独立选择恢复后是否自动启动，默认关闭。
 - 首页账号展开状态保存在 Manager 本地，重启 Manager 后保持不变。
@@ -30,25 +31,25 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 | 用户 | 已解锁的 user0 |
 | App | 具有 Launcher 入口的普通第三方 App |
 
-暂不支持工作资料、第二用户、system/shared-UID App、旧数据迁移，以及更新或重装后对旧空间的自动接管。
+暂不支持工作资料、第二用户、system/shared-UID App，或 UID/签名不兼容的替换安装。身份不兼容时旧空间会被保护，不能自动接管。
 
 ## 下载与安装
 
-正式发布后，可在 [Releases](https://github.com/gkeyes/uclone-slices/releases) 下载同一版本的两个产品文件：
+当前候选产物由 `Validate V2` GitHub Actions 生成，不创建 tag 或 GitHub Release。下载同一提交 SHA 的两个产品文件：
 
-1. `uclone-slices-v2-manager-0.1.6.apk`
-2. `uclone-slices-v2-kernelsu-0.1.6.zip`
+1. `uclone-slices-v2-manager-0.1.7-<sha>.apk`
+2. `uclone-slices-v2-kernelsu-0.1.7-<sha>.zip`
 
 安装步骤：
 
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.1.6`。
+4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.1.7`。
 
-Release 同时提供各文件的 `.xz` 极致压缩版本和 `SHA256SUMS.txt`。Fixture APK 与 QA 工具仅用于验证，不是产品运行依赖。
+同一个 Actions artifact 还包含两个覆盖升降级 Fixture、固定 `e0d4683` 的 0.1.6 QA 基线和 `SHA256SUMS.txt`。Fixture APK 与 QA 基线不是产品运行依赖。
 
-> v0.1.6 Manager 沿用当前设备已验证的开发签名，方便覆盖安装现有测试版本。
+> 安装前必须比较手机现有 APK 与下载 APK 的证书。若 Runner 签名不同，只能对下载的 Release APK 用已验证匹配手机的 keystore 重新签名；不要卸载或清数据。
 
 ## 基本使用
 
@@ -79,13 +80,13 @@ flowchart LR
 - KernelSU Shell 只负责在 init mount namespace 启动 Runtime。
 - Runtime 只保留 `PackageStore`、`SlotStorage`、`AndroidOps` 三个底层端口。
 
-当前 wire 只有十个操作：
+当前 wire 有十一个操作：
 
-`probe`、`list_packages`、`get_package`、`enroll`、`create_slot`、`activate_slot`、`rename_slot`、`delete_slot`、`unenroll`、`set_launch_after_reboot`
+`probe`、`list_packages`、`get_package`、`enroll`、`rebind_package`、`create_slot`、`activate_slot`、`rename_slot`、`delete_slot`、`unenroll`、`set_launch_after_reboot`
 
 错误码固定为：
 
-`invalid_request`、`not_found`、`state_conflict`、`operation_failed`
+`invalid_request`、`not_found`、`state_conflict`、`identity_mismatch`、`operation_failed`
 
 ## 仓库结构
 
@@ -113,8 +114,10 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
   :manager-app:lintRelease \
   :manager-app:assembleDebug \
   :manager-app:assembleRelease \
-  :device-fixture-app:lintDebug \
-  :device-fixture-app:assembleDebug
+  :device-fixture-app:lintFromDebug \
+  :device-fixture-app:lintToDebug \
+  :device-fixture-app:assembleFromDebug \
+  :device-fixture-app:assembleToDebug
 
 ./tools/check-decision-alignment.sh
 ./tools/test-kernelsu.sh
@@ -126,6 +129,9 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 ## 数据位置
 
 - 聚合状态：`/data/adb/uclone-slices-v2/packages/<package>/aggregate.json`
+- 签名身份：`/data/adb/uclone-slices-v2/packages/<package>/binding-v1.json`
+- 重绑 journal：`/data/adb/uclone-slices-v2/packages/<package>/rebind-intent.json`
+- 首次迁移备份：`/data/adb/uclone-slices-v2/state-backups/pre-0.1.7/<package>/`
 - CE 空间：`/data/misc_ce/0/uclone-slices-v2/slots/<package>/<slot>`
 - DE 空间：`/data/misc_de/0/uclone-slices-v2/slots/<package>/<slot>`
 - Runtime socket：`/data/adb/uclone-slices-v2/runtime.sock`

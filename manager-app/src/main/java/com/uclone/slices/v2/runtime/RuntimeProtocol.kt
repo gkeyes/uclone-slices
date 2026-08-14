@@ -8,6 +8,38 @@ enum class SeedMode(val wire: String) {
     CloneBase("clone_base"),
 }
 
+enum class SigningKind(val wire: String) {
+    Lineage("lineage"),
+    Multiple("multiple"),
+}
+
+data class SigningIdentity(
+    val kind: SigningKind,
+    val sha256: List<String>,
+) {
+    fun isValid(): Boolean =
+        sha256.isNotEmpty() &&
+            sha256.size <= 16 &&
+            sha256.distinct().size == sha256.size &&
+            sha256.all { digest ->
+                digest.length == 64 && digest.all { it in '0'..'9' || it in 'a'..'f' }
+            } &&
+            (kind != SigningKind.Multiple || (
+                sha256.size >= 2 && sha256 == sha256.sorted()
+            ))
+}
+
+enum class BindingState(val wire: String) {
+    Ready("ready"),
+    LegacyUnbound("legacy_unbound"),
+    RebindRequired("rebind_required"),
+    LegacyConfirmationRequired("legacy_confirmation_required");
+
+    companion object {
+        fun fromWire(value: String): BindingState = entries.first { it.wire == value }
+    }
+}
+
 data class SlotSnapshot(
     val id: String,
     val name: String,
@@ -18,14 +50,22 @@ data class PackageSnapshot(
     val activeSlot: String,
     val slots: List<SlotSnapshot>,
     val launchAfterReboot: Boolean = false,
+    val bindingState: BindingState = BindingState.LegacyUnbound,
 )
 
 sealed interface RuntimeCommand {
     data object Probe : RuntimeCommand
     data object ListPackages : RuntimeCommand
     data class GetPackage(val packageName: String) : RuntimeCommand
-    data class Enroll(val packageName: String) : RuntimeCommand
-    data class ResetEnrollment(val packageName: String) : RuntimeCommand
+    data class Enroll(
+        val packageName: String,
+        val signing: SigningIdentity,
+    ) : RuntimeCommand
+    data class RebindPackage(
+        val packageName: String,
+        val signing: SigningIdentity,
+        val trustLegacy: Boolean,
+    ) : RuntimeCommand
     data class Unenroll(val packageName: String) : RuntimeCommand
     data class SetLaunchAfterReboot(
         val packageName: String,
@@ -49,6 +89,7 @@ enum class ErrorCode(val wire: String) {
     InvalidRequest("invalid_request"),
     NotFound("not_found"),
     StateConflict("state_conflict"),
+    IdentityMismatch("identity_mismatch"),
     OperationFailed("operation_failed");
 
     companion object {
@@ -77,10 +118,12 @@ object RuntimeProtocol {
             is RuntimeCommand.Enroll -> JSONObject()
                 .put("op", "enroll")
                 .put("package", command.packageName)
-            is RuntimeCommand.ResetEnrollment -> JSONObject()
-                .put("op", "enroll")
+                .put("signing", encodeSigning(command.signing))
+            is RuntimeCommand.RebindPackage -> JSONObject()
+                .put("op", "rebind_package")
                 .put("package", command.packageName)
-                .put("reset", true)
+                .put("signing", encodeSigning(command.signing))
+                .put("trust_legacy", command.trustLegacy)
             is RuntimeCommand.Unenroll -> JSONObject()
                 .put("op", "unenroll")
                 .put("package", command.packageName)
@@ -109,6 +152,10 @@ object RuntimeProtocol {
         }
         return json.toString()
     }
+
+    private fun encodeSigning(signing: SigningIdentity): JSONObject = JSONObject()
+        .put("kind", signing.kind.wire)
+        .put("sha256", JSONArray(signing.sha256))
 
     fun decode(frame: String): RuntimeReply {
         val root = JSONObject(frame)
@@ -139,6 +186,10 @@ object RuntimeProtocol {
             activeSlot = json.getString("active_slot"),
             slots = parseSlots(json.getJSONArray("slots")),
             launchAfterReboot = json.optBoolean("launch_after_reboot", false),
+            bindingState = json.optString("binding_state")
+                .takeIf { it.isNotEmpty() }
+                ?.let(BindingState::fromWire)
+                ?: BindingState.LegacyUnbound,
         )
 
     private fun parseSlots(array: JSONArray): List<SlotSnapshot> =

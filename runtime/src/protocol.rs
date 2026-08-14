@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode, SlotId};
+use crate::model::{
+    Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode, SigningIdentity, SlotId,
+};
 use crate::ports::{AndroidOps, PackageStore, SlotStorage};
 use crate::usecases::{Runtime, RuntimeError};
 
@@ -16,6 +18,14 @@ pub enum Command {
         package: PackageName,
         #[serde(default)]
         reset: bool,
+        #[serde(default)]
+        signing: Option<SigningIdentity>,
+    },
+    RebindPackage {
+        package: PackageName,
+        signing: SigningIdentity,
+        #[serde(default)]
+        trust_legacy: bool,
     },
     Unenroll {
         package: PackageName,
@@ -59,6 +69,7 @@ pub enum ErrorCode {
     InvalidRequest,
     NotFound,
     StateConflict,
+    IdentityMismatch,
     OperationFailed,
 }
 
@@ -107,7 +118,8 @@ fn decode_command(line: &str) -> Result<Command, ()> {
     let allowed = match operation {
         "probe" | "list_packages" => &["op"][..],
         "get_package" => &["op", "package"][..],
-        "enroll" => &["op", "package", "reset"][..],
+        "enroll" => &["op", "package", "reset", "signing"][..],
+        "rebind_package" => &["op", "package", "signing", "trust_legacy"][..],
         "unenroll" => &["op", "package"][..],
         "set_launch_after_reboot" => &["op", "package", "enabled"][..],
         "create_slot" => &["op", "package", "name", "seed"][..],
@@ -123,6 +135,13 @@ fn decode_command(line: &str) -> Result<Command, ()> {
         && object
             .get("reset")
             .is_some_and(|reset| reset != &serde_json::Value::Bool(true))
+    {
+        return Err(());
+    }
+    if operation == "rebind_package"
+        && object
+            .get("trust_legacy")
+            .is_some_and(|trust| !trust.is_boolean())
     {
         return Err(());
     }
@@ -143,8 +162,19 @@ where
         Command::GetPackage { package } => runtime
             .get_package(&package)
             .map(|package| SuccessPayload::Package { package }),
-        Command::Enroll { package, reset } => runtime
-            .enroll(package, reset)
+        Command::Enroll {
+            package,
+            reset,
+            signing,
+        } => runtime
+            .enroll(package, reset, signing)
+            .map(|package| SuccessPayload::Package { package }),
+        Command::RebindPackage {
+            package,
+            signing,
+            trust_legacy,
+        } => runtime
+            .rebind_package(&package, signing, trust_legacy)
             .map(|package| SuccessPayload::Package { package }),
         Command::Unenroll { package } => runtime
             .unenroll(&package)
@@ -188,6 +218,7 @@ fn error_code(error: RuntimeError) -> ErrorCode {
         RuntimeError::InvalidRequest => ErrorCode::InvalidRequest,
         RuntimeError::NotFound => ErrorCode::NotFound,
         RuntimeError::StateConflict => ErrorCode::StateConflict,
+        RuntimeError::IdentityMismatch => ErrorCode::IdentityMismatch,
         RuntimeError::OperationFailed => ErrorCode::OperationFailed,
     }
 }
@@ -201,7 +232,6 @@ mod tests {
 
     use super::*;
     use crate::adapters::{MemoryAndroidOps, MemoryPackageStore, MemorySlotStorage};
-    use crate::model::ObservedView;
 
     #[test]
     fn shared_fixtures_cover_the_core_command_flow() {
@@ -310,6 +340,25 @@ mod tests {
     }
 
     #[test]
+    fn rebind_rejects_invalid_certificate_digests_and_unknown_signing_fields() {
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            MemoryAndroidOps::default(),
+        );
+
+        for request in [
+            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false}"#,
+            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false}"#,
+        ] {
+            assert_eq!(
+                handle_line(&mut runtime, request),
+                "{\"error\":{\"code\":\"invalid_request\"}}\n"
+            );
+        }
+    }
+
+    #[test]
     fn reset_marker_only_accepts_the_ui_backed_true_value() {
         let mut runtime = Runtime::new(
             MemoryPackageStore::default(),
@@ -326,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_reset_enroll_recovers_an_identity_conflict() {
+    fn old_reset_enroll_is_rejected_without_deleting_slots() {
         let package = PackageName::new("com.example.app").unwrap();
         let mut android = MemoryAndroidOps::default();
         android.install(package.clone());
@@ -335,7 +384,7 @@ mod tests {
             MemorySlotStorage::default(),
             android,
         );
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
         let created = runtime
             .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
             .unwrap();
@@ -343,20 +392,32 @@ mod tests {
         let (packages, slots, mut android) = runtime.into_parts();
         android.change_identity(&package);
         let mut runtime = Runtime::new(packages, slots, android);
-        assert_eq!(
-            runtime.get_package(&package),
-            Err(RuntimeError::StateConflict)
-        );
-
         let request = fixture("enroll_reset.request.json".to_owned());
         let expected = fixture("enroll_reset.response.json".to_owned());
         let actual = handle_line(&mut runtime, request.trim());
 
         assert_eq!(actual.trim(), expected.trim());
-        let (_packages, slots, android) = runtime.into_parts();
-        assert_eq!(slots.domain_state(&package, &target), None);
-        assert_eq!(android.view(&package), Some(&ObservedView::Base));
-        assert!(!android.is_running(&package));
+        let (_packages, slots, _android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+    }
+
+    #[test]
+    fn shared_rebind_fixture_preserves_the_existing_slot() {
+        let package = PackageName::new("com.example.app").unwrap();
+        let mut runtime = runtime_with_slot();
+        let target = SlotId::numbered(1);
+        runtime.activate_slot(&package, &target).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let request = fixture("rebind_package.request.json".to_owned());
+        let expected = fixture("rebind_package.response.json".to_owned());
+        let actual = handle_line(&mut runtime, request.trim());
+
+        assert_eq!(actual.trim(), expected.trim());
+        let (_packages, slots, _android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
     }
 
     fn fixture(name: String) -> String {
@@ -375,7 +436,7 @@ mod tests {
             MemorySlotStorage::default(),
             android,
         );
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
         runtime
             .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
             .unwrap();

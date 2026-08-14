@@ -1,102 +1,71 @@
-# 0.1.6 真机验收清单
+# 0.1.7 升降级无损验收清单
 
-这份清单由用户在当前 Android 16 / API 36 / arm64 KernelSU 设备执行。失败时先取证，不先运行强启脚本。
+这份清单用于 Android 16 / API 36 / arm64 KernelSU 真机。所有 APK 和模块必须来自同一个 `Validate V2` 提交 SHA；失败时先保存只读证据，不卸载、不清数据、不执行旧的 `enroll reset`。
 
-## 安装
+## 1. 安装前只读备份
 
-1. 安装 `uclone-slices-v2-manager-0.1.6.apk`。
-2. 安装 `uclone-slices-v2-fixture-0.1.6-debug.apk`。
-3. 刷入 `uclone-slices-v2-kernelsu.zip`。
-4. 重启并解锁 user0，不运行 `force-start-runtime.sh`。
-5. 打开 Manager，确认显示 `Runtime 0.1.6`。
+1. 记录设备、Manager、Runtime、KernelSU 模块版本和待测提交 SHA。
+2. 比较手机现有 Manager 与下载 Release APK 的签名证书。若不匹配，只对下载 APK 使用已验证匹配手机的本地 keystore 重签。
+3. 保存以下内容到带时间戳的设备外目录：
+   - `/data/adb/uclone-slices-v2/packages/*/aggregate.json`
+   - 已存在的 `binding-v1.json` 与 `rebind-intent.json`
+   - `/data/misc_ce/0/uclone-slices-v2/slots`、`/data/misc_de/0/uclone-slices-v2/slots` 的目录清单
+   - `/proc/self/mountinfo` 中两个 Slices 槽根相关记录
+4. 只核对文件和目录，不复制、移动、挂载或删除账号数据。
 
-## Fixture 主链路
+## 2. 用固定 0.1.6 基线制造旧配置
 
-1. 打开 Fixture，写入 `CE=base-ce`、`DE=base-de`。
-2. 在 Manager 登记 Fixture。
-3. 创建空白槽并切换，确认 Fixture 显示两个值均为 `<absent>`。
-4. 在该槽写入 `CE=slot-a-ce`、`DE=slot-a-de`。
-5. 切回 Base，确认仍为 `base-ce/base-de`。
-6. 在 Base 上创建“复制 Base”槽，切换后确认初始值与 Base 相同。
-7. 修改副本内容，再切回 Base，确认 Base 内容没有变化。
-8. 再创建一个空白槽，完成 `Slot A → Slot B → Slot A`，每次 CE/DE 都与目标槽一致。
+1. 安装 artifact 中 `e0d4683` 的 0.1.6 Manager、Fixture 和模块，重启并解锁 user0。
+2. 在 `fixture-from-0.1.6` 的 Base 写入 `base-ce/base-de`，登记 Fixture，创建并切换“旧账号”，写入 `account-ce/account-de`。
+3. 记下 `aggregate.json`、活动槽 ID、账号名称、CE/DE 槽对和重启启动开关。
+4. 使用同一次 CI 生成且同签名的 `fixture-to-0.1.7` 覆盖升级；确认 0.1.6 Runtime 可复现旧配置从列表隐藏，但 CE/DE 槽目录和 Aggregate 仍存在。
 
-## 重命名与删除
+## 3. 升级到 0.1.7 并无损重新绑定
 
-1. 保持 Slot A 为当前槽，通过三点菜单将其重命名为“当前账号”，确认槽 ID 和 Fixture 的 CE/DE 内容均未变化。
-2. 将非活动 Slot B 重命名为“备用账号”，重启 Manager 后确认名称仍然存在。
-3. 打开“备用账号”的删除弹窗后先取消，确认以下两个目录仍存在：
-   - `/data/misc_ce/0/uclone-slices-v2/slots/com.uclone.slices.fixture/<slot-id>`
-   - `/data/misc_de/0/uclone-slices-v2/slots/com.uclone.slices.fixture/<slot-id>`
-4. 再次确认永久删除，确认两个目录均已消失，列表中只移除“备用账号”。
-5. 启动“当前账号”，确认其 CE/DE 内容保持不变。
-6. 确认系统原始空间没有管理菜单，当前普通槽的菜单只有重命名、没有删除。
+1. 覆盖安装提交 SHA 对应的 0.1.7 Manager，刷入同 SHA 模块并重启。
+2. 确认 Manager 显示 `Runtime 0.1.7`，旧 Fixture 账号重新出现在列表，账号名称和活动槽未丢失。
+3. 对 `legacy_confirmation_required` 对话框核对旧账号列表；输入错误文字不能继续，输入“绑定”后执行“保留分空间并重新绑定”。
+4. 确认重新绑定后：
+   - Base 与普通槽的 CE/DE 标识均保持原值；
+   - 活动槽、账号名称和重启启动开关保持不变；
+   - App 没有被自动启动；
+   - `binding-v1.json` 已生成，`rebind-intent.json` 已清除；
+   - `state-backups/pre-0.1.7/<package>/` 含原 Aggregate 和 CE/DE 槽对清单。
 
-## 首页快捷切换与取消配置
+## 4. 自动升级与降级
 
-1. 为 Fixture 保留 Base、Slot A、Slot B 三个空间，并分别写入不同的 CE/DE 标识。
-2. 返回首页，点击“展开账号”，确认 Base 固定排在第一位并显示为“原始空间”，当前空间只有一个高亮。
-3. 依次点击 `Slot A → Slot B → 原始空间`，确认每次都停留在首页、自动启动 Fixture，且 Fixture 读取到目标 CE/DE 标识。
-4. 点击当前高亮空间，确认只重新启动当前空间，不改变高亮。
-5. 展开状态下关闭并强制停止 Manager，重新打开后确认仍为展开；手动收起后再次强制停止并打开，确认仍为收起。
-6. 切到 Slot A，在 Fixture 行的三点菜单选择“取消配置并删除分空间”；输入错误文字确认不能执行，再输入“删除”确认。
-7. 确认 Fixture 回到未配置应用，以下路径均不存在：
-   - `/data/misc_ce/0/uclone-slices-v2/slots/com.uclone.slices.fixture`
-   - `/data/misc_de/0/uclone-slices-v2/slots/com.uclone.slices.fixture`
-   - `/data/adb/uclone-slices-v2/packages/com.uclone.slices.fixture`
-8. 直接打开 Fixture，确认 Base 的 CE/DE 标识仍存在；确认 APK 未卸载，其他已配置应用不受影响。
+1. 再次安装 `fixture-to-0.1.7`，打开 Manager，确认签名兼容时自动重新绑定且 App 不启动。
+2. 使用 `adb install -r -d` 安装 `fixture-from-0.1.6`，再次确认自动重新绑定。
+3. 两个方向都核对账号名称、活动槽、CE/DE 标识和重启启动开关不变。
+4. 准备第二个已配置 App，只替换 Fixture；确认另一个 App 的 Aggregate、槽和挂载没有被重绑流程改动。
+5. 将 Fixture 的 CE 或 DE 测试副本制造缺失仅限隔离 QA 数据时，确认 Runtime 返回 `state_conflict` 且不删除另一半、不写入新身份。不要对真实账号执行此破坏性场景。
 
-## 重启恢复与单 App 启动开关
+## 5. 手动与重启语义回归
 
-1. 准备 Fixture 和另一个普通第三方 App，两者都保持普通分空间为当前空间，并记录当前空间及可识别数据。
-2. 在 Fixture 的三点菜单关闭“重启后自动切换并打开 App”，在另一个 App 的三点菜单开启；强制停止并重新打开 Manager，确认两个 Switch 状态保持不变。
-3. 重启、解锁，不运行强启脚本，也不手动打开这两个目标 App。
-4. 打开 Manager，确认仍显示 `Runtime 0.1.6`，两个 App 均恢复到重启前的普通分空间。
-5. 使用 `pidof <package>` 确认只有开启开关的 App 已启动；Fixture 没有进程，但 CE/DE 已切换到重启前空间。
-6. 在首页点击 Fixture 当前账户，确认仍会启动 Fixture 且读取到目标 CE/DE 数据，证明手动“点击账户 → 切换并启动”不受开关影响。
-7. 保持另一个 App 的开关开启，手动切回系统原始空间后再次重启；打开 Manager，确认该 App 不会因开关开启而自动启动。
-8. 如果设备仍保留 `com.xingin.xhs` 的 V2 记录，确认它可以进入详情并手动启动当前槽。
+1. 保持 Fixture 的“重启后自动切换并打开 App”关闭，另一个非 Base App 开启。
+2. 重启并解锁后打开 Manager：两者都恢复原活动槽，只有开启开关的 App 有进程。
+3. 手动点击 Fixture 的账号，确认仍发送 `activate_slot`、切换并启动 App；新开关和重新绑定均不得改变该语义。
+4. 切回 Base 并保持开关开启后重启，确认 Base 永不自动启动。
+5. Manager 与模块故意混装 0.1.6/0.1.7 时，只允许查看已有状态；登记、重绑、删除、切换和开关保存均被拦截，并提示先升级模块。
 
-## 异常登记恢复
+## 6. 双向配置兼容和最终状态
 
-1. 在 Fixture 的 Base 写入可识别的 CE/DE 内容，再创建并切换到一个普通槽，写入另一组内容。
-2. 使用当前候选 Fixture APK 执行一次覆盖安装，使 APK 身份变化。
-3. 以 root 运行 `probe-registration.sh com.uclone.slices.fixture`，确认结果为 `package_identity_changed`。
-4. 在 Manager 点击 Fixture，确认出现“重新登记应用”对话框，先点取消；确认旧 CE/DE 槽目录仍存在。
-5. 再次点击并确认“清理并重新登记”，确认进入仅含 Base 的详情，Base CE/DE 内容仍可读取。
-6. 确认 `/data/misc_ce/0/uclone-slices-v2/slots/com.uclone.slices.fixture` 与 `/data/misc_de/0/uclone-slices-v2/slots/com.uclone.slices.fixture` 均已删除。
-7. 重新创建并切换一个空白槽，确认新槽从 `slot-1` 开始且 CE/DE 均可正常使用。
+1. 降回 CI 构建的 0.1.6 Manager 与模块，确认 `aggregate.json` 可读取，账号数据与 CE/DE 槽仍存在；0.1.6 会忽略独立 sidecar。
+2. 不在 0.1.6 中对身份变化记录执行旧清理恢复。
+3. 重新覆盖安装 0.1.7 Manager、刷入 0.1.7 模块并重启，作为最终设备状态。
+4. 最终记录 Manager `versionName/versionCode`、Runtime build ID、模块版本、提交 SHA、所有产物 SHA-256 和关键账号的 CE/DE 标识。
 
-## 失败时的探针
+## 失败处理
 
-在任何强启或再次刷包之前，以 root 运行：
-
-```sh
-sh /data/local/tmp/diagnose-runtime.sh
-sh /data/local/tmp/probe-registration.sh com.uclone.slices.fixture
-```
-
-保存完整输出，并记录：
-
-- 失败发生在首次重启还是第二次重启。
-- Manager 显示的文字。
-- 是否已经解锁 user0。
-- 哪个包、哪个槽、执行了什么操作。
-
-只有取证完成后才运行 `force-start-runtime.sh` 临时恢复。探针没有确认原因前不继续修改 Runtime 或启动脚本。
+- `identity_mismatch`：旧分空间保持不动，保存当前 UID、APK 路径/inode 和 Manager 读取的证书摘要；不要提供修复或清理按钮。
+- `state_conflict`：保存 Aggregate、journal、CE/DE 清单、mountinfo 和 Runtime 日志；不要继续重绑。
+- 安装签名不匹配：停止安装，按证书门禁重签已下载 Release APK；不要卸载或清数据。
+- CI 或真机失败只能报告已验证根因和聚焦修复，不把源码/CI 通过写成真机已通过。
 
 ## 通过条件
 
-- 两次重启后均不需要强启脚本。
-- 空白槽、Base 副本、Base 与两个普通槽的 CE/DE 视图全部正确。
-- Manager 能区分“Runtime 未连接”和“Runtime 操作失败”。
-- 普通槽重命名不改变数据，非活动普通槽删除会同时清理 CE/DE。
-- Base 和当前活动槽不能删除。
-- 首页展开状态持久化，快捷切换留在首页并且只高亮真实 Runtime 快照中的当前空间。
-- 重启后所有非 Base 当前空间都会恢复；默认关闭时不启动 App，仅开启开关的非 Base App 会启动，Base 永不自动启动。
-- 关闭重启启动开关不会影响首页或详情页手动点击账户后的切换与启动。
-- 取消配置会先回到 Base，再删除该 App 的全部 CE/DE 分空间和登记；APK、Base 与其他包保持不变。
-- Fixture 身份变化后可以由用户确认清理旧槽并恢复登记，Base 数据保持不变。
-- 小红书已有记录可以进入详情，或明确由探针证明是 App 身份变化。
-
-全部通过后，0.1.6 可以从预发布提升为正式 Release。
+- 正常升级和降级均无损保留所有账号元数据、CE/DE 数据、活动槽和重启启动开关。
+- 0.1.6 旧配置只需一次“绑定”确认，不再删除账号。
+- UID、签名、槽对或真实视图不满足条件时零删除、零错误接管。
+- 重新绑定不启动 App；手动点击账号仍切换并启动；重启开关语义保持不变。
+- 0.1.6 与 0.1.7 Aggregate 双向可读，混装时危险操作被拦截。

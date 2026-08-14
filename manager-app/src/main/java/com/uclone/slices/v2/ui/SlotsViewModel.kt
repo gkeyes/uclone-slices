@@ -1,8 +1,10 @@
 package com.uclone.slices.v2.ui
 
 import androidx.lifecycle.ViewModel
+import com.uclone.slices.v2.BuildConfig
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
+import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.RuntimeClient
@@ -53,7 +55,7 @@ sealed interface OperationUiState {
         val appLabel: String,
     ) : OperationUiState
     data class SavingRebootLaunch(val packageName: String) : OperationUiState
-    data class RepairingConfiguration(val packageName: String) : OperationUiState
+    data class RebindingConfiguration(val packageName: String) : OperationUiState
 }
 
 sealed interface UiNotice {
@@ -63,8 +65,11 @@ sealed interface UiNotice {
     data object MissingEntity : UiNotice
     data object StateChanged : UiNotice
     data object OperationFailed : UiNotice
+    data object IdentityProtected : UiNotice
+    data object SigningUnavailable : UiNotice
+    data object RuntimeVersionMismatch : UiNotice
     data object ConfigurationCompleted : UiNotice
-    data object ConfigurationRepaired : UiNotice
+    data object ConfigurationRebound : UiNotice
     data class SpaceCreated(val name: String) : UiNotice
     data class SpaceActivated(
         val name: String,
@@ -104,6 +109,7 @@ data class UnenrollAppUi(
 data class SlotsUiState(
     val destination: ManagerDestination = ManagerDestination.Spaces,
     val runtimeReady: Boolean = false,
+    val runtimeCompatible: Boolean = false,
     val buildId: String = "",
     val initialLoadComplete: Boolean = false,
     val configuredAccountsExpanded: Boolean = false,
@@ -122,6 +128,8 @@ data class SlotsUiState(
 ) {
     val busy: Boolean
         get() = operation !is OperationUiState.Idle
+    val operationsAllowed: Boolean
+        get() = runtimeReady && runtimeCompatible
 }
 
 sealed interface UiIntent {
@@ -198,8 +206,8 @@ internal class SlotsViewModel(
                 quickActivateSlot(intent.packageName, intent.slotId)
             UiIntent.NavigateBack -> navigateBack()
             is UiIntent.RequestConfigureApp -> {
-                if (!state.value.runtimeReady) {
-                    mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+                if (!state.value.operationsAllowed) {
+                    showUnavailableOrMismatch()
                 } else if (!state.value.busy) {
                     mutableState.update {
                         it.copy(pendingConfigurationPackage = intent.packageName, notice = null)
@@ -286,15 +294,37 @@ internal class SlotsViewModel(
             mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
             return
         }
-        if (snapshot.packages.none { it.packageName == packageName }) {
+        val configured = snapshot.packages.firstOrNull { it.packageName == packageName }
+        if (configured == null) {
+            if (!snapshot.runtimeCompatible) {
+                mutableState.update { it.copy(notice = UiNotice.RuntimeVersionMismatch) }
+                return
+            }
             mutableState.update {
                 it.copy(pendingConfigurationPackage = packageName, notice = null)
             }
             return
         }
+        if (!snapshot.runtimeCompatible) {
+            mutableState.update {
+                it.copy(
+                    selected = configured,
+                    destination = ManagerDestination.PackageDetails,
+                    notice = UiNotice.RuntimeVersionMismatch,
+                )
+            }
+            return
+        }
+        if (configured.bindingState == BindingState.LegacyConfirmationRequired) {
+            showLegacyRebind(configured)
+            return
+        }
+        if (configured.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            return
+        }
         runOperation(OperationUiState.OpeningPackage(packageName)) {
             applyOpenPackageReply(
-                packageName = packageName,
                 reply = client.execute(RuntimeCommand.GetPackage(packageName)),
                 successNotice = null,
             )
@@ -303,15 +333,18 @@ internal class SlotsViewModel(
 
     private fun confirmConfigureApp() {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         val packageName = snapshot.pendingConfigurationPackage ?: return
+        val signing = signingFor(packageName) ?: run {
+            mutableState.update { it.copy(notice = UiNotice.SigningUnavailable) }
+            return
+        }
         runOperation(OperationUiState.Configuring(packageName)) {
             applyOpenPackageReply(
-                packageName = packageName,
-                reply = client.execute(RuntimeCommand.Enroll(packageName)),
+                reply = client.execute(RuntimeCommand.Enroll(packageName, signing)),
                 successNotice = UiNotice.ConfigurationCompleted,
             )
         }
@@ -319,11 +352,16 @@ internal class SlotsViewModel(
 
     private fun createSlot() {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
-        val packageName = snapshot.selected?.packageName ?: return
+        val selected = snapshot.selected ?: return
+        val packageName = selected.packageName
+        if (selected.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            return
+        }
         val name = snapshot.slotName.trim()
         if (name.isEmpty()) {
             mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
@@ -340,11 +378,15 @@ internal class SlotsViewModel(
 
     private fun activateSlot(slotId: String) {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         val selected = snapshot.selected ?: return
+        if (selected.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            return
+        }
         val targetName = selected.slots
             .firstOrNull { it.id == slotId }
             ?.let(::spaceDisplayName)
@@ -362,8 +404,8 @@ internal class SlotsViewModel(
 
     private fun quickActivateSlot(packageName: String, slotId: String) {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         if (snapshot.busy) return
@@ -373,6 +415,10 @@ internal class SlotsViewModel(
         val target = packageSnapshot?.slots?.firstOrNull { it.id == slotId }
         if (packageSnapshot == null || target == null) {
             mutableState.update { it.copy(notice = UiNotice.MissingEntity) }
+            return
+        }
+        if (packageSnapshot.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
             return
         }
         val targetName = spaceDisplayName(target)
@@ -387,13 +433,20 @@ internal class SlotsViewModel(
 
     private fun setLaunchAfterReboot(packageName: String, enabled: Boolean) {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         if (snapshot.busy) return
-        if (snapshot.packages.none { it.packageName == packageName }) {
+        val packageSnapshot = snapshot.packages.firstOrNull {
+            it.packageName == packageName
+        }
+        if (packageSnapshot == null) {
             mutableState.update { it.copy(notice = UiNotice.MissingEntity) }
+            return
+        }
+        if (packageSnapshot.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
             return
         }
         runOperation(OperationUiState.SavingRebootLaunch(packageName)) {
@@ -406,12 +459,16 @@ internal class SlotsViewModel(
 
     private fun requestRenameSlot(slotId: String) {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         if (snapshot.busy || slotId == BASE_SLOT_ID) return
         val selected = snapshot.selected ?: return
+        if (selected.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            return
+        }
         val slot = selected.slots.firstOrNull { it.id == slotId } ?: return
         mutableState.update {
             it.copy(
@@ -428,11 +485,18 @@ internal class SlotsViewModel(
 
     private fun confirmRenameSlot() {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         val pending = snapshot.pendingRename ?: return
+        if (snapshot.packages.none {
+                it.packageName == pending.packageName && it.bindingState == BindingState.Ready
+            }
+        ) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            return
+        }
         val name = pending.name.trim()
         if (name.isEmpty() || name == pending.originalName) {
             mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
@@ -450,12 +514,16 @@ internal class SlotsViewModel(
 
     private fun requestDeleteSlot(slotId: String) {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         if (snapshot.busy || slotId == BASE_SLOT_ID) return
         val selected = snapshot.selected ?: return
+        if (selected.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            return
+        }
         if (slotId == selected.activeSlot) return
         val slot = selected.slots.firstOrNull { it.id == slotId } ?: return
         mutableState.update {
@@ -473,11 +541,18 @@ internal class SlotsViewModel(
 
     private fun confirmDeleteSlot() {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         val pending = snapshot.pendingDelete ?: return
+        if (snapshot.packages.none {
+                it.packageName == pending.packageName && it.bindingState == BindingState.Ready
+            }
+        ) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            return
+        }
         val packageName = pending.packageName
         val slotId = pending.slotId
         val name = pending.name
@@ -491,8 +566,8 @@ internal class SlotsViewModel(
 
     private fun requestUnenrollApp(packageName: String) {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         if (snapshot.busy) return
@@ -522,12 +597,12 @@ internal class SlotsViewModel(
 
     private fun confirmUnenrollApp() {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         val pending = snapshot.pendingUnenroll ?: return
-        if (pending.confirmation != RECOVERY_CONFIRMATION) {
+        if (pending.confirmation != DELETION_CONFIRMATION) {
             mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
             return
         }
@@ -544,20 +619,24 @@ internal class SlotsViewModel(
 
     private fun confirmRegistrationRecovery() {
         val snapshot = state.value
-        if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
             return
         }
         val recovery = snapshot.registrationRecovery ?: return
-        if (recovery.confirmation != RECOVERY_CONFIRMATION) {
+        if (recovery.confirmation != BINDING_CONFIRMATION) {
             mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
             return
         }
         val packageName = recovery.packageName
-        runOperation(OperationUiState.RepairingConfiguration(packageName)) {
+        val signing = signingFor(packageName) ?: run {
+            mutableState.update { it.copy(notice = UiNotice.SigningUnavailable) }
+            return
+        }
+        runOperation(OperationUiState.RebindingConfiguration(packageName)) {
             applyPackageReply(
-                client.execute(RuntimeCommand.ResetEnrollment(packageName)),
-                successNotice = UiNotice.ConfigurationRepaired,
+                client.execute(RuntimeCommand.RebindPackage(packageName, signing, true)),
+                successNotice = UiNotice.ConfigurationRebound,
             )
         }
     }
@@ -633,7 +712,16 @@ internal class SlotsViewModel(
         when (val probe = client.execute(RuntimeCommand.Probe)) {
             is RuntimeReply.Capabilities -> {
                 mutableState.update {
-                    it.copy(runtimeReady = true, buildId = probe.buildId)
+                    it.copy(
+                        runtimeReady = true,
+                        runtimeCompatible = probe.buildId == BuildConfig.VERSION_NAME,
+                        buildId = probe.buildId,
+                        notice = if (probe.buildId == BuildConfig.VERSION_NAME) {
+                            it.notice
+                        } else {
+                            UiNotice.RuntimeVersionMismatch
+                        },
+                    )
                 }
                 refreshPackages()
             }
@@ -648,13 +736,19 @@ internal class SlotsViewModel(
 
     private suspend fun refreshPackages() {
         when (val reply = client.execute(RuntimeCommand.ListPackages)) {
-            is RuntimeReply.Packages -> mutableState.update { current ->
+            is RuntimeReply.Packages -> {
+                val packages = if (state.value.runtimeCompatible) {
+                    reconcileBindings(reply.packages)
+                } else {
+                    reply.packages
+                }
+                mutableState.update { current ->
                 val selectedPackage = current.selected?.packageName
-                val selected = reply.packages.firstOrNull {
+                val selected = packages.firstOrNull {
                     it.packageName == selectedPackage
                 }
                 current.copy(
-                    packages = reply.packages.sortedBy(PackageSnapshot::packageName),
+                    packages = packages.sortedBy(PackageSnapshot::packageName),
                     selected = selected,
                     seed = if (selected?.activeSlot == BASE_SLOT_ID) {
                         current.seed
@@ -673,6 +767,7 @@ internal class SlotsViewModel(
                     pendingDelete = null,
                     pendingUnenroll = null,
                 )
+                }
             }
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
@@ -683,34 +778,74 @@ internal class SlotsViewModel(
         }
     }
 
-    private fun applyOpenPackageReply(
-        packageName: String,
-        reply: RuntimeReply,
-        successNotice: UiNotice?,
-    ) {
-        if (reply == RuntimeReply.Error(ErrorCode.StateConflict)) {
-            val affectedSpaces = state.value.packages
-                .firstOrNull { it.packageName == packageName }
-                ?.slots
-                .orEmpty()
-                .filterNot { it.id == BASE_SLOT_ID }
-                .map(::spaceDisplayName)
-            mutableState.update {
-                it.copy(
-                    registrationRecovery = RegistrationRecoveryUi(
-                        packageName = packageName,
-                        affectedSpaces = affectedSpaces,
-                    ),
-                    pendingConfigurationPackage = null,
-                    notice = null,
-                    pendingRename = null,
-                    pendingDelete = null,
-                    pendingUnenroll = null,
-                )
-            }
-        } else {
-            applyPackageReply(reply, successNotice)
+    private suspend fun reconcileBindings(
+        snapshots: List<PackageSnapshot>,
+    ): List<PackageSnapshot> = snapshots.map { snapshot ->
+        if (
+            snapshot.bindingState != BindingState.LegacyUnbound &&
+            snapshot.bindingState != BindingState.RebindRequired
+        ) {
+            return@map snapshot
         }
+        val signing = signingFor(snapshot.packageName)
+        if (signing == null) {
+            mutableState.update { it.copy(notice = UiNotice.SigningUnavailable) }
+            return@map snapshot
+        }
+        when (
+            val reply = client.execute(
+                RuntimeCommand.RebindPackage(snapshot.packageName, signing, false),
+            )
+        ) {
+            is RuntimeReply.Package -> reply.packageSnapshot
+            is RuntimeReply.Error -> {
+                showError(reply.code)
+                snapshot
+            }
+            RuntimeReply.TransportFailure -> {
+                showTransportFailure()
+                snapshot
+            }
+            else -> {
+                showError(ErrorCode.OperationFailed)
+                snapshot
+            }
+        }
+    }
+
+    private fun showLegacyRebind(snapshot: PackageSnapshot) {
+        mutableState.update {
+            it.copy(
+                registrationRecovery = RegistrationRecoveryUi(
+                    packageName = snapshot.packageName,
+                    affectedSpaces = snapshot.slots
+                        .filterNot { slot -> slot.id == BASE_SLOT_ID }
+                        .map(::spaceDisplayName),
+                ),
+                pendingConfigurationPackage = null,
+                notice = null,
+            )
+        }
+    }
+
+    private fun signingFor(packageName: String) = state.value.installedApps
+        .firstOrNull { it.packageName == packageName }
+        ?.signingIdentity
+
+    private fun showUnavailableOrMismatch() {
+        mutableState.update {
+            it.copy(
+                notice = if (it.runtimeReady) {
+                    UiNotice.RuntimeVersionMismatch
+                } else {
+                    UiNotice.RuntimeUnavailable
+                },
+            )
+        }
+    }
+
+    private fun applyOpenPackageReply(reply: RuntimeReply, successNotice: UiNotice?) {
+        applyPackageReply(reply, successNotice)
     }
 
     private fun applyPackageReply(
@@ -820,6 +955,7 @@ internal class SlotsViewModel(
             ErrorCode.InvalidRequest -> UiNotice.InvalidInput
             ErrorCode.NotFound -> UiNotice.MissingEntity
             ErrorCode.StateConflict -> UiNotice.StateChanged
+            ErrorCode.IdentityMismatch -> UiNotice.IdentityProtected
             ErrorCode.OperationFailed -> UiNotice.OperationFailed
         }
         mutableState.update { it.copy(notice = notice) }
@@ -829,6 +965,7 @@ internal class SlotsViewModel(
         mutableState.update {
             it.copy(
                 runtimeReady = false,
+                runtimeCompatible = false,
                 notice = UiNotice.RuntimeUnavailable,
                 pendingRename = null,
                 pendingDelete = null,
@@ -839,4 +976,5 @@ internal class SlotsViewModel(
 }
 
 internal const val BASE_SLOT_ID = "base"
-internal const val RECOVERY_CONFIRMATION = "删除"
+internal const val DELETION_CONFIRMATION = "删除"
+internal const val BINDING_CONFIRMATION = "绑定"

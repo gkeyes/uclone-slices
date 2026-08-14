@@ -1,1 +1,1 @@
-{"ok":{"package":{"package":"com.example.app","active_slot":"base","launch_after_reboot":false,"slots":[{"id":"base","name":"Base"}]}}}
+{"error":{"code":"invalid_request"}}

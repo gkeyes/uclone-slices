@@ -363,7 +363,7 @@ private fun UnenrollAppDialog(
                     show.value = false
                     onConfirm()
                 },
-                enabled = unenrollment.confirmation == RECOVERY_CONFIRMATION,
+                enabled = unenrollment.confirmation == DELETION_CONFIRMATION,
                 danger = true,
                 modifier = Modifier.weight(1f),
             )
@@ -433,17 +433,17 @@ private fun RegistrationRecoveryDialog(
     onDismiss: () -> Unit,
 ) {
     val affectedSummary = if (recovery.affectedSpaces.isEmpty()) {
-        stringResource(R.string.reset_no_named_spaces)
+        stringResource(R.string.rebind_no_named_spaces)
     } else {
         stringResource(
-            R.string.reset_affected_spaces,
+            R.string.rebind_affected_spaces,
             recovery.affectedSpaces.joinToString("、"),
         )
     }
     val show = remember(recovery.packageName) { mutableStateOf(true) }
     SuperDialog(
         show = show,
-        title = stringResource(R.string.reset_title),
+        title = stringResource(R.string.rebind_title),
         onDismissRequest = {
             show.value = false
             onDismiss()
@@ -452,34 +452,34 @@ private fun RegistrationRecoveryDialog(
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
                 text = stringResource(
-                    R.string.reset_message,
+                    R.string.rebind_message,
                     recovery.packageName,
                 ),
             )
             SlicesPanel(
                 insideMargin = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 cornerRadius = 14.dp,
-                color = MaterialTheme.colorScheme.errorContainer,
+                color = MaterialTheme.colorScheme.primaryContainer,
             ) {
                 Text(
                     text = affectedSummary,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
             Text(
-                text = stringResource(R.string.reset_base_preserved),
+                text = stringResource(R.string.rebind_data_preserved),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             SlicesInputField(
                 value = recovery.confirmation,
                 onValueChange = onConfirmationChanged,
-                label = stringResource(R.string.reset_confirmation_label),
+                label = stringResource(R.string.rebind_confirmation_label),
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
-                text = stringResource(R.string.reset_confirmation_hint),
+                text = stringResource(R.string.rebind_confirmation_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -499,13 +499,13 @@ private fun RegistrationRecoveryDialog(
                 modifier = Modifier.weight(1f),
             )
             SlicesTextAction(
-                text = stringResource(R.string.reset_confirm),
+                text = stringResource(R.string.rebind_confirm),
                 onClick = {
                     show.value = false
                     onConfirm()
                 },
-                enabled = recovery.confirmation == RECOVERY_CONFIRMATION,
-                danger = true,
+                enabled = recovery.confirmation == BINDING_CONFIRMATION,
+                primary = true,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -536,8 +536,8 @@ private fun OperationDialog(operation: OperationUiState) {
             stringResource(R.string.operation_unenrolling, operation.appLabel)
         is OperationUiState.SavingRebootLaunch ->
             stringResource(R.string.operation_saving_reboot_launch)
-        is OperationUiState.RepairingConfiguration ->
-            stringResource(R.string.operation_repairing)
+        is OperationUiState.RebindingConfiguration ->
+            stringResource(R.string.operation_rebinding)
     }
     val show = remember(operation) { mutableStateOf(true) }
     SuperDialog(
@@ -561,6 +561,7 @@ private fun OperationDialog(operation: OperationUiState) {
 @Composable
 internal fun RuntimeStatusCard(
     runtimeReady: Boolean,
+    runtimeCompatible: Boolean,
     busy: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
@@ -568,18 +569,21 @@ internal fun RuntimeStatusCard(
 ) {
     val accentColor = when {
         busy -> MaterialTheme.colorScheme.primary
-        runtimeReady -> SlicesSuccess
+        runtimeReady && runtimeCompatible -> SlicesSuccess
         else -> SlicesWarning
     }
     val title = when {
         busy -> stringResource(R.string.environment_processing)
+        runtimeReady && !runtimeCompatible ->
+            stringResource(R.string.environment_version_mismatch)
         runtimeReady -> stringResource(R.string.environment_ready)
         else -> stringResource(R.string.environment_unavailable)
     }
-    val description = if (runtimeReady) {
-        stringResource(R.string.environment_ready_description)
-    } else {
-        stringResource(R.string.environment_unavailable_description)
+    val description = when {
+        runtimeReady && !runtimeCompatible ->
+            stringResource(R.string.environment_version_mismatch_description)
+        runtimeReady -> stringResource(R.string.environment_ready_description)
+        else -> stringResource(R.string.environment_unavailable_description)
     }
 
     SlicesPanel(
@@ -664,7 +668,7 @@ private fun NoticeBar(
     onIntent: (UiIntent) -> Unit,
 ) {
     val success = notice is UiNotice.ConfigurationCompleted ||
-        notice is UiNotice.ConfigurationRepaired ||
+        notice is UiNotice.ConfigurationRebound ||
         notice is UiNotice.SpaceCreated ||
         notice is UiNotice.SpaceActivated ||
         notice is UiNotice.SpaceRenamed ||
@@ -726,8 +730,11 @@ private fun noticeMessage(notice: UiNotice): String = when (notice) {
     UiNotice.MissingEntity -> stringResource(R.string.error_missing_entity)
     UiNotice.StateChanged -> stringResource(R.string.error_state_changed)
     UiNotice.OperationFailed -> stringResource(R.string.error_operation_failed)
+    UiNotice.IdentityProtected -> stringResource(R.string.error_identity_protected)
+    UiNotice.SigningUnavailable -> stringResource(R.string.error_signing_unavailable)
+    UiNotice.RuntimeVersionMismatch -> stringResource(R.string.error_runtime_version_mismatch)
     UiNotice.ConfigurationCompleted -> stringResource(R.string.success_configured)
-    UiNotice.ConfigurationRepaired -> stringResource(R.string.success_repaired)
+    UiNotice.ConfigurationRebound -> stringResource(R.string.success_rebound)
     is UiNotice.SpaceCreated -> stringResource(R.string.success_created, notice.name)
     is UiNotice.SpaceActivated -> if (notice.switched) {
         stringResource(R.string.success_switched, notice.name)

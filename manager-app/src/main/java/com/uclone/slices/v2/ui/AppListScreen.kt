@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
+import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import top.yukonga.miuix.kmp.basic.IconButton
 
@@ -72,6 +73,7 @@ internal fun AppListScreen(
         item {
             RuntimeStatusCard(
                 runtimeReady = state.runtimeReady,
+                runtimeCompatible = state.runtimeCompatible,
                 busy = state.busy,
                 enabled = !state.busy,
                 onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
@@ -145,6 +147,7 @@ internal fun AppListScreen(
                         apps = managedApps,
                         packageByName = packageByName,
                         enabled = !state.busy && state.runtimeReady,
+                        operationsEnabled = !state.busy && state.operationsAllowed,
                         accountsExpanded = state.configuredAccountsExpanded,
                         onOpen = { onIntent(UiIntent.OpenPackage(it)) },
                         onActivate = { packageName, slotId ->
@@ -206,6 +209,7 @@ private fun ManagedAppsCard(
     apps: List<InstalledApp>,
     packageByName: Map<String, PackageSnapshot>,
     enabled: Boolean,
+    operationsEnabled: Boolean,
     accountsExpanded: Boolean,
     onOpen: (String) -> Unit,
     onActivate: (String, String) -> Unit,
@@ -294,11 +298,29 @@ private fun ManagedAppsCard(
                                                 .padding(start = 7.dp),
                                         )
                                     }
+                                    if (snapshot.bindingState != BindingState.Ready) {
+                                        Text(
+                                            text = stringResource(
+                                                when (snapshot.bindingState) {
+                                                    BindingState.LegacyConfirmationRequired ->
+                                                        R.string.binding_confirmation_required
+                                                    BindingState.LegacyUnbound,
+                                                    BindingState.RebindRequired,
+                                                    -> R.string.binding_recovery_pending
+                                                    BindingState.Ready ->
+                                                        R.string.binding_ready
+                                                },
+                                            ),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = SlicesWarning,
+                                            modifier = Modifier.padding(top = 2.dp),
+                                        )
+                                    }
                                 }
                                 Column(modifier = Modifier.align(Alignment.TopEnd)) {
                                     IconButton(
                                         onClick = { menuExpanded = true },
-                                        enabled = enabled,
+                                        enabled = operationsEnabled,
                                     ) {
                                         Icon(
                                             painter = painterResource(R.drawable.ic_more_vert),
@@ -324,8 +346,12 @@ private fun ManagedAppsCard(
                                                 Switch(
                                                     checked = snapshot.launchAfterReboot,
                                                     onCheckedChange = null,
+                                                    enabled = operationsEnabled &&
+                                                        snapshot.bindingState == BindingState.Ready,
                                                 )
                                             },
+                                            enabled = operationsEnabled &&
+                                                snapshot.bindingState == BindingState.Ready,
                                             onClick = {
                                                 menuExpanded = false
                                                 onSetLaunchAfterReboot(
@@ -377,7 +403,8 @@ private fun ManagedAppsCard(
                                     ),
                                     selected = selected,
                                     onClick = { onActivate(app.packageName, slot.id) },
-                                    enabled = enabled,
+                                    enabled = operationsEnabled &&
+                                        snapshot.bindingState == BindingState.Ready,
                                 )
                             }
                         }

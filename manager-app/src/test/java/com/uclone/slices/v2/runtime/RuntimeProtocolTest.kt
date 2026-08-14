@@ -12,8 +12,12 @@ class RuntimeProtocolTest {
         val commands = linkedMapOf(
             "probe" to RuntimeCommand.Probe,
             "list_packages" to RuntimeCommand.ListPackages,
-            "enroll" to RuntimeCommand.Enroll("com.example.app"),
-            "enroll_reset" to RuntimeCommand.ResetEnrollment("com.example.app"),
+            "enroll" to RuntimeCommand.Enroll("com.example.app", signing()),
+            "rebind_package" to RuntimeCommand.RebindPackage(
+                "com.example.app",
+                signing(),
+                true,
+            ),
             "unenroll" to RuntimeCommand.Unenroll("com.example.app"),
             "set_launch_after_reboot" to RuntimeCommand.SetLaunchAfterReboot(
                 "com.example.app",
@@ -52,7 +56,7 @@ class RuntimeProtocolTest {
     }
 
     @Test
-    fun errorCodesAreOnlyTheFourUiBranches() {
+    fun everyRuntimeErrorCodeHasAUiBranch() {
         ErrorCode.entries.forEach { code ->
             val decoded = RuntimeProtocol.decode(
                 """{"error":{"code":"${code.wire}"}}""",
@@ -75,7 +79,29 @@ class RuntimeProtocolTest {
         ) as RuntimeReply.Package
 
         assertEquals(false, response.packageSnapshot.launchAfterReboot)
+        assertEquals(BindingState.LegacyUnbound, response.packageSnapshot.bindingState)
     }
+
+    @Test
+    fun invalidSigningIdentityIsRejectedBeforeItCanBeSent() {
+        assertEquals(
+            false,
+            SigningIdentity(SigningKind.Lineage, listOf("NOT-A-DIGEST")).isValid(),
+        )
+    }
+
+    @Test
+    fun oldResetFixtureIsExplicitlyRejected() {
+        assertEquals(
+            RuntimeReply.Error(ErrorCode.InvalidRequest),
+            RuntimeProtocol.decode(resource("enroll_reset.response.json")),
+        )
+    }
+
+    private fun signing() = SigningIdentity(
+        SigningKind.Lineage,
+        listOf("a".repeat(64)),
+    )
 
     private fun resource(name: String): String =
         requireNotNull(javaClass.classLoader?.getResource(name)).readText().trim()

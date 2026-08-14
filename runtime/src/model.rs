@@ -13,6 +13,8 @@ pub enum ModelError {
     InvalidSlot,
     #[error("invalid display name")]
     InvalidDisplayName,
+    #[error("invalid signing identity")]
+    InvalidSigningIdentity,
     #[error("invalid package aggregate")]
     InvalidState,
     #[error("package state is not ready")]
@@ -187,6 +189,127 @@ impl PackageIdentity {
             .then_some(())
             .ok_or(ModelError::InvalidState)
     }
+
+    pub fn uid(&self) -> u32 {
+        self.uid
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SigningKind {
+    Lineage,
+    Multiple,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SigningIdentity {
+    kind: SigningKind,
+    sha256: Vec<String>,
+}
+
+impl SigningIdentity {
+    pub fn new(kind: SigningKind, sha256: Vec<String>) -> Result<Self, ModelError> {
+        let identity = Self { kind, sha256 };
+        identity.validate()?;
+        Ok(identity)
+    }
+
+    pub fn validate(&self) -> Result<(), ModelError> {
+        let valid_digest = |value: &String| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        };
+        if self.sha256.is_empty() || self.sha256.len() > 16 || !self.sha256.iter().all(valid_digest)
+        {
+            return Err(ModelError::InvalidSigningIdentity);
+        }
+        let unique = self.sha256.iter().collect::<BTreeSet<_>>();
+        if unique.len() != self.sha256.len() {
+            return Err(ModelError::InvalidSigningIdentity);
+        }
+        if self.kind == SigningKind::Multiple {
+            if self.sha256.len() < 2
+                || !self
+                    .sha256
+                    .windows(2)
+                    .all(|pair| pair[0].as_str() < pair[1].as_str())
+            {
+                return Err(ModelError::InvalidSigningIdentity);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn is_compatible_with(&self, persisted: &Self) -> bool {
+        if self.validate().is_err() || persisted.validate().is_err() || self.kind != persisted.kind
+        {
+            return false;
+        }
+        match self.kind {
+            SigningKind::Multiple => self.sha256 == persisted.sha256,
+            SigningKind::Lineage => {
+                lineage_extends(&self.sha256, &persisted.sha256)
+                    || lineage_extends(&persisted.sha256, &self.sha256)
+            }
+        }
+    }
+}
+
+fn lineage_extends(longer: &[String], shorter: &[String]) -> bool {
+    longer.starts_with(shorter) || longer.ends_with(shorter)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageBinding {
+    schema_version: u8,
+    signing: SigningIdentity,
+}
+
+impl PackageBinding {
+    pub fn v1(signing: SigningIdentity) -> Result<Self, ModelError> {
+        signing.validate()?;
+        Ok(Self {
+            schema_version: 1,
+            signing,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ModelError> {
+        if self.schema_version != 1 {
+            return Err(ModelError::InvalidState);
+        }
+        self.signing.validate()
+    }
+
+    pub fn signing(&self) -> &SigningIdentity {
+        &self.signing
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RebindIntent {
+    pub package: PackageName,
+    pub previous_identity: PackageIdentity,
+    pub target_identity: PackageIdentity,
+    pub signing: SigningIdentity,
+    pub active_slot: SlotId,
+}
+
+impl RebindIntent {
+    pub fn validate(&self) -> Result<(), ModelError> {
+        self.previous_identity.validate()?;
+        self.target_identity.validate()?;
+        self.signing.validate()?;
+        if self.previous_identity.uid() != self.target_identity.uid() {
+            return Err(ModelError::InvalidState);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -337,6 +460,15 @@ impl PackageAggregate {
 
     pub fn active_slot(&self) -> &SlotId {
         &self.active_slot
+    }
+
+    pub fn rebind_identity(&mut self, identity: PackageIdentity) -> Result<(), ModelError> {
+        self.require_ready()?;
+        if self.identity.uid() != identity.uid() {
+            return Err(ModelError::StateConflict);
+        }
+        self.identity = identity;
+        self.validate()
     }
 
     pub fn launch_after_reboot(&self) -> bool {
@@ -548,12 +680,20 @@ impl PackageAggregate {
     }
 
     pub fn snapshot(&self) -> Result<PackageSnapshot, ModelError> {
+        self.snapshot_with_binding(BindingState::Ready)
+    }
+
+    pub fn snapshot_with_binding(
+        &self,
+        binding_state: BindingState,
+    ) -> Result<PackageSnapshot, ModelError> {
         self.validate()?;
         self.require_ready()?;
         Ok(PackageSnapshot {
             package: self.package.clone(),
             active_slot: self.active_slot.clone(),
             launch_after_reboot: self.launch_after_reboot,
+            binding_state,
             slots: self
                 .slots
                 .iter()
@@ -572,6 +712,15 @@ impl PackageAggregate {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BindingState {
+    Ready,
+    LegacyUnbound,
+    RebindRequired,
+    LegacyConfirmationRequired,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotSnapshot {
     pub id: SlotId,
@@ -583,6 +732,7 @@ pub struct PackageSnapshot {
     pub package: PackageName,
     pub active_slot: SlotId,
     pub launch_after_reboot: bool,
+    pub binding_state: BindingState,
     pub slots: Vec<SlotSnapshot>,
 }
 
@@ -656,6 +806,55 @@ mod tests {
 
         assert!(!restored.launch_after_reboot());
         assert!(!restored.snapshot().unwrap().launch_after_reboot);
+    }
+
+    #[test]
+    fn aggregate_wire_format_stays_independent_from_the_v1_binding_sidecar() {
+        let aggregate = PackageAggregate::enrolled(package(), identity());
+
+        let encoded = serde_json::to_value(aggregate).unwrap();
+
+        let fields = encoded.as_object().unwrap();
+        assert!(!fields.contains_key("binding"));
+        assert!(!fields.contains_key("signing"));
+        assert!(!fields.contains_key("binding_state"));
+    }
+
+    #[test]
+    fn signing_lineages_accept_verified_rotation_in_either_direction() {
+        let old = SigningIdentity::new(SigningKind::Lineage, vec!["a".repeat(64)]).unwrap();
+        let rotated =
+            SigningIdentity::new(SigningKind::Lineage, vec!["a".repeat(64), "b".repeat(64)])
+                .unwrap();
+
+        assert!(old.is_compatible_with(&rotated));
+        assert!(rotated.is_compatible_with(&old));
+        let newest_first =
+            SigningIdentity::new(SigningKind::Lineage, vec!["b".repeat(64), "a".repeat(64)])
+                .unwrap();
+        assert!(old.is_compatible_with(&newest_first));
+    }
+
+    #[test]
+    fn multiple_signers_require_a_sorted_exact_set() {
+        let first =
+            SigningIdentity::new(SigningKind::Multiple, vec!["a".repeat(64), "b".repeat(64)])
+                .unwrap();
+        let same =
+            SigningIdentity::new(SigningKind::Multiple, vec!["a".repeat(64), "b".repeat(64)])
+                .unwrap();
+        let different =
+            SigningIdentity::new(SigningKind::Multiple, vec!["a".repeat(64), "c".repeat(64)])
+                .unwrap();
+
+        assert!(first.is_compatible_with(&same));
+        assert!(!first.is_compatible_with(&different));
+        assert!(
+            SigningIdentity::new(SigningKind::Multiple, vec!["b".repeat(64), "a".repeat(64)],)
+                .is_err()
+        );
+        assert!(SigningIdentity::new(SigningKind::Lineage, vec!["A".repeat(64)]).is_err());
+        assert!(SigningIdentity::new(SigningKind::Lineage, vec!["a".repeat(63)]).is_err());
     }
 
     #[test]

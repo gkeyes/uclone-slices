@@ -1,14 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::model::{
-    Capabilities, ObservedView, PackageAggregate, PackageIdentity, PackageInspection, PackageName,
-    SeedMode, Slot, SlotId,
+    Capabilities, ObservedView, PackageAggregate, PackageBinding, PackageIdentity,
+    PackageInspection, PackageName, RebindIntent, SeedMode, Slot, SlotId,
 };
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
 #[derive(Debug, Default)]
 pub(crate) struct MemoryPackageStore {
     packages: BTreeMap<PackageName, PackageAggregate>,
+    bindings: BTreeMap<PackageName, PackageBinding>,
+    rebind_intents: BTreeMap<PackageName, RebindIntent>,
+    backups: BTreeMap<PackageName, (PackageAggregate, Vec<SlotId>)>,
     save_calls: usize,
     failed_save_calls: BTreeSet<usize>,
     remove_calls: usize,
@@ -30,6 +33,10 @@ impl MemoryPackageStore {
 
     pub(crate) fn fail_next_remove(&mut self) {
         self.failed_remove_calls.insert(self.remove_calls + 1);
+    }
+
+    pub(crate) fn backup(&self, package: &PackageName) -> Option<&(PackageAggregate, Vec<SlotId>)> {
+        self.backups.get(package)
     }
 }
 
@@ -55,12 +62,62 @@ impl PackageStore for MemoryPackageStore {
         Ok(())
     }
 
+    fn load_binding(&self, package: &PackageName) -> Result<Option<PackageBinding>, AdapterError> {
+        Ok(self.bindings.get(package).cloned())
+    }
+
+    fn save_binding(
+        &mut self,
+        package: &PackageName,
+        binding: &PackageBinding,
+    ) -> Result<(), AdapterError> {
+        binding
+            .validate()
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        self.bindings.insert(package.clone(), binding.clone());
+        Ok(())
+    }
+
+    fn load_rebind_intent(
+        &self,
+        package: &PackageName,
+    ) -> Result<Option<RebindIntent>, AdapterError> {
+        Ok(self.rebind_intents.get(package).cloned())
+    }
+
+    fn save_rebind_intent(&mut self, intent: &RebindIntent) -> Result<(), AdapterError> {
+        intent
+            .validate()
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        self.rebind_intents
+            .insert(intent.package.clone(), intent.clone());
+        Ok(())
+    }
+
+    fn clear_rebind_intent(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        self.rebind_intents.remove(package);
+        Ok(())
+    }
+
+    fn backup_before_v1_binding(
+        &mut self,
+        aggregate: &PackageAggregate,
+        complete_pairs: &[SlotId],
+    ) -> Result<(), AdapterError> {
+        self.backups
+            .entry(aggregate.package().clone())
+            .or_insert_with(|| (aggregate.clone(), complete_pairs.to_vec()));
+        Ok(())
+    }
+
     fn remove(&mut self, package: &PackageName) -> Result<(), AdapterError> {
         self.remove_calls += 1;
         if self.failed_remove_calls.remove(&self.remove_calls) {
             return Err(AdapterError::new("injected package-store remove failure"));
         }
         self.packages.remove(package);
+        self.bindings.remove(package);
+        self.rebind_intents.remove(package);
         Ok(())
     }
 }
@@ -267,9 +324,24 @@ impl MemoryAndroidOps {
     }
 
     pub(crate) fn change_identity(&mut self, package: &PackageName) {
+        self.change_identity_to(package, 99);
+    }
+
+    pub(crate) fn change_identity_to(&mut self, package: &PackageName, inode: u64) {
         if let Some(inspection) = self.inspections.get_mut(package) {
             let Ok(identity) =
-                PackageIdentity::new(10_000, format!("/data/app/{package}/base.apk"), 1, 99)
+                PackageIdentity::new(10_000, format!("/data/app/{package}/base.apk"), 1, inode)
+            else {
+                return;
+            };
+            inspection.identity = identity;
+        }
+    }
+
+    pub(crate) fn change_uid(&mut self, package: &PackageName) {
+        if let Some(inspection) = self.inspections.get_mut(package) {
+            let Ok(identity) =
+                PackageIdentity::new(20_000, format!("/data/app/{package}/base.apk"), 1, 99)
             else {
                 return;
             };

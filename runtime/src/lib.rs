@@ -7,7 +7,8 @@ mod usecases;
 
 pub use composition::{CompositionError, ProductionRuntime, production};
 pub use model::{
-    Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode, SlotId, SlotSnapshot,
+    BindingState, Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode,
+    SigningIdentity, SigningKind, SlotId, SlotSnapshot,
 };
 pub use usecases::RuntimeError;
 

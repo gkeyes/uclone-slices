@@ -35,6 +35,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
+import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.SeedMode
 import com.uclone.slices.v2.runtime.SlotSnapshot
@@ -53,6 +54,8 @@ internal fun PackageDetailScreen(
         mutableStateOf(false)
     }
     val appLabel = installedApp?.label ?: packageSnapshot.packageName
+    val operationsEnabled = state.operationsAllowed &&
+        packageSnapshot.bindingState == BindingState.Ready
     val activeSlot = packageSnapshot.slots.firstOrNull {
         it.id == packageSnapshot.activeSlot
     }
@@ -81,7 +84,7 @@ internal fun PackageDetailScreen(
                 packageName = packageSnapshot.packageName,
                 installedApp = installedApp,
                 activeSlot = activeSlot,
-                enabled = !state.busy && state.runtimeReady,
+                enabled = !state.busy && operationsEnabled,
                 onLaunch = {
                     onIntent(UiIntent.ActivateSlot(packageSnapshot.activeSlot))
                 },
@@ -116,7 +119,7 @@ internal fun PackageDetailScreen(
                 SlicesActionButton(
                     text = stringResource(R.string.create_space_short),
                     onClick = { createSheetVisible = true },
-                    enabled = !state.busy && state.runtimeReady,
+                    enabled = !state.busy && operationsEnabled,
                     primary = false,
                     compact = true,
                     icon = painterResource(R.drawable.ic_add),
@@ -131,7 +134,7 @@ internal fun PackageDetailScreen(
             items(otherSlots, key = SlotSnapshot::id) { slot ->
                 OtherSpaceCard(
                     slot = slot,
-                    enabled = !state.busy && state.runtimeReady,
+                    enabled = !state.busy && operationsEnabled,
                     onActivate = { onIntent(UiIntent.ActivateSlot(slot.id)) },
                     onRename = if (slot.id == BASE_SLOT_ID) {
                         null

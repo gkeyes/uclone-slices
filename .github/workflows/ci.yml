@@ -20,6 +20,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
@@ -47,19 +48,40 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
       - name: Validate Android apps
-        run: ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:assembleRelease :device-fixture-app:lintDebug :device-fixture-app:assembleDebug
-
-      - name: Upload Manager Release APK
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: uclone-slices-v2-manager-release-${{ github.sha }}
-          path: manager-app/build/outputs/apk/release/manager-app-release.apk
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
+        run: ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:assembleRelease :device-fixture-app:lintFromDebug :device-fixture-app:lintToDebug :device-fixture-app:assembleFromDebug :device-fixture-app:assembleToDebug
 
       - name: Validate KernelSU startup layer
         run: |
           ./tools/check-decision-alignment.sh
           ./tools/test-kernelsu.sh
           ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./tools/build-kernelsu.sh
+
+      - name: Build fixed 0.1.6 QA baseline
+        run: |
+          BASELINE_DIR="$RUNNER_TEMP/uclone-slices-016"
+          git worktree add --detach "$BASELINE_DIR" e0d4683
+          "$BASELINE_DIR/gradlew" --no-daemon -p "$BASELINE_DIR" :manager-app:assembleRelease :device-fixture-app:assembleDebug
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" "$BASELINE_DIR/tools/build-kernelsu.sh"
+
+      - name: Prepare SHA-pinned delivery bundle
+        run: |
+          DELIVERY="$RUNNER_TEMP/uclone-slices-delivery"
+          BASELINE_DIR="$RUNNER_TEMP/uclone-slices-016"
+          mkdir -p "$DELIVERY"
+          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.1.7-${GITHUB_SHA}.apk"
+          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.1.7-${GITHUB_SHA}.zip"
+          install -m 0644 device-fixture-app/build/outputs/apk/from/debug/device-fixture-app-from-debug.apk "$DELIVERY/uclone-slices-v2-fixture-from-0.1.6-${GITHUB_SHA}.apk"
+          install -m 0644 device-fixture-app/build/outputs/apk/to/debug/device-fixture-app-to-debug.apk "$DELIVERY/uclone-slices-v2-fixture-to-0.1.7-${GITHUB_SHA}.apk"
+          install -m 0644 "$BASELINE_DIR/manager-app/build/outputs/apk/release/manager-app-release.apk" "$DELIVERY/uclone-slices-v2-manager-0.1.6-baseline-e0d4683.apk"
+          install -m 0644 "$BASELINE_DIR/outputs/uclone-slices-v2-kernelsu.zip" "$DELIVERY/uclone-slices-v2-kernelsu-0.1.6-baseline-e0d4683.zip"
+          install -m 0644 "$BASELINE_DIR/device-fixture-app/build/outputs/apk/debug/device-fixture-app-debug.apk" "$DELIVERY/uclone-slices-v2-fixture-0.1.6-baseline-e0d4683.apk"
+          (cd "$DELIVERY" && sha256sum ./*.apk ./*.zip > SHA256SUMS.txt)
+
+      - name: Upload 0.1.7 delivery and QA artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: uclone-slices-v2-0.1.7-${{ github.sha }}
+          path: ${{ runner.temp }}/uclone-slices-delivery
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

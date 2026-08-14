@@ -68,7 +68,7 @@ class MainActivity : Activity() {
         val de = readIdentity(deFile())
         ceInput.setText(if (ce == ABSENT) "" else ce)
         deInput.setText(if (de == ABSENT) "" else de)
-        status.text = "CE=$ce\nDE=$de"
+        status.text = "version=${BuildConfig.VERSION_NAME}\nCE=$ce\nDE=$de"
         Log.i(LOG_TAG, "CE=$ce DE=$de")
     }
 

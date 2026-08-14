@@ -1,8 +1,9 @@
 use thiserror::Error;
 
 use crate::model::{
-    Capabilities, DisplayName, ModelError, ObservedView, PackageAggregate, PackageInspection,
-    PackageName, PackageSnapshot, SeedMode, SlotId,
+    BindingState, Capabilities, DisplayName, ModelError, ObservedView, PackageAggregate,
+    PackageBinding, PackageInspection, PackageName, PackageSnapshot, RebindIntent, SeedMode,
+    SigningIdentity, SlotId,
 };
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
@@ -14,6 +15,8 @@ pub enum RuntimeError {
     NotFound,
     #[error("package state conflicts with the requested operation")]
     StateConflict,
+    #[error("installed package identity does not match the protected registration")]
+    IdentityMismatch,
     #[error("runtime operation failed")]
     OperationFailed,
 }
@@ -81,7 +84,7 @@ where
         let names = self.packages.list().map_err(adapter_error)?;
         let mut snapshots = Vec::with_capacity(names.len());
         for package in names {
-            match self.get_package(&package) {
+            match self.package_snapshot(&package) {
                 Ok(snapshot) => snapshots.push(snapshot),
                 Err(error) => {
                     eprintln!("op=list_packages package={package} step=load_package error={error}");
@@ -92,17 +95,20 @@ where
     }
 
     pub fn get_package(&mut self, package: &PackageName) -> Result<PackageSnapshot, RuntimeError> {
-        let (aggregate, _inspection) = self.load_ready(package)?;
-        aggregate.snapshot().map_err(model_error)
+        self.package_snapshot(package)
     }
 
     pub fn enroll(
         &mut self,
         package: PackageName,
         reset: bool,
+        signing: Option<SigningIdentity>,
     ) -> Result<PackageSnapshot, RuntimeError> {
         if reset {
-            return self.reset_enrollment(package);
+            return Err(RuntimeError::InvalidRequest);
+        }
+        if let Some(signing) = &signing {
+            signing.validate().map_err(model_error)?;
         }
         if self
             .packages
@@ -127,37 +133,118 @@ where
         self.packages
             .save(&aggregate)
             .map_err(|error| logged_adapter("enroll", &package, "save", error))?;
-        aggregate.snapshot().map_err(model_error)
+        let binding_state = if let Some(signing) = signing {
+            let binding = PackageBinding::v1(signing).map_err(model_error)?;
+            self.packages
+                .save_binding(&package, &binding)
+                .map_err(|error| logged_adapter("enroll", &package, "save_binding", error))?;
+            BindingState::Ready
+        } else {
+            BindingState::LegacyUnbound
+        };
+        aggregate
+            .snapshot_with_binding(binding_state)
+            .map_err(model_error)
     }
 
-    fn reset_enrollment(&mut self, package: PackageName) -> Result<PackageSnapshot, RuntimeError> {
+    pub fn rebind_package(
+        &mut self,
+        package: &PackageName,
+        signing: SigningIdentity,
+        trust_legacy: bool,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        signing.validate().map_err(model_error)?;
+        let aggregate = self
+            .packages
+            .load(package)
+            .map_err(adapter_error)?
+            .ok_or(RuntimeError::NotFound)?;
+        aggregate.validate().map_err(model_error)?;
+        if !aggregate.is_ready() {
+            return Err(RuntimeError::StateConflict);
+        }
         let inspection = self
             .android
-            .inspect(&package)
-            .map_err(|error| logged_adapter("enroll", &package, "reset_inspect", error))?;
-        self.android
-            .force_stop(&package)
-            .map_err(|error| logged_adapter("enroll", &package, "reset_force_stop", error))?;
-        let base = SlotId::base();
-        self.android
-            .apply_view(&package, &base)
-            .map_err(|error| logged_adapter("enroll", &package, "reset_apply_base", error))?;
-        let observed = self
-            .android
-            .observe_view(&package)
-            .map_err(|error| logged_adapter("enroll", &package, "reset_verify_base", error))?;
-        if observed != ObservedView::Base {
-            eprintln!("op=enroll package={package} step=reset_verify_base error=view_is_not_base");
-            return Err(RuntimeError::OperationFailed);
+            .inspect(package)
+            .map_err(|error| logged_adapter("rebind_package", package, "inspect", error))?;
+        if aggregate.identity().uid() != inspection.identity.uid() {
+            return Err(RuntimeError::IdentityMismatch);
         }
-        self.slots
-            .discard_package(&package)
-            .map_err(|error| logged_adapter("enroll", &package, "reset_discard_slots", error))?;
-        let aggregate = PackageAggregate::enrolled(package.clone(), inspection.identity);
+
+        let persisted_binding = self.packages.load_binding(package).map_err(adapter_error)?;
+        let pending = self
+            .packages
+            .load_rebind_intent(package)
+            .map_err(adapter_error)?;
+        if let Some(intent) = pending {
+            if intent.target_identity != inspection.identity
+                || !signing.is_compatible_with(&intent.signing)
+            {
+                return Err(RuntimeError::IdentityMismatch);
+            }
+            return self.finish_rebind(aggregate, intent);
+        }
+
+        if aggregate.identity() == &inspection.identity {
+            if let Some(binding) = persisted_binding {
+                if !signing.is_compatible_with(binding.signing()) {
+                    return Err(RuntimeError::IdentityMismatch);
+                }
+                self.validate_rebind_preconditions(&aggregate)?;
+                return aggregate
+                    .snapshot_with_binding(BindingState::Ready)
+                    .map_err(model_error);
+            }
+            if trust_legacy {
+                return Err(RuntimeError::InvalidRequest);
+            }
+            let complete_pairs = self.validate_rebind_preconditions(&aggregate)?;
+            self.packages
+                .backup_before_v1_binding(&aggregate, &complete_pairs)
+                .map_err(|error| {
+                    logged_adapter("rebind_package", package, "backup_legacy", error)
+                })?;
+            let binding = PackageBinding::v1(signing).map_err(model_error)?;
+            self.packages
+                .save_binding(package, &binding)
+                .map_err(|error| {
+                    logged_adapter("rebind_package", package, "save_legacy_binding", error)
+                })?;
+            return aggregate
+                .snapshot_with_binding(BindingState::Ready)
+                .map_err(model_error);
+        }
+
+        match persisted_binding {
+            Some(binding) => {
+                if trust_legacy {
+                    return Err(RuntimeError::InvalidRequest);
+                }
+                if !signing.is_compatible_with(binding.signing()) {
+                    return Err(RuntimeError::IdentityMismatch);
+                }
+            }
+            None if !trust_legacy => return Err(RuntimeError::StateConflict),
+            None => {}
+        }
+
+        let complete_pairs = self.validate_rebind_preconditions(&aggregate)?;
+
         self.packages
-            .save(&aggregate)
-            .map_err(|error| logged_adapter("enroll", &package, "reset_save", error))?;
-        aggregate.snapshot().map_err(model_error)
+            .backup_before_v1_binding(&aggregate, &complete_pairs)
+            .map_err(|error| logged_adapter("rebind_package", package, "backup", error))?;
+        let intent = RebindIntent {
+            package: package.clone(),
+            previous_identity: aggregate.identity().clone(),
+            target_identity: inspection.identity,
+            signing,
+            active_slot: aggregate.active_slot().clone(),
+        };
+        intent.validate().map_err(model_error)?;
+        self.packages
+            .save_rebind_intent(&intent)
+            .map_err(|error| logged_adapter("rebind_package", package, "save_intent", error))?;
+        self.finish_rebind(aggregate, intent)
     }
 
     pub fn unenroll(&mut self, package: &PackageName) -> Result<(), RuntimeError> {
@@ -169,11 +256,15 @@ where
         {
             return Ok(());
         }
-        let (mut aggregate, _inspection) = match self.load_ready(package) {
-            Ok(loaded) => loaded,
-            Err(RuntimeError::NotFound) => return Ok(()),
-            Err(error) => return Err(error),
-        };
+        let mut aggregate = self
+            .packages
+            .load(package)
+            .map_err(adapter_error)?
+            .ok_or(RuntimeError::NotFound)?;
+        aggregate.validate().map_err(model_error)?;
+        if aggregate.is_unenrolling() {
+            return self.finish_unenrollment(package, UnenrollContext::Request);
+        }
         aggregate.begin_unenrollment().map_err(model_error)?;
         self.packages
             .save(&aggregate)
@@ -364,9 +455,18 @@ where
         &mut self,
         package: &PackageName,
     ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
-        let (mut aggregate, inspection) = self.load_validated(package)?;
+        let (aggregate, inspection) = self.load_validated(package)?;
+        self.finish_ready_load(aggregate, inspection)
+    }
+
+    fn finish_ready_load(
+        &mut self,
+        mut aggregate: PackageAggregate,
+        inspection: PackageInspection,
+    ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
+        let package = aggregate.package().clone();
         if aggregate.is_unenrolling() {
-            self.finish_unenrollment(package, UnenrollContext::Recovery)?;
+            self.finish_unenrollment(&package, UnenrollContext::Recovery)?;
             return Err(RuntimeError::NotFound);
         }
         let recovering_activation = aggregate.pending_activation().is_some();
@@ -374,8 +474,132 @@ where
         if recovering_activation {
             return Err(RuntimeError::StateConflict);
         }
-        self.converge_ready_view(package, &aggregate)?;
+        self.converge_ready_view(&package, &aggregate)?;
         Ok((aggregate, inspection))
+    }
+
+    fn package_snapshot(&mut self, package: &PackageName) -> Result<PackageSnapshot, RuntimeError> {
+        let aggregate = self
+            .packages
+            .load(package)
+            .map_err(adapter_error)?
+            .ok_or(RuntimeError::NotFound)?;
+        aggregate.validate().map_err(model_error)?;
+        let inspection = self
+            .android
+            .inspect(package)
+            .map_err(|error| logged_adapter("load", package, "inspect", error))?;
+        let binding = self.packages.load_binding(package).map_err(adapter_error)?;
+        let intent = self
+            .packages
+            .load_rebind_intent(package)
+            .map_err(adapter_error)?;
+        if intent.is_some() || aggregate.identity() != &inspection.identity {
+            let state =
+                if binding.is_some() || aggregate.identity().uid() != inspection.identity.uid() {
+                    BindingState::RebindRequired
+                } else {
+                    BindingState::LegacyConfirmationRequired
+                };
+            return aggregate.snapshot_with_binding(state).map_err(model_error);
+        }
+        let state = if binding.is_some() {
+            BindingState::Ready
+        } else {
+            BindingState::LegacyUnbound
+        };
+        let (aggregate, _inspection) = self.finish_ready_load(aggregate, inspection)?;
+        aggregate.snapshot_with_binding(state).map_err(model_error)
+    }
+
+    fn validate_rebind_preconditions(
+        &mut self,
+        aggregate: &PackageAggregate,
+    ) -> Result<Vec<SlotId>, RuntimeError> {
+        if !aggregate.is_ready() {
+            return Err(RuntimeError::StateConflict);
+        }
+        let package = aggregate.package();
+        let complete_pairs = aggregate
+            .snapshot()
+            .map_err(model_error)?
+            .slots
+            .into_iter()
+            .filter_map(|slot| (!slot.id.is_base()).then_some(slot.id))
+            .collect::<Vec<_>>();
+        for slot in &complete_pairs {
+            self.slots
+                .require_complete_pair(package, slot)
+                .map_err(|error| {
+                    logged_conflict("rebind_package", package, "verify_slot_pair", error)
+                })?;
+        }
+        let observed = self
+            .android
+            .observe_view(package)
+            .map_err(|error| logged_conflict("rebind_package", package, "observe_view", error))?;
+        if observed != ObservedView::Base && !observed.matches(aggregate.active_slot()) {
+            return Err(RuntimeError::StateConflict);
+        }
+        Ok(complete_pairs)
+    }
+
+    fn finish_rebind(
+        &mut self,
+        mut aggregate: PackageAggregate,
+        intent: RebindIntent,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        let package = &intent.package;
+        self.android
+            .force_stop(package)
+            .map_err(|error| logged_adapter("rebind_package", package, "force_stop", error))?;
+        let base = SlotId::base();
+        self.android
+            .apply_view(package, &base)
+            .map_err(|error| logged_adapter("rebind_package", package, "apply_base", error))?;
+        let base_view = self
+            .android
+            .observe_view(package)
+            .map_err(|error| logged_adapter("rebind_package", package, "verify_base", error))?;
+        if base_view != ObservedView::Base {
+            return Err(RuntimeError::OperationFailed);
+        }
+        if aggregate.identity() != &intent.target_identity {
+            aggregate
+                .rebind_identity(intent.target_identity.clone())
+                .map_err(model_error)?;
+            self.packages.save(&aggregate).map_err(|error| {
+                logged_adapter("rebind_package", package, "save_identity", error)
+            })?;
+        }
+        let binding = PackageBinding::v1(intent.signing).map_err(model_error)?;
+        self.packages
+            .save_binding(package, &binding)
+            .map_err(|error| logged_adapter("rebind_package", package, "save_binding", error))?;
+        if !intent.active_slot.is_base() {
+            self.slots
+                .require_complete_pair(package, &intent.active_slot)
+                .map_err(|error| {
+                    logged_conflict("rebind_package", package, "verify_active_pair", error)
+                })?;
+            self.android
+                .apply_view(package, &intent.active_slot)
+                .map_err(|error| {
+                    logged_adapter("rebind_package", package, "restore_active", error)
+                })?;
+            let restored = self.android.observe_view(package).map_err(|error| {
+                logged_adapter("rebind_package", package, "verify_active", error)
+            })?;
+            if !restored.matches(&intent.active_slot) {
+                return Err(RuntimeError::OperationFailed);
+            }
+        }
+        self.packages
+            .clear_rebind_intent(package)
+            .map_err(|error| logged_adapter("rebind_package", package, "clear_intent", error))?;
+        aggregate
+            .snapshot_with_binding(BindingState::Ready)
+            .map_err(model_error)
     }
 
     fn load_validated(
@@ -656,9 +880,10 @@ where
 
 fn model_error(error: ModelError) -> RuntimeError {
     match error {
-        ModelError::InvalidPackage | ModelError::InvalidSlot | ModelError::InvalidDisplayName => {
-            RuntimeError::InvalidRequest
-        }
+        ModelError::InvalidPackage
+        | ModelError::InvalidSlot
+        | ModelError::InvalidDisplayName
+        | ModelError::InvalidSigningIdentity => RuntimeError::InvalidRequest,
         ModelError::SlotNotFound => RuntimeError::NotFound,
         ModelError::InvalidState | ModelError::StateConflict => RuntimeError::StateConflict,
     }
@@ -712,6 +937,10 @@ mod tests {
         PackageName::new("com.example.app").unwrap()
     }
 
+    fn signing() -> SigningIdentity {
+        SigningIdentity::new(crate::model::SigningKind::Lineage, vec!["a".repeat(64)]).unwrap()
+    }
+
     fn runtime() -> TestRuntime {
         let mut android = MemoryAndroidOps::default();
         android.install(package());
@@ -725,7 +954,7 @@ mod tests {
     fn with_slot() -> (TestRuntime, SlotId) {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
         let snapshot = runtime
             .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
             .unwrap();
@@ -762,8 +991,8 @@ mod tests {
             MemorySlotStorage::default(),
             android,
         );
-        runtime.enroll(failed.clone(), false).unwrap();
-        runtime.enroll(healthy.clone(), false).unwrap();
+        runtime.enroll(failed.clone(), false, None).unwrap();
+        runtime.enroll(healthy.clone(), false, None).unwrap();
         let (packages, slots, mut android) = runtime.into_parts();
         android.fail_next(AndroidFailure::Inspect);
         let mut runtime = Runtime::new(packages, slots, android);
@@ -783,9 +1012,9 @@ mod tests {
     fn enrolling_an_existing_package_reloads_it() {
         let package = package();
         let mut runtime = runtime();
-        let first = runtime.enroll(package.clone(), false).unwrap();
+        let first = runtime.enroll(package.clone(), false, None).unwrap();
 
-        let second = runtime.enroll(package, false).unwrap();
+        let second = runtime.enroll(package, false, None).unwrap();
 
         assert_eq!(second, first);
     }
@@ -1039,163 +1268,344 @@ mod tests {
     }
 
     #[test]
-    fn reset_enrollment_rebinds_identity_clears_slots_and_stops_on_base() {
+    fn legacy_identity_change_stays_listed_until_confirmed_without_losing_slots() {
         let package = package();
         let (mut runtime, target) = with_slot();
         runtime.activate_slot(&package, &target).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let listed = runtime.list_packages().unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].binding_state,
+            BindingState::LegacyConfirmationRequired
+        );
+        assert_eq!(listed[0].active_slot, target);
+        assert_eq!(listed[0].slots.len(), 2);
+        let rebound = runtime.rebind_package(&package, signing(), true).unwrap();
+        assert_eq!(rebound.binding_state, BindingState::Ready);
+        assert_eq!(rebound.active_slot, target);
+        assert_eq!(rebound.slots.len(), 2);
+        let (_packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+        assert_eq!(android.view(&package), Some(&ObservedView::Slot(target)));
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn same_signing_identity_rebinds_future_apk_replacements_without_confirmation() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime
+            .enroll(package.clone(), false, Some(signing()))
+            .unwrap();
+        let created = runtime
+            .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+            .unwrap();
+        let target = created.slots[1].id.clone();
+        runtime.activate_slot(&package, &target).unwrap();
+        runtime.set_launch_after_reboot(&package, true).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.list_packages().unwrap()[0].binding_state,
+            BindingState::RebindRequired
+        );
+        let rebound = runtime.rebind_package(&package, signing(), false).unwrap();
+
+        assert_eq!(rebound.active_slot, target);
+        assert!(rebound.launch_after_reboot);
+        assert_eq!(rebound.slots[1].name, "Work");
+        let (packages, slots, mut android) = runtime.into_parts();
+        assert!(slots.contains(&package, &target));
+        assert!(!android.is_running(&package));
+        android.change_identity_to(&package, 2);
+        let mut runtime = Runtime::new(packages, slots, android);
+        assert_eq!(
+            runtime.list_packages().unwrap()[0].binding_state,
+            BindingState::RebindRequired
+        );
+
+        let downgraded = runtime.rebind_package(&package, signing(), false).unwrap();
+
+        assert_eq!(downgraded.active_slot, target);
+        assert!(downgraded.launch_after_reboot);
+        assert_eq!(downgraded.slots[1].name, "Work");
+        let (_packages, slots, android) = runtime.into_parts();
+        assert!(slots.contains(&package, &downgraded.active_slot));
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn package_listing_marks_only_the_app_whose_apk_identity_changed() {
+        let changed = PackageName::new("com.example.changed").unwrap();
+        let untouched = PackageName::new("com.example.untouched").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        android.install(changed.clone());
+        android.install(untouched.clone());
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            android,
+        );
+        runtime
+            .enroll(changed.clone(), false, Some(signing()))
+            .unwrap();
+        runtime
+            .enroll(untouched.clone(), false, Some(signing()))
+            .unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&changed);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let snapshots = runtime.list_packages().unwrap();
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(
+            snapshots
+                .iter()
+                .find(|snapshot| snapshot.package == changed)
+                .unwrap()
+                .binding_state,
+            BindingState::RebindRequired
+        );
+        assert_eq!(
+            snapshots
+                .iter()
+                .find(|snapshot| snapshot.package == untouched)
+                .unwrap()
+                .binding_state,
+            BindingState::Ready
+        );
+    }
+
+    #[test]
+    fn signer_mismatch_protects_old_slots_without_android_side_effects() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime
+            .enroll(package.clone(), false, Some(signing()))
+            .unwrap();
+        let created = runtime
+            .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+            .unwrap();
+        let target = created.slots[1].id.clone();
         let (packages, slots, mut android) = runtime.into_parts();
         android.change_identity(&package);
         let starting_calls = android.calls().len();
         let mut runtime = Runtime::new(packages, slots, android);
+        let different =
+            SigningIdentity::new(crate::model::SigningKind::Lineage, vec!["b".repeat(64)]).unwrap();
 
-        let reset = runtime.enroll(package.clone(), true).unwrap();
+        assert_eq!(
+            runtime.rebind_package(&package, different, false),
+            Err(RuntimeError::IdentityMismatch)
+        );
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+        assert!(packages.load_rebind_intent(&package).unwrap().is_none());
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[AndroidCall::Inspect(package)]
+        );
+    }
 
-        assert_eq!(reset.active_slot, SlotId::base());
-        assert_eq!(reset.slots.len(), 1);
+    #[test]
+    fn uid_change_is_never_accepted_even_with_the_same_signing_identity() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime
+            .enroll(package.clone(), false, Some(signing()))
+            .unwrap();
+        let created = runtime
+            .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+            .unwrap();
+        let target = created.slots[1].id.clone();
         let (packages, slots, mut android) = runtime.into_parts();
-        assert_eq!(slots.domain_state(&package, &target), None);
-        assert_eq!(android.view(&package), Some(&ObservedView::Base));
-        assert!(!android.is_running(&package));
+        android.change_uid(&package);
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.list_packages().unwrap()[0].binding_state,
+            BindingState::RebindRequired
+        );
+
+        assert_eq!(
+            runtime.rebind_package(&package, signing(), false),
+            Err(RuntimeError::IdentityMismatch)
+        );
+
+        let (packages, slots, android) = runtime.into_parts();
+        assert!(slots.contains(&package, &target));
+        assert!(packages.load_rebind_intent(&package).unwrap().is_none());
         assert_eq!(
             &android.calls()[starting_calls..],
             &[
                 AndroidCall::Inspect(package.clone()),
-                AndroidCall::ForceStop(package.clone()),
-                AndroidCall::Apply(package.clone(), SlotId::base()),
-                AndroidCall::Observe(package.clone()),
+                AndroidCall::Inspect(package),
             ]
         );
-        let current_identity = android.inspect(&package).unwrap().identity;
-        assert_eq!(
-            packages.load(&package).unwrap().unwrap().identity(),
-            &current_identity
-        );
-
-        let mut runtime = Runtime::new(packages, slots, android);
-        let recreated = runtime
-            .create_slot(
-                &package,
-                DisplayName::new("Fresh").unwrap(),
-                SeedMode::Blank,
-            )
-            .unwrap();
-        assert_eq!(recreated.slots[1].id, SlotId::numbered(1));
     }
 
     #[test]
-    fn reset_base_failures_preserve_the_old_aggregate_and_slot_data() {
-        for failure in [
-            AndroidFailure::ForceStop,
-            AndroidFailure::Apply,
-            AndroidFailure::Observe,
-        ] {
-            let package = package();
-            let (mut runtime, target) = with_slot();
-            runtime.activate_slot(&package, &target).unwrap();
-            let (packages, slots, mut android) = runtime.into_parts();
-            android.change_identity(&package);
-            android.fail_next(failure);
-            let mut runtime = Runtime::new(packages, slots, android);
-
-            assert_eq!(
-                runtime.enroll(package.clone(), true),
-                Err(RuntimeError::OperationFailed)
-            );
-
-            let (packages, slots, _android) = runtime.into_parts();
-            assert_eq!(
-                packages.load(&package).unwrap().unwrap().active_slot(),
-                &target
-            );
-            assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
-        }
-    }
-
-    #[test]
-    fn partial_package_cleanup_keeps_old_registration_and_retry_converges() {
-        for (failure, remaining) in [
-            (SlotFailure::DiscardPackageCe, (true, false)),
-            (SlotFailure::DiscardPackageDe, (false, true)),
-        ] {
-            let package = package();
-            let (mut runtime, target) = with_slot();
-            runtime.activate_slot(&package, &target).unwrap();
-            let (packages, mut slots, mut android) = runtime.into_parts();
-            android.change_identity(&package);
-            slots.fail_next(failure);
-            let mut runtime = Runtime::new(packages, slots, android);
-
-            assert_eq!(
-                runtime.enroll(package.clone(), true),
-                Err(RuntimeError::OperationFailed)
-            );
-
-            let (packages, slots, android) = runtime.into_parts();
-            assert_eq!(slots.domain_state(&package, &target), Some(remaining));
-            assert_eq!(
-                packages.load(&package).unwrap().unwrap().active_slot(),
-                &target
-            );
-            let mut runtime = Runtime::new(packages, slots, android);
-            let reset = runtime.enroll(package.clone(), true).unwrap();
-            assert_eq!(reset.active_slot, SlotId::base());
-            let (_packages, slots, _android) = runtime.into_parts();
-            assert_eq!(slots.domain_state(&package, &target), None);
-        }
-    }
-
-    #[test]
-    fn reset_save_failure_is_retryable_after_slot_cleanup() {
+    fn incomplete_slot_pair_blocks_rebind_before_the_journal_or_mount_changes() {
         let package = package();
-        let (mut runtime, target) = with_slot();
-        runtime.activate_slot(&package, &target).unwrap();
-        let (mut packages, slots, mut android) = runtime.into_parts();
+        let mut runtime = runtime();
+        runtime
+            .enroll(package.clone(), false, Some(signing()))
+            .unwrap();
+        let created = runtime
+            .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+            .unwrap();
+        let target = created.slots[1].id.clone();
+        let (packages, mut slots, mut android) = runtime.into_parts();
+        slots.remove_de(&package, &target);
         android.change_identity(&package);
-        packages.fail_next_save();
+        let starting_calls = android.calls().len();
         let mut runtime = Runtime::new(packages, slots, android);
 
         assert_eq!(
-            runtime.enroll(package.clone(), true),
-            Err(RuntimeError::OperationFailed)
+            runtime.rebind_package(&package, signing(), false),
+            Err(RuntimeError::StateConflict)
         );
 
         let (packages, slots, android) = runtime.into_parts();
-        assert_eq!(slots.domain_state(&package, &target), None);
+        assert_eq!(slots.domain_state(&package, &target), Some((true, false)));
+        assert!(packages.load_rebind_intent(&package).unwrap().is_none());
         assert_eq!(
-            packages.load(&package).unwrap().unwrap().active_slot(),
-            &target
+            &android.calls()[starting_calls..],
+            &[AndroidCall::Inspect(package)]
         );
-        let mut runtime = Runtime::new(packages, slots, android);
-        let reset = runtime.enroll(package, true).unwrap();
-        assert_eq!(reset.active_slot, SlotId::base());
-        assert_eq!(reset.slots.len(), 1);
     }
 
     #[test]
-    fn reset_overwrites_an_invalid_persisted_aggregate() {
-        let root = tempfile::tempdir().unwrap();
+    fn inconsistent_view_blocks_rebind_before_the_journal_or_mount_changes() {
         let package = package();
-        let packages = FilePackageStore::open(root.path()).unwrap();
-        let package_root = root.path().join("packages").join(package.as_str());
-        std::fs::create_dir_all(&package_root).unwrap();
-        std::fs::write(package_root.join("aggregate.json"), b"{not-json").unwrap();
-        let mut android = MemoryAndroidOps::default();
-        android.install(package.clone());
-        let mut runtime = Runtime::new(packages, MemorySlotStorage::default(), android);
+        let mut runtime = runtime();
+        runtime
+            .enroll(package.clone(), false, Some(signing()))
+            .unwrap();
+        let created = runtime
+            .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+            .unwrap();
+        let target = created.slots[1].id.clone();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        android.set_view(&package, ObservedView::Inconsistent);
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
 
-        let reset = runtime.enroll(package.clone(), true).unwrap();
+        assert_eq!(
+            runtime.rebind_package(&package, signing(), false),
+            Err(RuntimeError::StateConflict)
+        );
 
-        assert_eq!(reset.active_slot, SlotId::base());
-        assert_eq!(reset.slots.len(), 1);
-        let (packages, _slots, _android) = runtime.into_parts();
-        assert!(packages.load(&package).unwrap().is_some());
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+        assert!(packages.load_rebind_intent(&package).unwrap().is_none());
+        assert_eq!(
+            &android.calls()[starting_calls..],
+            &[
+                AndroidCall::Inspect(package.clone()),
+                AndroidCall::Observe(package),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_identity_match_silently_adds_the_sidecar_and_inventory_backup() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        let listed = runtime.list_packages().unwrap();
+        assert_eq!(listed[0].binding_state, BindingState::LegacyUnbound);
+        let (packages, slots, android) = runtime.into_parts();
+        let original = packages.load(&package).unwrap().unwrap();
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let rebound = runtime.rebind_package(&package, signing(), false).unwrap();
+
+        assert_eq!(rebound.binding_state, BindingState::Ready);
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(packages.load(&package).unwrap().unwrap(), original);
+        assert!(packages.load_binding(&package).unwrap().is_some());
+        let (backup, pairs) = packages.backup(&package).unwrap();
+        assert_eq!(backup, &original);
+        assert_eq!(pairs, &vec![target.clone()]);
+        assert!(slots.contains(&package, &target));
+        assert!(android.is_running(&package));
+        assert!(
+            android.calls()[starting_calls..]
+                .iter()
+                .all(|call| !matches!(call, AndroidCall::Launch(..)))
+        );
+    }
+
+    #[test]
+    fn interrupted_rebind_keeps_the_journal_and_resumes_without_launching() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime
+            .enroll(package.clone(), false, Some(signing()))
+            .unwrap();
+        let created = runtime
+            .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+            .unwrap();
+        let target = created.slots[1].id.clone();
+        runtime.activate_slot(&package, &target).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        android.fail_next(AndroidFailure::ForceStop);
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.rebind_package(&package, signing(), false),
+            Err(RuntimeError::OperationFailed)
+        );
+        let (packages, slots, android) = runtime.into_parts();
+        assert!(packages.load_rebind_intent(&package).unwrap().is_some());
+        assert!(slots.contains(&package, &target));
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let resumed = runtime.rebind_package(&package, signing(), false).unwrap();
+
+        assert_eq!(resumed.active_slot, target);
+        let (packages, slots, android) = runtime.into_parts();
+        assert!(packages.load_rebind_intent(&package).unwrap().is_none());
+        assert!(slots.contains(&package, &resumed.active_slot));
+        assert!(!android.is_running(&package));
+        assert!(
+            android.calls()[starting_calls..]
+                .iter()
+                .all(|call| !matches!(call, AndroidCall::Launch(..)))
+        );
+    }
+
+    #[test]
+    fn old_destructive_reset_command_is_rejected() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+
+        assert_eq!(
+            runtime.enroll(package.clone(), true, None),
+            Err(RuntimeError::InvalidRequest)
+        );
+        let (_packages, slots, _android) = runtime.into_parts();
+        assert!(slots.contains(&package, &target));
     }
 
     #[test]
     fn save_intent_failure_does_not_touch_slot_storage() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
         let (mut packages, slots, android) = runtime.into_parts();
         packages.fail_next_save();
         let mut runtime = Runtime::new(packages, slots, android);
@@ -1213,7 +1623,7 @@ mod tests {
         for failure in [SlotFailure::MaterializeCe, SlotFailure::MaterializeDe] {
             let package = package();
             let mut runtime = runtime();
-            runtime.enroll(package.clone(), false).unwrap();
+            runtime.enroll(package.clone(), false, None).unwrap();
             let (packages, mut slots, android) = runtime.into_parts();
             slots.fail_next(failure);
             let mut runtime = Runtime::new(packages, slots, android);
@@ -1231,7 +1641,7 @@ mod tests {
     fn stale_target_discard_failure_aborts_before_materialization() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
         let (packages, mut slots, android) = runtime.into_parts();
         slots.fail_next(SlotFailure::Discard);
         let mut runtime = Runtime::new(packages, slots, android);
@@ -1249,7 +1659,7 @@ mod tests {
     fn interrupted_creation_discards_pair_and_restores_running_app() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
         let (mut packages, mut slots, mut android) = runtime.into_parts();
         let mut aggregate = packages.load(&package).unwrap().unwrap();
         let slot = aggregate
@@ -1274,7 +1684,7 @@ mod tests {
     fn clone_base_checks_the_real_view_as_well_as_the_aggregate() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
         let (packages, slots, mut android) = runtime.into_parts();
         android.set_view(&package, ObservedView::Slot(SlotId::numbered(8)));
         let mut runtime = Runtime::new(packages, slots, android);
@@ -1475,7 +1885,7 @@ mod tests {
     fn base_never_auto_launches_even_when_enabled() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
         runtime.set_launch_after_reboot(&package, true).unwrap();
         let (packages, slots, mut android) = runtime.into_parts();
         android.force_stop(&package).unwrap();
@@ -1511,7 +1921,7 @@ mod tests {
         );
         let mut targets = Vec::new();
         for package in [&opted_in, &opted_out] {
-            runtime.enroll(package.clone(), false).unwrap();
+            runtime.enroll(package.clone(), false, None).unwrap();
             let target = runtime
                 .create_slot(package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
                 .unwrap()
@@ -1648,7 +2058,7 @@ mod tests {
     fn unenroll_from_base_and_repeated_unenroll_are_idempotent() {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone(), false).unwrap();
+        runtime.enroll(package.clone(), false, None).unwrap();
 
         runtime.unenroll(&package).unwrap();
         runtime.unenroll(&package).unwrap();

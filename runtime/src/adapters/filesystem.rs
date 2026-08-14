@@ -5,7 +5,12 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "android")]
 use std::process::Command;
 
-use crate::model::{PackageAggregate, PackageName, SeedMode, Slot, SlotId};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+
+use crate::model::{
+    PackageAggregate, PackageBinding, PackageName, RebindIntent, SeedMode, Slot, SlotId,
+};
 use crate::ports::{AdapterError, PackageStore, SlotStorage};
 
 #[derive(Debug)]
@@ -25,6 +30,40 @@ impl FilePackageStore {
             .join(package.as_str())
             .join("aggregate.json")
     }
+
+    fn binding_path(&self, package: &PackageName) -> PathBuf {
+        self.packages_root
+            .join(package.as_str())
+            .join("binding-v1.json")
+    }
+
+    fn rebind_intent_path(&self, package: &PackageName) -> PathBuf {
+        self.packages_root
+            .join(package.as_str())
+            .join("rebind-intent.json")
+    }
+
+    fn backup_path(&self, package: &PackageName) -> Result<PathBuf, AdapterError> {
+        let runtime_root = self
+            .packages_root
+            .parent()
+            .ok_or_else(|| AdapterError::new("packages root has no parent"))?;
+        Ok(runtime_root
+            .join("state-backups")
+            .join("pre-0.1.7")
+            .join(package.as_str())
+            .join("aggregate.json"))
+    }
+
+    fn backup_slot_manifest_path(&self, package: &PackageName) -> Result<PathBuf, AdapterError> {
+        Ok(self.backup_path(package)?.with_file_name("slot-pairs.json"))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SlotPairBackup {
+    ce: Vec<SlotId>,
+    de: Vec<SlotId>,
 }
 
 impl PackageStore for FilePackageStore {
@@ -73,21 +112,80 @@ impl PackageStore for FilePackageStore {
         aggregate
             .validate()
             .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
-        let path = self.aggregate_path(aggregate.package());
-        let parent = path
-            .parent()
-            .ok_or_else(|| AdapterError::new("aggregate path has no parent"))?;
-        fs::create_dir_all(parent).map_err(io_error)?;
-        let bytes =
-            serde_json::to_vec(aggregate).map_err(|error| AdapterError::new(error.to_string()))?;
-        let temporary = parent.join(format!(".aggregate.json.tmp-{}", std::process::id()));
-        let mut file = File::create(&temporary).map_err(io_error)?;
-        file.write_all(&bytes).map_err(io_error)?;
-        file.sync_all().map_err(io_error)?;
-        fs::rename(&temporary, &path).map_err(io_error)?;
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(io_error)?;
+        write_json_atomic(&self.aggregate_path(aggregate.package()), aggregate)
+    }
+
+    fn load_binding(&self, package: &PackageName) -> Result<Option<PackageBinding>, AdapterError> {
+        let binding = read_optional_json::<PackageBinding>(&self.binding_path(package))?;
+        if let Some(binding) = &binding {
+            binding
+                .validate()
+                .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        }
+        Ok(binding)
+    }
+
+    fn save_binding(
+        &mut self,
+        package: &PackageName,
+        binding: &PackageBinding,
+    ) -> Result<(), AdapterError> {
+        binding
+            .validate()
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        write_json_atomic(&self.binding_path(package), binding)
+    }
+
+    fn load_rebind_intent(
+        &self,
+        package: &PackageName,
+    ) -> Result<Option<RebindIntent>, AdapterError> {
+        let intent = read_optional_json::<RebindIntent>(&self.rebind_intent_path(package))?;
+        if let Some(intent) = &intent {
+            intent
+                .validate()
+                .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+            if &intent.package != package {
+                return Err(AdapterError::state_conflict(
+                    "rebind intent package does not match its path",
+                ));
+            }
+        }
+        Ok(intent)
+    }
+
+    fn save_rebind_intent(&mut self, intent: &RebindIntent) -> Result<(), AdapterError> {
+        intent
+            .validate()
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        write_json_atomic(&self.rebind_intent_path(&intent.package), intent)
+    }
+
+    fn clear_rebind_intent(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        match fs::remove_file(self.rebind_intent_path(package)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(io_error(error)),
+        }
+    }
+
+    fn backup_before_v1_binding(
+        &mut self,
+        aggregate: &PackageAggregate,
+        complete_pairs: &[SlotId],
+    ) -> Result<(), AdapterError> {
+        let aggregate_path = self.backup_path(aggregate.package())?;
+        if !aggregate_path.is_file() {
+            write_json_atomic(&aggregate_path, aggregate)?;
+        }
+        let manifest_path = self.backup_slot_manifest_path(aggregate.package())?;
+        if !manifest_path.is_file() {
+            let manifest = SlotPairBackup {
+                ce: complete_pairs.to_vec(),
+                de: complete_pairs.to_vec(),
+            };
+            write_json_atomic(&manifest_path, &manifest)?;
+        }
         Ok(())
     }
 
@@ -108,6 +206,36 @@ impl PackageStore for FilePackageStore {
             Err(error) => Err(io_error(error)),
         }
     }
+}
+
+fn read_optional_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, AdapterError> {
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| AdapterError::state_conflict(error.to_string())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+fn write_json_atomic<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), AdapterError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AdapterError::new("state path has no parent"))?;
+    fs::create_dir_all(parent).map_err(io_error)?;
+    let bytes = serde_json::to_vec(value).map_err(|error| AdapterError::new(error.to_string()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| AdapterError::new("state path is not UTF-8"))?;
+    let temporary = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+    let mut file = File::create(&temporary).map_err(io_error)?;
+    file.write_all(&bytes).map_err(io_error)?;
+    file.sync_all().map_err(io_error)?;
+    fs::rename(&temporary, path).map_err(io_error)?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(io_error)
 }
 
 #[derive(Debug)]
@@ -403,6 +531,30 @@ mod tests {
 
         assert_eq!(store.load(&package).unwrap(), Some(aggregate));
         assert_eq!(store.list().unwrap(), vec![package]);
+    }
+
+    #[test]
+    fn pre_v1_binding_backup_records_aggregate_and_both_domain_inventories_once() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let mut store = FilePackageStore::open(root.path()).unwrap();
+        let aggregate = PackageAggregate::enrolled(package.clone(), identity());
+        let pairs = vec![SlotId::numbered(1), SlotId::numbered(2)];
+
+        store.backup_before_v1_binding(&aggregate, &pairs).unwrap();
+
+        let backup_root = root
+            .path()
+            .join("state-backups/pre-0.1.7")
+            .join(package.as_str());
+        let restored: PackageAggregate =
+            serde_json::from_slice(&fs::read(backup_root.join("aggregate.json")).unwrap()).unwrap();
+        let inventory: SlotPairBackup =
+            serde_json::from_slice(&fs::read(backup_root.join("slot-pairs.json")).unwrap())
+                .unwrap();
+        assert_eq!(restored, aggregate);
+        assert_eq!(inventory.ce, pairs);
+        assert_eq!(inventory.de, pairs);
     }
 
     #[test]

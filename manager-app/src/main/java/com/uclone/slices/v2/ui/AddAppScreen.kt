@@ -57,10 +57,11 @@ internal fun AddAppScreen(
                 onBack = { onIntent(UiIntent.NavigateBack) },
             )
         }
-        if (!state.runtimeReady) {
+        if (!state.operationsAllowed) {
             item {
                 RuntimeStatusCard(
-                    runtimeReady = false,
+                    runtimeReady = state.runtimeReady,
+                    runtimeCompatible = state.runtimeCompatible,
                     busy = state.busy,
                     enabled = !state.busy,
                     onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
@@ -91,7 +92,7 @@ internal fun AddAppScreen(
             item {
                 AvailableAppsCard(
                     apps = availableApps,
-                    enabled = state.runtimeReady && !state.busy,
+                    enabled = state.operationsAllowed && !state.busy,
                     onConfigure = { onIntent(UiIntent.RequestConfigureApp(it)) },
                 )
             }

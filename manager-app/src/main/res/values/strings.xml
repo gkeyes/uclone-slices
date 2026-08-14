@@ -12,8 +12,10 @@
     <string name="environment_ready">运行环境正常</string>
     <string name="environment_processing">正在处理操作</string>
     <string name="environment_unavailable">运行环境不可用</string>
+    <string name="environment_version_mismatch">运行环境版本不匹配</string>
     <string name="environment_ready_description">数据空间切换服务可用</string>
     <string name="environment_unavailable_description">点击查看状态并重新连接</string>
+    <string name="environment_version_mismatch_description">当前仅可查看，请先升级模块</string>
 
     <string name="add_app">添加应用</string>
     <string name="add_app_subtitle">选择需要配置独立数据空间的应用</string>
@@ -28,6 +30,9 @@
     <string name="unenroll_app_action">取消配置并删除分空间</string>
     <string name="available_apps">可配置应用</string>
     <string name="configured_app_summary">%1$d 个独立空间 · 当前使用 %2$s</string>
+    <string name="binding_ready">身份绑定正常</string>
+    <string name="binding_recovery_pending">正在等待安全恢复身份绑定</string>
+    <string name="binding_confirmation_required">旧配置需要确认后无损重新绑定</string>
     <string name="not_configured">尚未配置</string>
     <string name="loading_apps">正在读取应用和空间状态</string>
     <string name="no_configured_apps">还没有已配置应用</string>
@@ -85,6 +90,7 @@
     <string name="runtime_status_subtitle">查看 Manager 当前能够确认的 Runtime 状态</string>
     <string name="runtime_ready_long">Runtime 已连接，可以创建、切换并启动数据空间。</string>
     <string name="runtime_unavailable_long">Manager 无法连接 Runtime，空间操作暂时不可用。</string>
+    <string name="runtime_version_mismatch_long">Manager 已连接 Runtime，但版本不一致。为保护分空间，所有写入、切换和删除操作均已禁用，请先升级模块。</string>
     <string name="runtime_details">连接详情</string>
     <string name="runtime_connection">Runtime 连接</string>
     <string name="runtime_version">Runtime 版本</string>
@@ -104,7 +110,7 @@
     <string name="operation_deleting">正在删除“%1$s”</string>
     <string name="operation_unenrolling">正在取消“%1$s”的配置</string>
     <string name="operation_saving_reboot_launch">正在保存重启启动设置</string>
-    <string name="operation_repairing">正在修复应用配置</string>
+    <string name="operation_rebinding">正在无损重新绑定应用配置</string>
     <string name="operation_wait_hint">完成前请保持当前页面</string>
 
     <string name="error_local_apps">读取本地应用失败，请重试</string>
@@ -113,8 +119,11 @@
     <string name="error_missing_entity">应用或数据空间已不存在，请刷新状态</string>
     <string name="error_state_changed">应用数据状态已经变化，请刷新后确认</string>
     <string name="error_operation_failed">操作未完整完成，请刷新确认当前空间</string>
+    <string name="error_identity_protected">旧分空间已保护，当前应用身份不兼容，无法安全接管</string>
+    <string name="error_signing_unavailable">无法读取应用签名，旧分空间保持不动</string>
+    <string name="error_runtime_version_mismatch">Manager 与 Runtime 版本不一致；当前仅可查看，请先升级模块</string>
     <string name="success_configured">应用已配置</string>
-    <string name="success_repaired">应用配置已修复</string>
+    <string name="success_rebound">已保留分空间并完成重新绑定，应用未启动</string>
     <string name="success_created">已创建“%1$s”</string>
     <string name="success_switched">已切换至“%1$s”并启动</string>
     <string name="success_launched">已启动“%1$s”</string>
@@ -122,12 +131,12 @@
     <string name="success_deleted">已删除“%1$s”及其数据</string>
     <string name="success_unenrolled">已取消“%1$s”的配置并删除分空间</string>
 
-    <string name="reset_title">应用配置需要修复</string>
-    <string name="reset_message">%1$s 的配置已失效。继续操作会清理旧的独立空间并使用当前应用身份重新配置。</string>
-    <string name="reset_affected_spaces">将清理：%1$s</string>
-    <string name="reset_no_named_spaces">没有可列出的旧独立空间，但失效配置仍会被清理。</string>
-    <string name="reset_base_preserved">系统原始空间及其中的数据不会删除。</string>
-    <string name="reset_confirmation_label">输入“删除”以确认</string>
-    <string name="reset_confirmation_hint">这是不可撤销的数据清理操作</string>
-    <string name="reset_confirm">修复并清理旧空间</string>
+    <string name="rebind_title">保留分空间并重新绑定？</string>
+    <string name="rebind_message">%1$s 来自 0.1.6 的旧配置，缺少签名记录。确认当前应用可信后可无损恢复。</string>
+    <string name="rebind_affected_spaces">将保留并恢复：%1$s</string>
+    <string name="rebind_no_named_spaces">当前没有已命名的独立空间，配置记录仍会保留。</string>
+    <string name="rebind_data_preserved">账号名称、CE/DE 数据、当前账号和重启启动开关均不会删除；重新绑定不会启动应用。</string>
+    <string name="rebind_confirmation_label">输入“绑定”以确认</string>
+    <string name="rebind_confirmation_hint">仅在确认这是同一个可信应用时继续</string>
+    <string name="rebind_confirm">保留分空间并重新绑定</string>
 </resources>

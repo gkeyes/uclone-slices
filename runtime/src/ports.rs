@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use crate::model::{
-    Capabilities, ObservedView, PackageAggregate, PackageInspection, PackageName, SeedMode, Slot,
-    SlotId,
+    Capabilities, ObservedView, PackageAggregate, PackageBinding, PackageInspection, PackageName,
+    RebindIntent, SeedMode, Slot, SlotId,
 };
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -36,6 +36,23 @@ pub(crate) trait PackageStore: core::fmt::Debug {
     fn list(&self) -> Result<Vec<PackageName>, AdapterError>;
     fn load(&self, package: &PackageName) -> Result<Option<PackageAggregate>, AdapterError>;
     fn save(&mut self, aggregate: &PackageAggregate) -> Result<(), AdapterError>;
+    fn load_binding(&self, package: &PackageName) -> Result<Option<PackageBinding>, AdapterError>;
+    fn save_binding(
+        &mut self,
+        package: &PackageName,
+        binding: &PackageBinding,
+    ) -> Result<(), AdapterError>;
+    fn load_rebind_intent(
+        &self,
+        package: &PackageName,
+    ) -> Result<Option<RebindIntent>, AdapterError>;
+    fn save_rebind_intent(&mut self, intent: &RebindIntent) -> Result<(), AdapterError>;
+    fn clear_rebind_intent(&mut self, package: &PackageName) -> Result<(), AdapterError>;
+    fn backup_before_v1_binding(
+        &mut self,
+        aggregate: &PackageAggregate,
+        complete_pairs: &[SlotId],
+    ) -> Result<(), AdapterError>;
     fn remove(&mut self, package: &PackageName) -> Result<(), AdapterError>;
 }
 

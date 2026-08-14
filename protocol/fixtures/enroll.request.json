@@ -1,2 +1,1 @@
-{"op":"enroll","package":"com.example.app"}
-
+{"op":"enroll","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}}
