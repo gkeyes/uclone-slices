@@ -3,6 +3,7 @@ package com.uclone.slices.v2.ui
 import com.uclone.slices.v2.BuildConfig
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
+import com.uclone.slices.v2.desktop.MemoryDesktopShortcutProjection
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.PackageSnapshot
@@ -680,6 +681,41 @@ class SlotsViewModelTest {
         assertEquals(UiNotice.RuntimeUnavailable, viewModel.state.value.notice)
     }
 
+    @Test
+    fun desktopShortcutBindingAndProjectionFollowManagerOperations() {
+        val initial = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(initial))
+        val projection = MemoryDesktopShortcutProjection()
+        val viewModel = SlotsViewModel(
+            client,
+            appSource,
+            Dispatchers.Unconfined,
+            desktopProjection = projection,
+        )
+        viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
+
+        viewModel.onIntent(UiIntent.SetDesktopShortcut(initial.packageName, "slot-1"))
+
+        assertEquals(
+            RuntimeCommand.SetDesktopShortcut(initial.packageName, "slot-1"),
+            client.commands.last(),
+        )
+        assertEquals("Work", projection.menuState(initial.packageName)?.targetName)
+        assertEquals(UiNotice.DesktopShortcutBound("Work"), viewModel.state.value.notice)
+
+        viewModel.onIntent(UiIntent.RequestRenameSlot("slot-1"))
+        viewModel.onIntent(UiIntent.RenameSlotNameChanged("工作微信"))
+        viewModel.onIntent(UiIntent.ConfirmRenameSlot)
+        assertEquals("工作微信", projection.menuState(initial.packageName)?.targetName)
+
+        viewModel.onIntent(UiIntent.ActivateSlot("slot-1"))
+        assertEquals("系统原始空间", projection.menuState(initial.packageName)?.targetName)
+
+        viewModel.onIntent(UiIntent.SetDesktopShortcut(initial.packageName, null))
+        assertNull(projection.menuState(initial.packageName))
+        assertEquals(UiNotice.DesktopShortcutUnbound, viewModel.state.value.notice)
+    }
+
     private fun configureApp(viewModel: SlotsViewModel) {
         viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
         viewModel.onIntent(UiIntent.ConfirmConfigureApp)
@@ -689,6 +725,7 @@ class SlotsViewModelTest {
 private fun packageSnapshot(
     active: String = "base",
     bindingState: BindingState = BindingState.Ready,
+    desktopShortcutSlot: String? = null,
 ) = PackageSnapshot(
     packageName = "com.example.app",
     activeSlot = active,
@@ -696,6 +733,7 @@ private fun packageSnapshot(
         SlotSnapshot("base", "Base"),
         SlotSnapshot("slot-1", "Work"),
     ),
+    desktopShortcutSlot = desktopShortcutSlot,
     bindingState = bindingState,
 )
 
@@ -774,6 +812,23 @@ private open class FakeRuntimeClient(
                 snapshot = snapshot.copy(launchAfterReboot = command.enabled)
                 RuntimeReply.Package(snapshot)
             }
+            is RuntimeCommand.SetDesktopShortcut -> {
+                snapshot = snapshot.copy(desktopShortcutSlot = command.slotId)
+                RuntimeReply.Package(snapshot)
+            }
+            is RuntimeCommand.ActivateDesktopShortcut -> {
+                val target = if (snapshot.activeSlot == snapshot.desktopShortcutSlot) {
+                    "base"
+                } else {
+                    snapshot.desktopShortcutSlot
+                }
+                if (target == null) {
+                    RuntimeReply.Error(ErrorCode.NotFound)
+                } else {
+                    snapshot = snapshot.copy(activeSlot = target)
+                    RuntimeReply.Package(snapshot)
+                }
+            }
         }
     }
 }
@@ -826,6 +881,8 @@ private class BlockingRuntimeClient : RuntimeClient {
             is RuntimeCommand.RebindPackage,
             is RuntimeCommand.Unenroll,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.SetDesktopShortcut,
+            is RuntimeCommand.ActivateDesktopShortcut,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }
@@ -857,6 +914,8 @@ private class BlockingRebindRuntimeClient : RuntimeClient {
             is RuntimeCommand.DeleteSlot,
             is RuntimeCommand.Unenroll,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.SetDesktopShortcut,
+            is RuntimeCommand.ActivateDesktopShortcut,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }
@@ -886,6 +945,8 @@ private class BlockingQuickRuntimeClient : RuntimeClient {
             is RuntimeCommand.RenameSlot,
             is RuntimeCommand.DeleteSlot,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.SetDesktopShortcut,
+            is RuntimeCommand.ActivateDesktopShortcut,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }

@@ -93,6 +93,21 @@ internal fun PackageDetailScreen(
                     ?.let { slot ->
                         { onIntent(UiIntent.RequestRenameSlot(slot.id)) }
                     },
+                isDesktopShortcutBound = activeSlot?.id == packageSnapshot.desktopShortcutSlot,
+                onToggleDesktopShortcut = activeSlot
+                    ?.takeUnless { it.id == BASE_SLOT_ID }
+                    ?.let { slot ->
+                        {
+                            onIntent(
+                                UiIntent.SetDesktopShortcut(
+                                    packageSnapshot.packageName,
+                                    slot.id.takeUnless {
+                                        it == packageSnapshot.desktopShortcutSlot
+                                    },
+                                ),
+                            )
+                        }
+                    },
             )
         }
         item {
@@ -145,6 +160,21 @@ internal fun PackageDetailScreen(
                         null
                     } else {
                         { onIntent(UiIntent.RequestDeleteSlot(slot.id)) }
+                    },
+                    isDesktopShortcutBound = slot.id == packageSnapshot.desktopShortcutSlot,
+                    onToggleDesktopShortcut = if (slot.id == BASE_SLOT_ID) {
+                        null
+                    } else {
+                        {
+                            onIntent(
+                                UiIntent.SetDesktopShortcut(
+                                    packageSnapshot.packageName,
+                                    slot.id.takeUnless {
+                                        it == packageSnapshot.desktopShortcutSlot
+                                    },
+                                ),
+                            )
+                        }
                     },
                 )
             }
@@ -216,6 +246,8 @@ private fun CurrentSpaceCard(
     enabled: Boolean,
     onLaunch: () -> Unit,
     onRename: (() -> Unit)?,
+    isDesktopShortcutBound: Boolean,
+    onToggleDesktopShortcut: (() -> Unit)?,
 ) {
     SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
@@ -246,6 +278,8 @@ private fun CurrentSpaceCard(
                         enabled = enabled,
                         onRename = it,
                         onDelete = null,
+                        isDesktopShortcutBound = isDesktopShortcutBound,
+                        onToggleDesktopShortcut = onToggleDesktopShortcut,
                     )
                 }
             }
@@ -267,12 +301,29 @@ private fun CurrentSpaceCard(
                     modifier = Modifier.padding(start = 8.dp),
                 )
             }
-            Text(
-                text = activeSlot?.let(::spaceDisplayName)
-                    ?: stringResource(R.string.unknown_space),
-                style = MaterialTheme.typography.titleLarge,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(top = 8.dp),
-            )
+            ) {
+                Text(
+                    text = activeSlot?.let(::spaceDisplayName)
+                        ?: stringResource(R.string.unknown_space),
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (isDesktopShortcutBound) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_swap_horizontal),
+                        contentDescription = stringResource(R.string.desktop_shortcut_bound),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .size(18.dp),
+                    )
+                }
+            }
             Text(
                 text = if (activeSlot?.id == BASE_SLOT_ID) {
                     stringResource(R.string.system_space_description)
@@ -302,6 +353,8 @@ private fun OtherSpaceCard(
     onActivate: () -> Unit,
     onRename: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    isDesktopShortcutBound: Boolean,
+    onToggleDesktopShortcut: (() -> Unit)?,
 ) {
     SlicesPanel(
         modifier = Modifier.fillMaxWidth(),
@@ -326,12 +379,27 @@ private fun OtherSpaceCard(
                         .weight(1f)
                         .padding(start = 12.dp),
                 ) {
-                    Text(
-                        text = spaceDisplayName(slot),
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = spaceDisplayName(slot),
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (isDesktopShortcutBound) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_swap_horizontal),
+                                contentDescription = stringResource(
+                                    R.string.desktop_shortcut_bound,
+                                ),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .padding(start = 6.dp)
+                                    .size(16.dp),
+                            )
+                        }
+                    }
                     Text(
                         text = if (slot.id == BASE_SLOT_ID) {
                             stringResource(R.string.system_space_description)
@@ -347,6 +415,8 @@ private fun OtherSpaceCard(
                         enabled = enabled,
                         onRename = it,
                         onDelete = onDelete,
+                        isDesktopShortcutBound = isDesktopShortcutBound,
+                        onToggleDesktopShortcut = onToggleDesktopShortcut,
                     )
                 }
             }
@@ -368,6 +438,8 @@ private fun SpaceActionsMenu(
     enabled: Boolean,
     onRename: () -> Unit,
     onDelete: (() -> Unit)?,
+    isDesktopShortcutBound: Boolean,
+    onToggleDesktopShortcut: (() -> Unit)?,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Box {
@@ -392,6 +464,25 @@ private fun SpaceActionsMenu(
                     onRename()
                 },
             )
+            onToggleDesktopShortcut?.let { toggle ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            stringResource(
+                                if (isDesktopShortcutBound) {
+                                    R.string.unbind_desktop_shortcut
+                                } else {
+                                    R.string.bind_desktop_shortcut
+                                },
+                            ),
+                        )
+                    },
+                    onClick = {
+                        expanded = false
+                        toggle()
+                    },
+                )
+            }
             onDelete?.let { delete ->
                 DropdownMenuItem(
                     text = {

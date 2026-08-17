@@ -1,1 +1,1 @@
-{"ok":{"package":{"package":"com.example.app","active_slot":"base","launch_after_reboot":false,"binding_state":"ready","slots":[{"id":"base","name":"Base"},{"id":"slot-1","name":"Personal"}]}}}
+{"ok":{"package":{"package":"com.example.app","active_slot":"base","launch_after_reboot":false,"desktop_shortcut_slot":null,"binding_state":"ready","slots":[{"id":"base","name":"Base"},{"id":"slot-1","name":"Personal"}]}}}

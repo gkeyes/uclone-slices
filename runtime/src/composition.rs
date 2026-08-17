@@ -99,6 +99,21 @@ impl ProductionRuntime {
         self.inner.activate_slot(package, target)
     }
 
+    pub fn set_desktop_shortcut(
+        &mut self,
+        package: &PackageName,
+        target: Option<&SlotId>,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        self.inner.set_desktop_shortcut(package, target)
+    }
+
+    pub fn activate_desktop_shortcut(
+        &mut self,
+        package: &PackageName,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        self.inner.activate_desktop_shortcut(package)
+    }
+
     pub(crate) fn inner_mut(&mut self) -> &mut InnerRuntime {
         &mut self.inner
     }

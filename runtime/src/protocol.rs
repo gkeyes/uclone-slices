@@ -34,6 +34,13 @@ pub enum Command {
         package: PackageName,
         enabled: bool,
     },
+    SetDesktopShortcut {
+        package: PackageName,
+        slot: Option<SlotId>,
+    },
+    ActivateDesktopShortcut {
+        package: PackageName,
+    },
     CreateSlot {
         package: PackageName,
         name: DisplayName,
@@ -122,6 +129,8 @@ fn decode_command(line: &str) -> Result<Command, ()> {
         "rebind_package" => &["op", "package", "signing", "trust_legacy"][..],
         "unenroll" => &["op", "package"][..],
         "set_launch_after_reboot" => &["op", "package", "enabled"][..],
+        "set_desktop_shortcut" => &["op", "package", "slot"][..],
+        "activate_desktop_shortcut" => &["op", "package"][..],
         "create_slot" => &["op", "package", "name", "seed"][..],
         "activate_slot" => &["op", "package", "slot"][..],
         "rename_slot" => &["op", "package", "slot", "name"][..],
@@ -143,6 +152,9 @@ fn decode_command(line: &str) -> Result<Command, ()> {
             .get("trust_legacy")
             .is_some_and(|trust| !trust.is_boolean())
     {
+        return Err(());
+    }
+    if operation == "set_desktop_shortcut" && !object.contains_key("slot") {
         return Err(());
     }
     serde_json::from_value(value).map_err(|_error| ())
@@ -181,6 +193,12 @@ where
             .map(|()| SuccessPayload::Empty {}),
         Command::SetLaunchAfterReboot { package, enabled } => runtime
             .set_launch_after_reboot(&package, enabled)
+            .map(|package| SuccessPayload::Package { package }),
+        Command::SetDesktopShortcut { package, slot } => runtime
+            .set_desktop_shortcut(&package, slot.as_ref())
+            .map(|package| SuccessPayload::Package { package }),
+        Command::ActivateDesktopShortcut { package } => runtime
+            .activate_desktop_shortcut(&package)
             .map(|package| SuccessPayload::Package { package }),
         Command::CreateSlot {
             package,
@@ -282,6 +300,19 @@ mod tests {
     }
 
     #[test]
+    fn shared_desktop_shortcut_fixtures_cover_binding_and_activation() {
+        let mut runtime = runtime_with_slot();
+        for name in ["set_desktop_shortcut", "activate_desktop_shortcut"] {
+            let request = fixture(format!("{name}.request.json"));
+            let expected = fixture(format!("{name}.response.json"));
+
+            let actual = handle_line(&mut runtime, request.trim());
+
+            assert_eq!(actual.trim(), expected.trim(), "fixture {name}");
+        }
+    }
+
+    #[test]
     fn shared_unenroll_fixture_covers_the_registration_removal() {
         let mut runtime = runtime_with_slot();
         let request = fixture("unenroll.request.json".to_owned());
@@ -334,6 +365,22 @@ mod tests {
         let response = handle_line(
             &mut runtime,
             r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes"}"#,
+        );
+
+        assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
+    }
+
+    #[test]
+    fn desktop_shortcut_setting_requires_an_explicit_slot_or_null() {
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            MemoryAndroidOps::default(),
+        );
+
+        let response = handle_line(
+            &mut runtime,
+            r#"{"op":"set_desktop_shortcut","package":"com.example.app"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");

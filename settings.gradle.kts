@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "UCloneSlicesV2"
 include(":manager-app")
 include(":device-fixture-app")
+include(":launcher-hook")

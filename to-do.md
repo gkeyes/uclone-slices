@@ -1,8 +1,16 @@
 # UClone Slices V2 待办
 
-更新日期：2026-08-14。
+更新日期：2026-08-17。
 
 这里仅记录尚未完成的工作。已经解决的问题由 Git 提交和回归测试保存，不继续以陈旧行号、设备二进制大小或一次性热修过程污染待办。
+
+## 0.1.8 桌面快捷切换候选门禁
+
+- [ ] 由固定 Release keystore 构建 Manager 与 Launcher Hook，并确认两者证书 SHA-256 都是 `4883794fda44a6ea085eae09ea2ead48e5233c67e76f751108fb6469b412ba14`。
+- [ ] 在 `com.miui.home` `801025341 / RELEASE-8.01.02.5341-260807-08151903-R` 上先运行 Debug Hook 无数据操作探针，确认 `LauncherApps.getShortcuts/startShortcut` seam；不通过即停止，不转向 Flutter 私有函数或 `libapp.so`。
+- [ ] 按 [`docs/DESKTOP_SHORTCUT_QA.md`](docs/DESKTOP_SHORTCUT_QA.md) 验收未绑定、Base、绑定账号、第三账号、重命名、删除、Runtime 离线、版本不匹配、日夜主题、重启和覆盖升级矩阵。
+- [ ] 使用同一提交的精确 GitHub 产物完成真机验收并保存 `SHA256SUMS.txt`；完成前只保留 `v0.1.8` 候选状态。
+- [ ] 保留旧 `com.uclone.restore.module` 安装，仅取消它对 `com.miui.home` 的作用域，然后启用新 `com.uclone.slices.v2.launcher` 模块。
 
 ## 0.1.7 升降级无损候选门禁
 
@@ -37,6 +45,6 @@
 ## 固定约束
 
 - Bug 先有只读探针或稳定失败测试，再修改生产代码。
-- wire 在当前里程碑保持十一个命令和五个错误码。
+- wire 在当前里程碑保持十三个命令和五个错误码。
 - 不采用文件行数、覆盖率、循环次数、经验重试次数或经验超时作为完成标准。
 - 真机门禁未全部关闭时只发布明确标注的预发布版，不把设备行为写成已经正式验收。

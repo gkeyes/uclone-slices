@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import com.uclone.slices.v2.BuildConfig
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
+import com.uclone.slices.v2.desktop.DesktopShortcutProjection
+import com.uclone.slices.v2.desktop.MemoryDesktopShortcutProjection
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.PackageSnapshot
@@ -55,6 +57,7 @@ sealed interface OperationUiState {
         val appLabel: String,
     ) : OperationUiState
     data class SavingRebootLaunch(val packageName: String) : OperationUiState
+    data class SavingDesktopShortcut(val packageName: String) : OperationUiState
     data class RebindingConfiguration(val packageName: String) : OperationUiState
 }
 
@@ -77,6 +80,8 @@ sealed interface UiNotice {
     ) : UiNotice
     data class SpaceRenamed(val name: String) : UiNotice
     data class SpaceDeleted(val name: String) : UiNotice
+    data class DesktopShortcutBound(val name: String) : UiNotice
+    data object DesktopShortcutUnbound : UiNotice
     data class AppUnenrolled(val appLabel: String) : UiNotice
 }
 
@@ -142,6 +147,10 @@ sealed interface UiIntent {
         val packageName: String,
         val enabled: Boolean,
     ) : UiIntent
+    data class SetDesktopShortcut(
+        val packageName: String,
+        val slotId: String?,
+    ) : UiIntent
     data class QuickActivateSlot(val packageName: String, val slotId: String) : UiIntent
     data object NavigateBack : UiIntent
     data class RequestConfigureApp(val packageName: String) : UiIntent
@@ -173,6 +182,7 @@ internal class SlotsViewModel(
     private val installedApps: InstalledAppsSource,
     dispatcher: CoroutineDispatcher,
     private val uiPreferences: ManagerUiPreferences = MemoryManagerUiPreferences(),
+    private val desktopProjection: DesktopShortcutProjection = MemoryDesktopShortcutProjection(),
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableState = MutableStateFlow(
@@ -202,6 +212,8 @@ internal class SlotsViewModel(
             }
             is UiIntent.SetLaunchAfterReboot ->
                 setLaunchAfterReboot(intent.packageName, intent.enabled)
+            is UiIntent.SetDesktopShortcut ->
+                setDesktopShortcut(intent.packageName, intent.slotId)
             is UiIntent.QuickActivateSlot ->
                 quickActivateSlot(intent.packageName, intent.slotId)
             UiIntent.NavigateBack -> navigateBack()
@@ -453,6 +465,43 @@ internal class SlotsViewModel(
             applyHomePackageReply(
                 client.execute(RuntimeCommand.SetLaunchAfterReboot(packageName, enabled)),
                 successNotice = null,
+            )
+        }
+    }
+
+    private fun setDesktopShortcut(packageName: String, slotId: String?) {
+        val snapshot = state.value
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
+            return
+        }
+        if (snapshot.busy) return
+        val packageSnapshot = snapshot.packages.firstOrNull {
+            it.packageName == packageName
+        }
+        if (packageSnapshot == null) {
+            mutableState.update { it.copy(notice = UiNotice.MissingEntity) }
+            return
+        }
+        if (packageSnapshot.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            return
+        }
+        val target = slotId?.let { id ->
+            packageSnapshot.slots.firstOrNull { it.id == id && it.id != BASE_SLOT_ID }
+        }
+        if (slotId != null && target == null) {
+            mutableState.update { it.copy(notice = UiNotice.MissingEntity) }
+            return
+        }
+        val successNotice = target
+            ?.let(::spaceDisplayName)
+            ?.let(UiNotice::DesktopShortcutBound)
+            ?: UiNotice.DesktopShortcutUnbound
+        runOperation(OperationUiState.SavingDesktopShortcut(packageName)) {
+            applyPackageReply(
+                client.execute(RuntimeCommand.SetDesktopShortcut(packageName, slotId)),
+                successNotice = successNotice,
             )
         }
     }
@@ -742,6 +791,7 @@ internal class SlotsViewModel(
                 } else {
                     reply.packages
                 }
+                desktopProjection.replaceAll(packages)
                 mutableState.update { current ->
                 val selectedPackage = current.selected?.packageName
                 val selected = packages.firstOrNull {
@@ -853,7 +903,9 @@ internal class SlotsViewModel(
         successNotice: UiNotice?,
     ) {
         when (reply) {
-            is RuntimeReply.Package -> mutableState.update { current ->
+            is RuntimeReply.Package -> {
+                desktopProjection.upsert(reply.packageSnapshot)
+                mutableState.update { current ->
                 val packages = current.packages
                     .filterNot { it.packageName == reply.packageSnapshot.packageName } +
                     reply.packageSnapshot
@@ -872,6 +924,7 @@ internal class SlotsViewModel(
                     pendingRename = null,
                     pendingDelete = null,
                 )
+                }
             }
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
@@ -887,7 +940,9 @@ internal class SlotsViewModel(
         successNotice: UiNotice?,
     ) {
         when (reply) {
-            is RuntimeReply.Package -> mutableState.update { current ->
+            is RuntimeReply.Package -> {
+                desktopProjection.upsert(reply.packageSnapshot)
+                mutableState.update { current ->
                 val packageSnapshot = reply.packageSnapshot
                 current.copy(
                     packages = (
@@ -905,6 +960,7 @@ internal class SlotsViewModel(
                     notice = successNotice,
                     registrationRecovery = null,
                 )
+                }
             }
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
@@ -921,7 +977,9 @@ internal class SlotsViewModel(
         reply: RuntimeReply,
     ) {
         when (reply) {
-            RuntimeReply.Ack -> mutableState.update { current ->
+            RuntimeReply.Ack -> {
+                desktopProjection.remove(packageName)
+                mutableState.update { current ->
                 val removedSelected = current.selected?.packageName == packageName
                 current.copy(
                     packages = current.packages.filterNot {
@@ -940,6 +998,7 @@ internal class SlotsViewModel(
                     registrationRecovery = null,
                     pendingUnenroll = null,
                 )
+                }
             }
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()

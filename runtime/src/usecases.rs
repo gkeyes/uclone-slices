@@ -34,6 +34,12 @@ enum UnenrollContext {
     Recovery,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivationLaunchPolicy {
+    PreserveCommittedTarget,
+    RollBackOnFailure,
+}
+
 impl UnenrollContext {
     fn operation(self) -> &'static str {
         match self {
@@ -382,12 +388,72 @@ where
         aggregate.snapshot().map_err(model_error)
     }
 
+    pub fn set_desktop_shortcut(
+        &mut self,
+        package: &PackageName,
+        target: Option<&SlotId>,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        let (mut aggregate, _inspection) = self.load_ready(package)?;
+        if let Some(target) = target {
+            if target.is_base() || !aggregate.has_slot(target) {
+                return Err(RuntimeError::StateConflict);
+            }
+            self.slots
+                .require_complete_pair(package, target)
+                .map_err(|error| {
+                    logged_conflict("set_desktop_shortcut", package, "verify_target", error)
+                })?;
+        }
+        aggregate
+            .set_desktop_shortcut(target.cloned())
+            .map_err(model_error)?;
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("set_desktop_shortcut", package, "save", error))?;
+        aggregate.snapshot().map_err(model_error)
+    }
+
+    pub fn activate_desktop_shortcut(
+        &mut self,
+        package: &PackageName,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        let (aggregate, inspection) = self.load_ready(package)?;
+        let target = aggregate
+            .desktop_shortcut_target()
+            .map_err(model_error)?
+            .clone();
+        self.activate_loaded(
+            package,
+            aggregate,
+            inspection,
+            &target,
+            ActivationLaunchPolicy::RollBackOnFailure,
+        )
+    }
+
     pub fn activate_slot(
         &mut self,
         package: &PackageName,
         target: &SlotId,
     ) -> Result<PackageSnapshot, RuntimeError> {
-        let (mut aggregate, inspection) = self.load_ready(package)?;
+        let (aggregate, inspection) = self.load_ready(package)?;
+        self.activate_loaded(
+            package,
+            aggregate,
+            inspection,
+            target,
+            ActivationLaunchPolicy::PreserveCommittedTarget,
+        )
+    }
+
+    fn activate_loaded(
+        &mut self,
+        package: &PackageName,
+        mut aggregate: PackageAggregate,
+        inspection: PackageInspection,
+        target: &SlotId,
+        launch_policy: ActivationLaunchPolicy,
+    ) -> Result<PackageSnapshot, RuntimeError> {
         if !aggregate.has_slot(target) {
             return Err(RuntimeError::NotFound);
         }
@@ -434,6 +500,30 @@ where
         if !matches!(observed, Ok(view) if view.matches(target)) {
             self.rollback_activation(&mut aggregate, &previous, inspection.was_running)?;
             return Err(RuntimeError::OperationFailed);
+        }
+
+        if launch_policy == ActivationLaunchPolicy::RollBackOnFailure {
+            if let Err(error) = self.android.launch_verified(package, target) {
+                log_adapter("activate_slot", package, "launch_target", &error);
+                self.rollback_after_launch_attempt(
+                    &mut aggregate,
+                    &previous,
+                    inspection.was_running,
+                )?;
+                return Err(RuntimeError::OperationFailed);
+            }
+            let mut rollback_aggregate = aggregate.clone();
+            aggregate.finish_activation(target).map_err(model_error)?;
+            if let Err(error) = self.packages.save(&aggregate) {
+                log_adapter("activate_slot", package, "save_commit", &error);
+                self.rollback_after_launch_attempt(
+                    &mut rollback_aggregate,
+                    &previous,
+                    inspection.was_running,
+                )?;
+                return Err(RuntimeError::OperationFailed);
+            }
+            return aggregate.snapshot().map_err(model_error);
         }
 
         aggregate.finish_activation(target).map_err(model_error)?;
@@ -851,6 +941,24 @@ where
         Ok(())
     }
 
+    fn rollback_after_launch_attempt(
+        &mut self,
+        aggregate: &mut PackageAggregate,
+        previous: &SlotId,
+        restore_running: bool,
+    ) -> Result<(), RuntimeError> {
+        let package = aggregate.package().clone();
+        self.android.force_stop(&package).map_err(|error| {
+            logged_adapter(
+                "activate_slot",
+                &package,
+                "rollback_stop_launched_target",
+                error,
+            )
+        })?;
+        self.rollback_activation(aggregate, previous, restore_running)
+    }
+
     fn restore_after_failed_stop(
         &mut self,
         aggregate: &mut PackageAggregate,
@@ -977,6 +1085,153 @@ mod tests {
             Some(&ObservedView::Slot(activated.active_slot))
         );
         assert!(android.is_running(&package));
+    }
+
+    #[test]
+    fn desktop_shortcut_binds_replaces_unbinds_and_chooses_both_directions() {
+        let package = package();
+        let (mut runtime, first) = with_slot();
+        let second = runtime
+            .create_slot(
+                &package,
+                DisplayName::new("Personal").unwrap(),
+                SeedMode::Blank,
+            )
+            .unwrap()
+            .slots[2]
+            .id
+            .clone();
+
+        assert_eq!(
+            runtime.set_desktop_shortcut(&package, Some(&SlotId::base())),
+            Err(RuntimeError::StateConflict)
+        );
+        let bound = runtime
+            .set_desktop_shortcut(&package, Some(&first))
+            .unwrap();
+        assert_eq!(bound.desktop_shortcut_slot, Some(first.clone()));
+
+        let first_activation = runtime.activate_desktop_shortcut(&package).unwrap();
+        assert_eq!(first_activation.active_slot, first);
+        let base_activation = runtime.activate_desktop_shortcut(&package).unwrap();
+        assert_eq!(base_activation.active_slot, SlotId::base());
+
+        let replaced = runtime
+            .set_desktop_shortcut(&package, Some(&second))
+            .unwrap();
+        assert_eq!(replaced.desktop_shortcut_slot, Some(second));
+        let unbound = runtime.set_desktop_shortcut(&package, None).unwrap();
+        assert_eq!(unbound.desktop_shortcut_slot, None);
+        assert_eq!(
+            runtime.activate_desktop_shortcut(&package),
+            Err(RuntimeError::NotFound)
+        );
+    }
+
+    #[test]
+    fn desktop_shortcut_from_a_third_slot_targets_the_bound_slot() {
+        let package = package();
+        let (mut runtime, bound) = with_slot();
+        let third = runtime
+            .create_slot(
+                &package,
+                DisplayName::new("Third").unwrap(),
+                SeedMode::Blank,
+            )
+            .unwrap()
+            .slots[2]
+            .id
+            .clone();
+        runtime
+            .set_desktop_shortcut(&package, Some(&bound))
+            .unwrap();
+        runtime.activate_slot(&package, &third).unwrap();
+
+        let activated = runtime.activate_desktop_shortcut(&package).unwrap();
+
+        assert_eq!(activated.active_slot, bound);
+    }
+
+    #[test]
+    fn deleting_a_bound_slot_clears_the_binding_after_the_pair_is_removed() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime
+            .set_desktop_shortcut(&package, Some(&target))
+            .unwrap();
+
+        let deleted = runtime.delete_slot(&package, &target).unwrap();
+
+        assert_eq!(deleted.desktop_shortcut_slot, None);
+        assert_eq!(deleted.slots.len(), 1);
+    }
+
+    #[test]
+    fn incomplete_slot_cannot_be_bound_for_desktop_switching() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (packages, mut slots, android) = runtime.into_parts();
+        slots.remove_de(&package, &target);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.set_desktop_shortcut(&package, Some(&target)),
+            Err(RuntimeError::StateConflict)
+        );
+        assert_eq!(
+            runtime.get_package(&package).unwrap().desktop_shortcut_slot,
+            None
+        );
+    }
+
+    #[test]
+    fn desktop_binding_survives_identity_rebind_without_launching_the_app() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime.rebind_package(&package, signing(), false).unwrap();
+        runtime
+            .set_desktop_shortcut(&package, Some(&target))
+            .unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.change_identity(&package);
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let rebound = runtime.rebind_package(&package, signing(), false).unwrap();
+
+        assert_eq!(rebound.desktop_shortcut_slot, Some(target));
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert!(
+            android.calls()[starting_calls..]
+                .iter()
+                .all(|call| !matches!(call, AndroidCall::Launch(_, _)))
+        );
+    }
+
+    #[test]
+    fn desktop_binding_save_failure_keeps_the_previous_binding() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (mut packages, slots, android) = runtime.into_parts();
+        packages.fail_next_save();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.set_desktop_shortcut(&package, Some(&target)),
+            Err(RuntimeError::OperationFailed)
+        );
+
+        let (packages, _slots, _android) = runtime.into_parts();
+        assert_eq!(
+            packages
+                .load(&package)
+                .unwrap()
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .desktop_shortcut_slot,
+            None
+        );
     }
 
     #[test]
@@ -1733,6 +1988,39 @@ mod tests {
     }
 
     #[test]
+    fn desktop_launch_failure_rolls_back_the_view_and_aggregate() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime
+            .set_desktop_shortcut(&package, Some(&target))
+            .unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.fail_next(AndroidFailure::Launch);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        let result = runtime.activate_desktop_shortcut(&package);
+
+        assert_eq!(result, Err(RuntimeError::OperationFailed));
+        let (packages, _slots, android) = runtime.into_parts();
+        assert_eq!(android.view(&package), Some(&ObservedView::Base));
+        assert!(android.is_running(&package));
+        assert!(android.calls().windows(3).any(|calls| {
+            matches!(
+                calls,
+                [
+                    AndroidCall::Launch(_, launched),
+                    AndroidCall::ForceStop(_),
+                    AndroidCall::Apply(_, rolled_back),
+                ] if launched == &target && rolled_back == &SlotId::base()
+            )
+        }));
+        assert_eq!(
+            packages.load(&package).unwrap().unwrap().active_slot(),
+            &SlotId::base()
+        );
+    }
+
+    #[test]
     fn force_stop_failure_restores_the_previous_running_state() {
         let package = package();
         let (runtime, target) = with_slot();
@@ -1964,7 +2252,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_failure_keeps_committed_target_and_same_target_retries_launch() {
+    fn manual_launch_failure_keeps_committed_target_and_retries_launch() {
         let package = package();
         let (runtime, target) = with_slot();
         let (packages, slots, mut android) = runtime.into_parts();
@@ -1981,7 +2269,7 @@ mod tests {
     }
 
     #[test]
-    fn activation_order_is_intent_stop_apply_verify_commit_launch() {
+    fn manual_activation_order_is_intent_stop_apply_verify_commit_then_launch() {
         let package = package();
         let (runtime, target) = with_slot();
         let (packages, slots, android) = runtime.into_parts();
@@ -2024,6 +2312,40 @@ mod tests {
         let recovered = runtime.get_package(&package).unwrap();
 
         assert_eq!(recovered.active_slot, target);
+    }
+
+    #[test]
+    fn desktop_final_save_failure_rolls_back_to_the_previous_view() {
+        let package = package();
+        let (mut runtime, target) = with_slot();
+        runtime
+            .set_desktop_shortcut(&package, Some(&target))
+            .unwrap();
+        let (mut packages, slots, android) = runtime.into_parts();
+        packages.fail_save_call(packages.save_calls() + 2);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(
+            runtime.activate_desktop_shortcut(&package),
+            Err(RuntimeError::OperationFailed)
+        );
+
+        let snapshot = runtime.get_package(&package).unwrap();
+        assert_eq!(snapshot.active_slot, SlotId::base());
+        assert_eq!(snapshot.desktop_shortcut_slot, Some(target.clone()));
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert_eq!(android.view(&package), Some(&ObservedView::Base));
+        assert!(android.is_running(&package));
+        assert!(android.calls().windows(3).any(|calls| {
+            matches!(
+                calls,
+                [
+                    AndroidCall::Launch(_, launched),
+                    AndroidCall::ForceStop(_),
+                    AndroidCall::Apply(_, rolled_back),
+                ] if launched == &target && rolled_back == &SlotId::base()
+            )
+        }));
     }
 
     #[test]
