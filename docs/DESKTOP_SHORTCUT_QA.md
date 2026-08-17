@@ -13,9 +13,9 @@
 
 先执行 `sha256sum -c SHA256SUMS.txt`。再用 `apksigner verify --print-certs` 确认 Manager、Release Hook 与 QA artifact 中的 Debug 探针 Hook 证书 SHA-256 均为：
 
-`4883794fda44a6ea085eae09ea2ead48e5233c67e76f751108fb6469b412ba14`
+`3a98013499c588855ac936d884d9e55497f72827c91ca01e50cf9ca4fc290648`
 
-不一致即停止。不要卸载 Manager、清除 Manager 数据、删除账号目录或通过重签未知 APK 绕过门禁。
+不一致即停止。该证书与已发布的 0.1.7 Manager 不同，不能覆盖安装；先备份现状，再卸载旧 Manager 并安装 0.1.8 候选版。不要清除或删除 Runtime 管理的账号目录，也不要通过重签未知 APK 绕过门禁。
 
 只读保存以下现场信息：当前 Manager/Runtime/旧桌面模块版本、`com.miui.home` 版本、已登记包的 Aggregate、CE/DE 槽对清单、当前活动槽和 LSPosed 作用域。首版桌面唯一支持版本必须是：
 
@@ -38,9 +38,9 @@
 
 ## 3. 候选版安装与作用域
 
-探针通过后，用同一提交的 Release Hook 覆盖 Debug Hook，安装 Manager、刷入 KernelSU 模块并重启。确认：
+探针通过后，用同一提交的 Release Hook 覆盖 Debug Hook，安装 Manager、刷入 KernelSU 模块并重启。已安装 0.1.7 Manager 时需先卸载再安装 0.1.8 候选版。确认：
 
-- Manager 显示 `Runtime 0.1.8`，现有账号、名称、活动槽与 CE/DE 数据均保留。
+- Manager 显示 `Runtime 0.1.8`；安装前后分别核对现有账号、名称、活动槽与 CE/DE 数据。
 - 旧 `com.uclone.restore.module` 仍保持安装，只取消其 `com.miui.home` 作用域。
 - 新 `com.uclone.slices.v2.launcher` 只作用于 `com.miui.home`。
 - 未绑定任何账号的 App 长按时不出现 Slices 快捷项，系统已有快捷项保持不变。

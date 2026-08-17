@@ -91,11 +91,6 @@ jobs:
 
       - name: Verify fixed Manager and Hook signatures
         run: |
-          RUNNER_DEBUG_DIGEST=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs \
-            device-fixture-app/build/outputs/apk/from/debug/device-fixture-app-from-debug.apk | \
-            sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | \
-            tr '[:upper:]' '[:lower:]')
-          echo "Runner debug certificate SHA-256: $RUNNER_DEBUG_DIGEST"
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner" \
             ./tools/verify-release-signing.sh \
             manager-app/build/outputs/apk/release/manager-app-release.apk \

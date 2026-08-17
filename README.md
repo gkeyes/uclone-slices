@@ -55,7 +55,7 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 
 同一个提交还生成独立 QA artifact，包含覆盖升降级 Fixture 和只显示探针入口、不调用 Runtime 的 Debug Hook。Fixture 与 Debug Hook 不是产品运行依赖。
 
-> Manager 与 Launcher Hook 必须使用同一固定 Release 证书，SHA-256 为 `4883794fda44a6ea085eae09ea2ead48e5233c67e76f751108fb6469b412ba14`。CI 指纹不一致时停止交付；不要卸载 Manager 或清数据绕过证书问题。
+> Manager 与 Launcher Hook 使用仓库当前固定 Release 证书，SHA-256 为 `3a98013499c588855ac936d884d9e55497f72827c91ca01e50cf9ca4fc290648`。CI 指纹不一致时停止交付。该证书与已发布的 0.1.7 Manager 不同，因此 0.1.8 候选版不能覆盖安装 0.1.7；安装前应自行备份，并卸载旧 Manager 后重装。
 
 ## 基本使用
 

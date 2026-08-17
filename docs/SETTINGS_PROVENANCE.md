@@ -49,12 +49,12 @@
 | 版本 `0.1.8`、versionCode `9` | 增加桌面快捷切换字段、两个 wire 操作、Manager 安全中继和独立 Launcher Hook；Manager、Runtime、KernelSU 与 Hook 同一提交交付 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 与 Hook 一致 |
 | Launcher Hook 包名 `com.uclone.slices.v2.launcher`，静态作用域仅 `com.miui.home` | 用户要求新模块与旧 UClone Restore 模块隔离，旧包继续保留安装 | Hook manifest、`META-INF/xposed/scope.list` 与交付清单检查 |
 | HyperOS Launcher `801025341 / RELEASE-8.01.02.5341-260807-08151903-R` | 首版只支持用户当前手机；未知版本必须 fail-closed，探针失败不得改 Hook Flutter 私有函数或 `libapp.so` | Hook 兼容策略测试和真机无数据操作探针 |
-| Manager、Hook Release 与 Debug 探针证书 SHA-256 `4883794fda44a6ea085eae09ea2ead48e5233c67e76f751108fb6469b412ba14` | 0.1.8 Manager 必须覆盖升级 0.1.7，签名权限要求产品 APK 同证书，且探针必须能被 Release Hook 覆盖；不一致时停止交付 | `verify-release-signing.sh` 与 CI 指纹门禁 |
+| Manager、Hook Release 与 Debug 探针证书 SHA-256 `3a98013499c588855ac936d884d9e55497f72827c91ca01e50cf9ca4fc290648` | 使用仓库当前固定 Release keystore；签名权限要求产品 APK 同证书，且探针必须能被 Release Hook 覆盖。该证书与已发布 0.1.7 不同，因此候选版需卸载旧 Manager 后安装 | `verify-release-signing.sh` 与 CI 指纹门禁 |
 | 快捷图标 48×48、3 px 圆角线条、日间 `#1F1F1F`/夜间 `#F5F5F5` 回退色 | 用户锁定的双向箭头设计；优先取 Launcher 当前主题前景色，并在每次查询时按 `uiMode` 重绘 | Robolectric 日夜颜色、透明画布和尺寸测试，真机即时主题切换验收 |
 | 一次性操作令牌 `FLAG_ONE_SHOT | FLAG_IMMUTABLE` | 桌面 Hook 只请求 Manager 执行一次显式切换，唯一 request ID 同时写入 URI 与 extra 防止复用和混淆 | Hook token 组件、flags、URI 与唯一性测试 |
 | MIUIX `0.7.2` | 用户明确指定 MIUIX 设计语言；该版本使用 Kotlin 2.2.x，能够保持项目既有 Kotlin 2.2.0 工具链，避免为 UI 升级引入构建系统迁移 | Manager compile、unit、lint、assemble 与真机界面验收 |
 | Manager `windowSoftInputMode=adjustResize` | 真机 `dumpsys window` 证实默认 `adjustPan` 会与 MIUIX `SuperDialog` 自带的 `imePadding()` 叠加，导致删除确认弹窗在键盘出现时被双重上移 | 输入“删除”时的真机窗口属性与弹窗位置验收 |
-| Manager Release 覆盖安装签名门禁 | GitHub Runner 产物先与设备现有 APK 比较证书；不匹配时只对已下载 Release APK 用已验证的本地 keystore 重签，不重新编译、不卸载、不清数据 | `apksigner verify --print-certs`、`adb install -r` 与设备版本核对 |
+| Manager Release 安装签名门禁 | GitHub Runner 产物先与设备现有 APK 比较证书；0.1.8 候选版当前证书与 0.1.7 不同，不能覆盖安装。安装前备份并核对 Runtime 账号数据，卸载旧 Manager 后重装，不对 APK 二次重签 | `apksigner verify --print-certs` 与设备版本核对 |
 | UI 的 8 dp 网格间距 | Material 布局网格，仅影响首个真实入口的排版，不进入业务或协议 | Android lint、assemble |
 | 首页当前空间高亮色 `#D83B50` | 用户明确要求当前账号使用西瓜红；只影响首页 Chip 的真实当前快照展示 | Manager 真机截图、Android lint、assemble |
 | GitHub Action commit SHA | 旧版 CI 中已使用的 v3/v4 action 固定提交 | CI workflow |
