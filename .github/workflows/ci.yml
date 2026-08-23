@@ -15,8 +15,6 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    env:
-      HAS_RELEASE_SIGNING: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' && secrets.RELEASE_STORE_PASSWORD != '' && secrets.RELEASE_KEY_ALIAS != '' && secrets.RELEASE_KEY_PASSWORD != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -39,19 +37,6 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
-      - name: Decode fixed release keystore
-        if: env.HAS_RELEASE_SIGNING == 'true'
-        env:
-          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/uclone-signing"
-          printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/uclone-signing/release.p12"
-          echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/uclone-signing/release.p12" >> "$GITHUB_ENV"
-          echo "RELEASE_STORE_TYPE=pkcs12" >> "$GITHUB_ENV"
-
-      - name: Require fixed release signing
-        run: test "$HAS_RELEASE_SIGNING" = "true"
-
       - name: Resolve Rust toolchain
         run: rustup show active-toolchain
 
@@ -63,25 +48,7 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
       - name: Validate Android apps
-        env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: >-
-          ./gradlew --no-daemon
-          :manager-app:testDebugUnitTest
-          :manager-app:lintDebug
-          :manager-app:lintRelease
-          :manager-app:assembleRelease
-          :launcher-hook:testDebugUnitTest
-          :launcher-hook:lintDebug
-          :launcher-hook:lintRelease
-          :launcher-hook:assembleDebug
-          :launcher-hook:assembleRelease
-          :device-fixture-app:lintFromDebug
-          :device-fixture-app:lintToDebug
-          :device-fixture-app:assembleFromDebug
-          :device-fixture-app:assembleToDebug
+        run: ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:assembleRelease :device-fixture-app:lintFromDebug :device-fixture-app:lintToDebug :device-fixture-app:assembleFromDebug :device-fixture-app:assembleToDebug
 
       - name: Validate KernelSU startup layer
         run: |
@@ -89,43 +56,32 @@ jobs:
           ./tools/test-kernelsu.sh
           ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./tools/build-kernelsu.sh
 
-      - name: Verify fixed Manager and Hook signatures
+      - name: Build fixed 0.1.6 QA baseline
         run: |
-          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner" \
-            ./tools/verify-release-signing.sh \
-            manager-app/build/outputs/apk/release/manager-app-release.apk \
-            launcher-hook/build/outputs/apk/release/launcher-hook-release.apk \
-            launcher-hook/build/outputs/apk/debug/launcher-hook-debug.apk
+          BASELINE_DIR="$RUNNER_TEMP/uclone-slices-016"
+          git worktree add --detach "$BASELINE_DIR" e0d4683
+          "$BASELINE_DIR/gradlew" --no-daemon -p "$BASELINE_DIR" :manager-app:assembleRelease :device-fixture-app:assembleDebug
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" "$BASELINE_DIR/tools/build-kernelsu.sh"
 
       - name: Prepare SHA-pinned delivery bundle
         run: |
           DELIVERY="$RUNNER_TEMP/uclone-slices-delivery"
-          QA="$RUNNER_TEMP/uclone-slices-qa"
+          BASELINE_DIR="$RUNNER_TEMP/uclone-slices-016"
           mkdir -p "$DELIVERY"
-          mkdir -p "$QA"
-          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.1.8-${GITHUB_SHA}.apk"
-          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.1.8-${GITHUB_SHA}.zip"
-          install -m 0644 launcher-hook/build/outputs/apk/release/launcher-hook-release.apk "$DELIVERY/uclone-slices-v2-launcher-hook-0.1.8-${GITHUB_SHA}.apk"
+          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.1.7-${GITHUB_SHA}.apk"
+          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.1.7-${GITHUB_SHA}.zip"
+          install -m 0644 device-fixture-app/build/outputs/apk/from/debug/device-fixture-app-from-debug.apk "$DELIVERY/uclone-slices-v2-fixture-from-0.1.6-${GITHUB_SHA}.apk"
+          install -m 0644 device-fixture-app/build/outputs/apk/to/debug/device-fixture-app-to-debug.apk "$DELIVERY/uclone-slices-v2-fixture-to-0.1.7-${GITHUB_SHA}.apk"
+          install -m 0644 "$BASELINE_DIR/manager-app/build/outputs/apk/release/manager-app-release.apk" "$DELIVERY/uclone-slices-v2-manager-0.1.6-baseline-e0d4683.apk"
+          install -m 0644 "$BASELINE_DIR/outputs/uclone-slices-v2-kernelsu.zip" "$DELIVERY/uclone-slices-v2-kernelsu-0.1.6-baseline-e0d4683.zip"
+          install -m 0644 "$BASELINE_DIR/device-fixture-app/build/outputs/apk/debug/device-fixture-app-debug.apk" "$DELIVERY/uclone-slices-v2-fixture-0.1.6-baseline-e0d4683.apk"
           (cd "$DELIVERY" && sha256sum ./*.apk ./*.zip > SHA256SUMS.txt)
-          install -m 0644 device-fixture-app/build/outputs/apk/from/debug/device-fixture-app-from-debug.apk "$QA/uclone-slices-v2-fixture-from-0.1.7-${GITHUB_SHA}.apk"
-          install -m 0644 device-fixture-app/build/outputs/apk/to/debug/device-fixture-app-to-debug.apk "$QA/uclone-slices-v2-fixture-to-0.1.8-${GITHUB_SHA}.apk"
-          install -m 0644 launcher-hook/build/outputs/apk/debug/launcher-hook-debug.apk "$QA/uclone-slices-v2-launcher-hook-probe-0.1.8-${GITHUB_SHA}.apk"
-          (cd "$QA" && sha256sum ./*.apk > SHA256SUMS.txt)
 
-      - name: Upload 0.1.8 candidate delivery
+      - name: Upload 0.1.7 delivery and QA artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: uclone-slices-v2-0.1.8-${{ github.sha }}
+          name: uclone-slices-v2-0.1.7-${{ github.sha }}
           path: ${{ runner.temp }}/uclone-slices-delivery
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
-      - name: Upload 0.1.8 device QA probes
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: uclone-slices-v2-0.1.8-qa-${{ github.sha }}
-          path: ${{ runner.temp }}/uclone-slices-qa
           if-no-files-found: error
           retention-days: 7
           compression-level: 0

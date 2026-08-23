@@ -67,9 +67,6 @@
     <string name="clone_system_space_unavailable">切换到系统原始空间后才能复制；当前仍可创建空白空间。</string>
     <string name="create">创建空间</string>
     <string name="space_actions">空间操作</string>
-    <string name="bind_desktop_shortcut">绑定桌面快捷切换</string>
-    <string name="unbind_desktop_shortcut">解除桌面快捷切换</string>
-    <string name="desktop_shortcut_bound">已绑定桌面快捷切换</string>
     <string name="rename_space">重命名</string>
     <string name="delete_space">删除</string>
     <string name="rename_space_title">重命名数据空间</string>
@@ -113,7 +110,6 @@
     <string name="operation_deleting">正在删除“%1$s”</string>
     <string name="operation_unenrolling">正在取消“%1$s”的配置</string>
     <string name="operation_saving_reboot_launch">正在保存重启启动设置</string>
-    <string name="operation_saving_desktop_shortcut">正在保存桌面快捷切换</string>
     <string name="operation_rebinding">正在无损重新绑定应用配置</string>
     <string name="operation_wait_hint">完成前请保持当前页面</string>
 
@@ -133,8 +129,6 @@
     <string name="success_launched">已启动“%1$s”</string>
     <string name="success_renamed">已重命名为“%1$s”</string>
     <string name="success_deleted">已删除“%1$s”及其数据</string>
-    <string name="success_desktop_shortcut_bound">桌面快捷切换已绑定到“%1$s”</string>
-    <string name="success_desktop_shortcut_unbound">已解除桌面快捷切换</string>
     <string name="success_unenrolled">已取消“%1$s”的配置并删除分空间</string>
 
     <string name="rebind_title">保留分空间并重新绑定？</string>
@@ -145,13 +139,4 @@
     <string name="rebind_confirmation_label">输入“绑定”以确认</string>
     <string name="rebind_confirmation_hint">仅在确认这是同一个可信应用时继续</string>
     <string name="rebind_confirm">保留分空间并重新绑定</string>
-
-    <string name="desktop_switch_channel">桌面快捷切换</string>
-    <string name="desktop_switch_in_progress">正在切换账号</string>
-    <string name="desktop_switch_wait">正在安全切换并打开应用</string>
-    <string name="desktop_switch_failed">桌面快捷切换失败</string>
-    <string name="desktop_switch_invalid_request">快捷入口请求无效，请重新打开桌面菜单</string>
-    <string name="desktop_switch_runtime_unavailable">运行环境不可用，账号保持不变</string>
-    <string name="desktop_switch_version_mismatch">Manager 与 Runtime 版本不一致，账号保持不变</string>
-    <string name="desktop_switch_timed_out">系统终止了超时的快捷切换，请刷新后重试</string>
 </resources>

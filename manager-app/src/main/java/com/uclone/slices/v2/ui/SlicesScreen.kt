@@ -536,8 +536,6 @@ private fun OperationDialog(operation: OperationUiState) {
             stringResource(R.string.operation_unenrolling, operation.appLabel)
         is OperationUiState.SavingRebootLaunch ->
             stringResource(R.string.operation_saving_reboot_launch)
-        is OperationUiState.SavingDesktopShortcut ->
-            stringResource(R.string.operation_saving_desktop_shortcut)
         is OperationUiState.RebindingConfiguration ->
             stringResource(R.string.operation_rebinding)
     }
@@ -675,8 +673,6 @@ private fun NoticeBar(
         notice is UiNotice.SpaceActivated ||
         notice is UiNotice.SpaceRenamed ||
         notice is UiNotice.SpaceDeleted ||
-        notice is UiNotice.DesktopShortcutBound ||
-        notice is UiNotice.DesktopShortcutUnbound ||
         notice is UiNotice.AppUnenrolled
     val message = noticeMessage(notice)
     val retry = notice is UiNotice.LocalAppsUnavailable ||
@@ -747,10 +743,6 @@ private fun noticeMessage(notice: UiNotice): String = when (notice) {
     }
     is UiNotice.SpaceRenamed -> stringResource(R.string.success_renamed, notice.name)
     is UiNotice.SpaceDeleted -> stringResource(R.string.success_deleted, notice.name)
-    is UiNotice.DesktopShortcutBound ->
-        stringResource(R.string.success_desktop_shortcut_bound, notice.name)
-    UiNotice.DesktopShortcutUnbound ->
-        stringResource(R.string.success_desktop_shortcut_unbound)
     is UiNotice.AppUnenrolled ->
         stringResource(R.string.success_unenrolled, notice.appLabel)
 }

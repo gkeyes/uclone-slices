@@ -1,12 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
-    <permission
-        android:name="com.uclone.slices.v2.permission.DESKTOP_SWITCH"
-        android:protectionLevel="signature" />
 
     <queries>
         <intent>
@@ -31,17 +25,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <provider
-            android:name=".desktop.DesktopShortcutStateProvider"
-            android:authorities="com.uclone.slices.v2.desktop.state"
-            android:exported="true"
-            android:permission="com.uclone.slices.v2.permission.DESKTOP_SWITCH" />
-
-        <service
-            android:name=".desktop.DesktopQuickSwitchService"
-            android:exported="true"
-            android:foregroundServiceType="shortService"
-            android:permission="com.uclone.slices.v2.permission.DESKTOP_SWITCH" />
     </application>
 </manifest>

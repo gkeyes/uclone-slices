@@ -376,8 +376,6 @@ pub struct PackageAggregate {
     active_slot: SlotId,
     #[serde(default)]
     launch_after_reboot: bool,
-    #[serde(default)]
-    desktop_shortcut_slot: Option<SlotId>,
     next_slot_number: u64,
     lifecycle: Lifecycle,
 }
@@ -393,7 +391,6 @@ impl PackageAggregate {
             }],
             active_slot: SlotId::base(),
             launch_after_reboot: false,
-            desktop_shortcut_slot: None,
             next_slot_number: 1,
             lifecycle: Lifecycle::Ready,
         }
@@ -423,13 +420,6 @@ impl PackageAggregate {
             || !ids.contains(&self.active_slot)
             || self.next_slot_number == 0
             || self.next_slot_number <= highest_number
-        {
-            return Err(ModelError::InvalidState);
-        }
-        if self
-            .desktop_shortcut_slot
-            .as_ref()
-            .is_some_and(|slot| slot.is_base() || !ids.contains(slot))
         {
             return Err(ModelError::InvalidState);
         }
@@ -487,36 +477,6 @@ impl PackageAggregate {
     pub fn set_launch_after_reboot(&mut self, enabled: bool) -> Result<(), ModelError> {
         self.require_ready()?;
         self.launch_after_reboot = enabled;
-        self.validate()
-    }
-
-    pub fn desktop_shortcut_slot(&self) -> Option<&SlotId> {
-        self.desktop_shortcut_slot.as_ref()
-    }
-
-    pub fn desktop_shortcut_target(&self) -> Result<&SlotId, ModelError> {
-        self.require_ready()?;
-        let bound = self
-            .desktop_shortcut_slot()
-            .ok_or(ModelError::SlotNotFound)?;
-        if &self.active_slot == bound {
-            self.slot(&SlotId::base())
-                .map(Slot::id)
-                .ok_or(ModelError::InvalidState)
-        } else {
-            Ok(bound)
-        }
-    }
-
-    pub fn set_desktop_shortcut(&mut self, target: Option<SlotId>) -> Result<(), ModelError> {
-        self.require_ready()?;
-        if target
-            .as_ref()
-            .is_some_and(|slot| slot.is_base() || self.slot(slot).is_none())
-        {
-            return Err(ModelError::StateConflict);
-        }
-        self.desktop_shortcut_slot = target;
         self.validate()
     }
 
@@ -587,9 +547,6 @@ impl PackageAggregate {
             .position(|slot| slot.id() == target)
             .ok_or(ModelError::StateConflict)?;
         self.slots.remove(index);
-        if self.desktop_shortcut_slot.as_ref() == Some(target) {
-            self.desktop_shortcut_slot = None;
-        }
         self.lifecycle = Lifecycle::Ready;
         self.validate()
     }
@@ -735,7 +692,6 @@ impl PackageAggregate {
             package: self.package.clone(),
             active_slot: self.active_slot.clone(),
             launch_after_reboot: self.launch_after_reboot,
-            desktop_shortcut_slot: self.desktop_shortcut_slot.clone(),
             binding_state,
             slots: self
                 .slots
@@ -775,7 +731,6 @@ pub struct PackageSnapshot {
     pub package: PackageName,
     pub active_slot: SlotId,
     pub launch_after_reboot: bool,
-    pub desktop_shortcut_slot: Option<SlotId>,
     pub binding_state: BindingState,
     pub slots: Vec<SlotSnapshot>,
 }
@@ -850,48 +805,6 @@ mod tests {
 
         assert!(!restored.launch_after_reboot());
         assert!(!restored.snapshot().unwrap().launch_after_reboot);
-    }
-
-    #[test]
-    fn persisted_aggregate_without_desktop_shortcut_migrates_unbound() {
-        let aggregate = PackageAggregate::enrolled(package(), identity());
-        let mut legacy = serde_json::to_value(aggregate).unwrap();
-        legacy
-            .as_object_mut()
-            .unwrap()
-            .remove("desktop_shortcut_slot");
-
-        let restored: PackageAggregate = serde_json::from_value(legacy).unwrap();
-
-        assert_eq!(restored.desktop_shortcut_slot(), None);
-        assert_eq!(restored.snapshot().unwrap().desktop_shortcut_slot, None);
-    }
-
-    #[test]
-    fn desktop_shortcut_switches_between_bound_slot_and_base() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-        let slot = aggregate
-            .reserve_slot(DisplayName::new("Work").unwrap())
-            .unwrap();
-        let slot_id = slot.id().clone();
-        aggregate.begin_creation(&slot, false).unwrap();
-        aggregate.finish_creation(slot).unwrap();
-
-        assert_eq!(
-            aggregate.set_desktop_shortcut(Some(SlotId::base())),
-            Err(ModelError::StateConflict)
-        );
-        aggregate
-            .set_desktop_shortcut(Some(slot_id.clone()))
-            .unwrap();
-        assert_eq!(aggregate.desktop_shortcut_target().unwrap(), &slot_id);
-
-        aggregate.begin_activation(&slot_id).unwrap();
-        aggregate.finish_activation(&slot_id).unwrap();
-        assert_eq!(
-            aggregate.desktop_shortcut_target().unwrap(),
-            &SlotId::base()
-        );
     }
 
     #[test]
@@ -993,26 +906,6 @@ mod tests {
             .reserve_slot(DisplayName::new("Next").unwrap())
             .unwrap();
         assert_eq!(next.id(), &SlotId::numbered(2));
-    }
-
-    #[test]
-    fn deleting_the_bound_slot_clears_only_the_shortcut_binding() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-        let slot = aggregate
-            .reserve_slot(DisplayName::new("Work").unwrap())
-            .unwrap();
-        let slot_id = slot.id().clone();
-        aggregate.begin_creation(&slot, false).unwrap();
-        aggregate.finish_creation(slot).unwrap();
-        aggregate
-            .set_desktop_shortcut(Some(slot_id.clone()))
-            .unwrap();
-
-        aggregate.begin_deletion(&slot_id).unwrap();
-        aggregate.finish_deletion(&slot_id).unwrap();
-
-        assert_eq!(aggregate.desktop_shortcut_slot(), None);
-        assert_eq!(aggregate.snapshot().unwrap().slots.len(), 1);
     }
 
     #[test]

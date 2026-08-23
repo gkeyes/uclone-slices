@@ -50,7 +50,6 @@ data class PackageSnapshot(
     val activeSlot: String,
     val slots: List<SlotSnapshot>,
     val launchAfterReboot: Boolean = false,
-    val desktopShortcutSlot: String? = null,
     val bindingState: BindingState = BindingState.LegacyUnbound,
 )
 
@@ -72,11 +71,6 @@ sealed interface RuntimeCommand {
         val packageName: String,
         val enabled: Boolean,
     ) : RuntimeCommand
-    data class SetDesktopShortcut(
-        val packageName: String,
-        val slotId: String?,
-    ) : RuntimeCommand
-    data class ActivateDesktopShortcut(val packageName: String) : RuntimeCommand
     data class CreateSlot(
         val packageName: String,
         val name: String,
@@ -137,13 +131,6 @@ object RuntimeProtocol {
                 .put("op", "set_launch_after_reboot")
                 .put("package", command.packageName)
                 .put("enabled", command.enabled)
-            is RuntimeCommand.SetDesktopShortcut -> JSONObject()
-                .put("op", "set_desktop_shortcut")
-                .put("package", command.packageName)
-                .put("slot", command.slotId ?: JSONObject.NULL)
-            is RuntimeCommand.ActivateDesktopShortcut -> JSONObject()
-                .put("op", "activate_desktop_shortcut")
-                .put("package", command.packageName)
             is RuntimeCommand.CreateSlot -> JSONObject()
                 .put("op", "create_slot")
                 .put("package", command.packageName)
@@ -199,8 +186,6 @@ object RuntimeProtocol {
             activeSlot = json.getString("active_slot"),
             slots = parseSlots(json.getJSONArray("slots")),
             launchAfterReboot = json.optBoolean("launch_after_reboot", false),
-            desktopShortcutSlot = json.optString("desktop_shortcut_slot")
-                .takeIf { it.isNotEmpty() && it != "null" },
             bindingState = json.optString("binding_state")
                 .takeIf { it.isNotEmpty() }
                 ?.let(BindingState::fromWire)

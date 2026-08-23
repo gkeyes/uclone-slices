@@ -23,13 +23,6 @@ class RuntimeProtocolTest {
                 "com.example.app",
                 true,
             ),
-            "set_desktop_shortcut" to RuntimeCommand.SetDesktopShortcut(
-                "com.example.app",
-                "slot-1",
-            ),
-            "activate_desktop_shortcut" to RuntimeCommand.ActivateDesktopShortcut(
-                "com.example.app",
-            ),
             "get_package" to RuntimeCommand.GetPackage("com.example.app"),
             "create_slot" to RuntimeCommand.CreateSlot(
                 "com.example.app",
@@ -86,17 +79,7 @@ class RuntimeProtocolTest {
         ) as RuntimeReply.Package
 
         assertEquals(false, response.packageSnapshot.launchAfterReboot)
-        assertEquals(null, response.packageSnapshot.desktopShortcutSlot)
         assertEquals(BindingState.LegacyUnbound, response.packageSnapshot.bindingState)
-    }
-
-    @Test
-    fun desktopShortcutCanBeExplicitlyUnboundWithNull() {
-        val encoded = RuntimeProtocol.encode(
-            RuntimeCommand.SetDesktopShortcut("com.example.app", null),
-        )
-
-        assertTrue(JSONObject(encoded).isNull("slot"))
     }
 
     @Test
