@@ -1,2 +1,1 @@
-{"op":"create_slot","package":"com.example.app","name":"Work","seed":"blank"}
-
+{"op":"create_slot","package":"com.example.app","name":"Work","seed":"blank","client_build_id":"0.1.9"}

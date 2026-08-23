@@ -12,6 +12,6 @@ pub use model::{
 };
 pub use usecases::RuntimeError;
 
-pub fn handle_line(runtime: &mut ProductionRuntime, line: &str) -> String {
-    protocol::handle_line(runtime.inner_mut(), line)
+pub fn handle_line(runtime: &mut ProductionRuntime, expected_build_id: &str, line: &str) -> String {
+    protocol::handle_line(runtime.inner_mut(), expected_build_id, line)
 }

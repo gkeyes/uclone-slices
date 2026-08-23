@@ -34,6 +34,21 @@ enum UnenrollContext {
     Recovery,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadyLoadContext {
+    Interactive,
+    Boot,
+}
+
+impl ReadyLoadContext {
+    const fn operation(self) -> &'static str {
+        match self {
+            Self::Interactive => "load",
+            Self::Boot => "reconcile_boot",
+        }
+    }
+}
+
 impl UnenrollContext {
     fn operation(self) -> &'static str {
         match self {
@@ -96,6 +111,19 @@ where
 
     pub fn get_package(&mut self, package: &PackageName) -> Result<PackageSnapshot, RuntimeError> {
         self.package_snapshot(package)
+    }
+
+    pub fn reconcile_boot(&mut self) -> Result<(), RuntimeError> {
+        let names = self.packages.list().map_err(adapter_error)?;
+        for package in names {
+            if let Err(error) = self.package_snapshot_with_context(&package, ReadyLoadContext::Boot)
+            {
+                eprintln!(
+                    "op=reconcile_boot package={package} step=reconcile_package error={error}"
+                );
+            }
+        }
+        Ok(())
     }
 
     pub fn enroll(
@@ -456,13 +484,14 @@ where
         package: &PackageName,
     ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
         let (aggregate, inspection) = self.load_validated(package)?;
-        self.finish_ready_load(aggregate, inspection)
+        self.finish_ready_load(aggregate, inspection, ReadyLoadContext::Interactive)
     }
 
     fn finish_ready_load(
         &mut self,
         mut aggregate: PackageAggregate,
         inspection: PackageInspection,
+        context: ReadyLoadContext,
     ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
         let package = aggregate.package().clone();
         if aggregate.is_unenrolling() {
@@ -470,15 +499,23 @@ where
             return Err(RuntimeError::NotFound);
         }
         let recovering_activation = aggregate.pending_activation().is_some();
-        self.recover(&mut aggregate)?;
+        self.recover(&mut aggregate, context)?;
         if recovering_activation {
             return Err(RuntimeError::StateConflict);
         }
-        self.converge_ready_view(&package, &aggregate)?;
+        self.converge_ready_view(&package, &aggregate, context)?;
         Ok((aggregate, inspection))
     }
 
     fn package_snapshot(&mut self, package: &PackageName) -> Result<PackageSnapshot, RuntimeError> {
+        self.package_snapshot_with_context(package, ReadyLoadContext::Interactive)
+    }
+
+    fn package_snapshot_with_context(
+        &mut self,
+        package: &PackageName,
+        context: ReadyLoadContext,
+    ) -> Result<PackageSnapshot, RuntimeError> {
         let aggregate = self
             .packages
             .load(package)
@@ -508,7 +545,7 @@ where
         } else {
             BindingState::LegacyUnbound
         };
-        let (aggregate, _inspection) = self.finish_ready_load(aggregate, inspection)?;
+        let (aggregate, _inspection) = self.finish_ready_load(aggregate, inspection, context)?;
         aggregate.snapshot_with_binding(state).map_err(model_error)
     }
 
@@ -632,11 +669,13 @@ where
         &mut self,
         package: &PackageName,
         aggregate: &PackageAggregate,
+        context: ReadyLoadContext,
     ) -> Result<(), RuntimeError> {
+        let operation = context.operation();
         let observed = self
             .android
             .observe_view(package)
-            .map_err(|error| logged_adapter("load", package, "observe_ready", error))?;
+            .map_err(|error| logged_adapter(operation, package, "observe_ready", error))?;
         if !aggregate.is_ready() {
             return Err(RuntimeError::StateConflict);
         }
@@ -646,35 +685,40 @@ where
             }
             self.slots
                 .require_complete_pair(package, aggregate.active_slot())
-                .map_err(|error| logged_conflict("load", package, "verify_ready_slot", error))?;
+                .map_err(|error| logged_conflict(operation, package, "verify_ready_slot", error))?;
             self.android.force_stop(package).map_err(|error| {
-                logged_conflict("load", package, "stop_for_ready_restore", error)
+                logged_conflict(operation, package, "stop_for_ready_restore", error)
             })?;
             self.android
                 .apply_view(package, aggregate.active_slot())
-                .map_err(|error| logged_conflict("load", package, "apply_ready_restore", error))?;
-            let restored = self
-                .android
-                .observe_view(package)
-                .map_err(|error| logged_conflict("load", package, "verify_ready_restore", error))?;
+                .map_err(|error| {
+                    logged_conflict(operation, package, "apply_ready_restore", error)
+                })?;
+            let restored = self.android.observe_view(package).map_err(|error| {
+                logged_conflict(operation, package, "verify_ready_restore", error)
+            })?;
             if !restored.matches(aggregate.active_slot()) {
                 eprintln!(
-                    "op=load package={package} step=verify_ready_restore error=view_not_restored"
+                    "op={operation} package={package} step=verify_ready_restore error=view_not_restored"
                 );
                 return Err(RuntimeError::StateConflict);
             }
-            if aggregate.launch_after_reboot() {
+            if context == ReadyLoadContext::Boot && aggregate.launch_after_reboot() {
                 self.android
                     .launch_verified(package, aggregate.active_slot())
                     .map_err(|error| {
-                        logged_conflict("load", package, "launch_ready_restore", error)
+                        logged_conflict(operation, package, "launch_ready_restore", error)
                     })?;
             }
         }
         Ok(())
     }
 
-    fn recover(&mut self, aggregate: &mut PackageAggregate) -> Result<(), RuntimeError> {
+    fn recover(
+        &mut self,
+        aggregate: &mut PackageAggregate,
+        context: ReadyLoadContext,
+    ) -> Result<(), RuntimeError> {
         if let Some(target) = aggregate.pending_deletion().cloned() {
             let package = aggregate.package().clone();
             let observed = self
@@ -708,7 +752,7 @@ where
             if !observed.matches(aggregate.active_slot()) {
                 return Err(RuntimeError::StateConflict);
             }
-            if restore_running {
+            if restore_running && context == ReadyLoadContext::Interactive {
                 self.android
                     .launch_verified(&package, aggregate.active_slot())
                     .map_err(|error| {
@@ -730,11 +774,13 @@ where
                 logged_conflict("recover", &package, "observe_activating", error)
             })?;
             if observed.matches(&target) {
-                self.android
-                    .launch_verified(&package, &target)
-                    .map_err(|error| {
-                        logged_conflict("recover", &package, "launch_target", error)
-                    })?;
+                if context == ReadyLoadContext::Interactive {
+                    self.android
+                        .launch_verified(&package, &target)
+                        .map_err(|error| {
+                            logged_conflict("recover", &package, "launch_target", error)
+                        })?;
+                }
                 aggregate.finish_activation(&target).map_err(model_error)?;
             } else {
                 if !observed.matches(&previous) {
@@ -753,11 +799,13 @@ where
                         return Err(RuntimeError::StateConflict);
                     }
                 }
-                self.android
-                    .launch_verified(&package, &previous)
-                    .map_err(|error| {
-                        logged_conflict("recover", &package, "launch_previous", error)
-                    })?;
+                if context == ReadyLoadContext::Interactive {
+                    self.android
+                        .launch_verified(&package, &previous)
+                        .map_err(|error| {
+                            logged_conflict("recover", &package, "launch_previous", error)
+                        })?;
+                }
                 aggregate.abort_activation(&previous).map_err(model_error)?;
             }
             self.packages
@@ -1820,6 +1868,33 @@ mod tests {
     }
 
     #[test]
+    fn boot_reconcile_never_relaunches_interrupted_activation() {
+        let package = package();
+        let (runtime, target) = with_slot();
+        let (mut packages, slots, mut android) = runtime.into_parts();
+        let mut aggregate = packages.load(&package).unwrap().unwrap();
+        aggregate.begin_activation(&target).unwrap();
+        packages.save(&aggregate).unwrap();
+        android.force_stop(&package).unwrap();
+        android.apply_view(&package, &target).unwrap();
+        let starting_calls = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        runtime.reconcile_boot().unwrap();
+
+        let (packages, _slots, android) = runtime.into_parts();
+        let aggregate = packages.load(&package).unwrap().unwrap();
+        assert_eq!(aggregate.active_slot(), &target);
+        assert!(aggregate.is_ready());
+        assert!(!android.is_running(&package));
+        assert!(
+            android.calls()[starting_calls..]
+                .iter()
+                .all(|call| !matches!(call, AndroidCall::Launch(..)))
+        );
+    }
+
+    #[test]
     fn ready_slot_recovers_when_runtime_mounts_return_to_base() {
         let package = package();
         let (mut runtime, target) = with_slot();
@@ -1851,7 +1926,7 @@ mod tests {
     }
 
     #[test]
-    fn ready_slot_launches_after_restore_only_when_enabled() {
+    fn interactive_restore_never_uses_the_reboot_launch_setting() {
         let package = package();
         let (mut runtime, target) = with_slot();
         runtime.activate_slot(&package, &target).unwrap();
@@ -1867,7 +1942,7 @@ mod tests {
         assert_eq!(snapshot.active_slot, target);
         assert!(snapshot.launch_after_reboot);
         let (_packages, _slots, android) = runtime.into_parts();
-        assert!(android.is_running(&package));
+        assert!(!android.is_running(&package));
         assert_eq!(
             &android.calls()[starting_calls..],
             &[
@@ -1875,8 +1950,7 @@ mod tests {
                 AndroidCall::Observe(package.clone()),
                 AndroidCall::ForceStop(package.clone()),
                 AndroidCall::Apply(package.clone(), target.clone()),
-                AndroidCall::Observe(package.clone()),
-                AndroidCall::Launch(package, target),
+                AndroidCall::Observe(package),
             ]
         );
     }
@@ -1908,7 +1982,7 @@ mod tests {
     }
 
     #[test]
-    fn package_listing_launches_only_opted_in_restored_apps() {
+    fn package_listing_restores_views_without_launching_apps() {
         let opted_in = PackageName::new("com.example.opted.in").unwrap();
         let opted_out = PackageName::new("com.example.opted.out").unwrap();
         let mut android = MemoryAndroidOps::default();
@@ -1942,11 +2016,102 @@ mod tests {
 
         assert_eq!(snapshots.len(), 2);
         let (_packages, _slots, android) = runtime.into_parts();
-        assert!(android.is_running(&opted_in));
+        assert!(!android.is_running(&opted_in));
         assert!(!android.is_running(&opted_out));
         for (package, target) in targets {
             assert_eq!(android.view(&package), Some(&ObservedView::Slot(target)));
         }
+    }
+
+    #[test]
+    fn boot_reconcile_launches_only_opted_in_non_base_packages() {
+        let opted_in = PackageName::new("com.example.opted.in").unwrap();
+        let opted_out = PackageName::new("com.example.opted.out").unwrap();
+        let base = PackageName::new("com.example.base").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        for package in [&opted_in, &opted_out, &base] {
+            android.install(package.clone());
+        }
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            android,
+        );
+        let mut targets = Vec::new();
+        for package in [&opted_in, &opted_out] {
+            runtime.enroll(package.clone(), false, None).unwrap();
+            let target = runtime
+                .create_slot(package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+                .unwrap()
+                .slots[1]
+                .id
+                .clone();
+            runtime.activate_slot(package, &target).unwrap();
+            targets.push((package.clone(), target));
+        }
+        runtime.enroll(base.clone(), false, None).unwrap();
+        runtime.set_launch_after_reboot(&opted_in, true).unwrap();
+        runtime.set_launch_after_reboot(&base, true).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        for package in [&opted_in, &opted_out, &base] {
+            android.force_stop(package).unwrap();
+        }
+        for (package, _) in &targets {
+            android.set_view(package, ObservedView::Base);
+        }
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        runtime.reconcile_boot().unwrap();
+
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert!(android.is_running(&opted_in));
+        assert!(!android.is_running(&opted_out));
+        assert!(!android.is_running(&base));
+        for (package, target) in targets {
+            assert_eq!(android.view(&package), Some(&ObservedView::Slot(target)));
+        }
+    }
+
+    #[test]
+    fn boot_reconcile_continues_after_one_package_fails() {
+        let first = PackageName::new("com.example.a").unwrap();
+        let second = PackageName::new("com.example.b").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        android.install(first.clone());
+        android.install(second.clone());
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            android,
+        );
+        let mut targets = Vec::new();
+        for package in [&first, &second] {
+            runtime.enroll(package.clone(), false, None).unwrap();
+            let target = runtime
+                .create_slot(package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
+                .unwrap()
+                .slots[1]
+                .id
+                .clone();
+            runtime.activate_slot(package, &target).unwrap();
+            targets.push((package.clone(), target));
+        }
+        let (packages, slots, mut android) = runtime.into_parts();
+        for (package, _) in &targets {
+            android.force_stop(package).unwrap();
+            android.set_view(package, ObservedView::Base);
+        }
+        android.fail_next(AndroidFailure::Observe);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        runtime.reconcile_boot().unwrap();
+
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert_eq!(android.view(&first), Some(&ObservedView::Base));
+        assert_eq!(
+            android.view(&second),
+            Some(&ObservedView::Slot(targets[1].1.clone()))
+        );
     }
 
     #[test]

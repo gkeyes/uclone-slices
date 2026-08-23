@@ -250,6 +250,21 @@ impl SystemAndroidOps {
             );
         }
     }
+
+    fn contain_launch_failure(
+        &mut self,
+        package: &PackageName,
+        verification_error: AdapterError,
+    ) -> AdapterError {
+        match self.force_stop(package) {
+            Ok(()) => AdapterError::new(format!(
+                "{verification_error}; App was force-stopped and UID processes are zero"
+            )),
+            Err(containment_error) => AdapterError::new(format!(
+                "{verification_error}; containment failed: {containment_error}"
+            )),
+        }
+    }
 }
 
 impl AndroidOps for SystemAndroidOps {
@@ -304,7 +319,16 @@ impl AndroidOps for SystemAndroidOps {
             "/system/bin/am",
             &["force-stop", "--user", "0", package.as_str()],
         )?;
-        Ok(())
+        let uid = self.package_uid(package)?;
+        let remaining = self.package_processes(uid)?;
+        if remaining.is_empty() {
+            Ok(())
+        } else {
+            Err(AdapterError::new(format!(
+                "force-stopped package still has {} process(es) for UID {uid}",
+                remaining.len()
+            )))
+        }
     }
 
     fn observe_view(&mut self, package: &PackageName) -> Result<ObservedView, AdapterError> {
@@ -354,42 +378,50 @@ impl AndroidOps for SystemAndroidOps {
         expected: &SlotId,
     ) -> Result<(), AdapterError> {
         let component = self.launcher_component(package)?;
-        self.required(
+        if let Err(error) = self.required(
             "/system/bin/am",
             &["start", "-W", "--user", "0", "-n", &component],
-        )?;
-        let uid = self.package_uid(package)?;
-        let processes = self.package_processes(uid)?;
-        if processes.is_empty() {
-            return Err(AdapterError::new("launched package has no App process"));
+        ) {
+            return Err(self.contain_launch_failure(package, error));
         }
-        let mut verified = 0_usize;
-        for process in processes {
-            let mountinfo = match fs::read_to_string(process.join("mountinfo")) {
-                Ok(mountinfo) => mountinfo,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AdapterError::new(error.to_string())),
-            };
-            verified += 1;
-            let observed = app_view_from_mountinfo(
-                &mountinfo,
-                package,
-                &self.canonical_ce_root,
-                &self.canonical_de_root,
-            );
-            if !observed.matches(expected) {
-                let pid = process
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("unknown");
-                return Err(AdapterError::new(format!(
-                    "App PID {pid} did not observe the requested CE/DE view"
-                )));
+        let verification = (|| {
+            let uid = self.package_uid(package)?;
+            let processes = self.package_processes(uid)?;
+            if processes.is_empty() {
+                return Err(AdapterError::new("launched package has no App process"));
             }
+            let mut verified = 0_usize;
+            for process in processes {
+                let mountinfo = match fs::read_to_string(process.join("mountinfo")) {
+                    Ok(mountinfo) => mountinfo,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(AdapterError::new(error.to_string())),
+                };
+                verified += 1;
+                let observed = app_view_from_mountinfo(
+                    &mountinfo,
+                    package,
+                    &self.canonical_ce_root,
+                    &self.canonical_de_root,
+                );
+                if !observed.matches(expected) {
+                    let pid = process
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("unknown");
+                    return Err(AdapterError::new(format!(
+                        "App PID {pid} did not observe the requested CE/DE view"
+                    )));
+                }
+            }
+            (verified != 0)
+                .then_some(())
+                .ok_or_else(|| AdapterError::new("launched package processes exited before verify"))
+        })();
+        match verification {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.contain_launch_failure(package, error)),
         }
-        (verified != 0)
-            .then_some(())
-            .ok_or_else(|| AdapterError::new("launched package processes exited before verify"))
     }
 }
 
@@ -526,6 +558,33 @@ mod tests {
     struct RecordingRunner {
         outputs: VecDeque<CommandOutput>,
         commands: RecordedCommands,
+    }
+
+    #[derive(Debug)]
+    struct ContainmentRunner {
+        outputs: VecDeque<CommandOutput>,
+        commands: RecordedCommands,
+        proc_root: PathBuf,
+    }
+
+    impl CommandRunner for ContainmentRunner {
+        fn run(
+            &mut self,
+            program: &str,
+            arguments: &[&str],
+        ) -> Result<CommandOutput, AdapterError> {
+            self.commands.borrow_mut().push((
+                program.to_owned(),
+                arguments.iter().map(|value| (*value).to_owned()).collect(),
+            ));
+            if program == "/system/bin/am" && arguments.first().copied() == Some("force-stop") {
+                fs::remove_dir_all(&self.proc_root)
+                    .map_err(|error| AdapterError::new(error.to_string()))?;
+                fs::create_dir(&self.proc_root)
+                    .map_err(|error| AdapterError::new(error.to_string()))?;
+            }
+            Ok(self.outputs.pop_front().unwrap_or_else(|| output("")))
+        }
     }
 
     impl CommandRunner for RecordingRunner {
@@ -750,9 +809,10 @@ mod tests {
     fn force_stop_does_not_change_enabled_state() {
         let root = tempfile::tempdir().unwrap();
         let package = PackageName::new("com.example.app").unwrap();
+        fs::create_dir(root.path().join("proc")).unwrap();
         let commands = Rc::new(RefCell::new(Vec::new()));
         let runner = RecordingRunner {
-            outputs: VecDeque::new(),
+            outputs: VecDeque::from([output(""), output(format!("package:{package} uid:10123\n"))]),
             commands: Rc::clone(&commands),
         };
         let (mut android, recorded) = system_with_runner(root.path(), runner);
@@ -761,16 +821,48 @@ mod tests {
 
         assert_eq!(
             *recorded.borrow(),
-            vec![(
-                "/system/bin/am".to_owned(),
-                vec![
-                    "force-stop".to_owned(),
-                    "--user".to_owned(),
-                    "0".to_owned(),
-                    package.as_str().to_owned(),
-                ],
-            )]
+            vec![
+                (
+                    "/system/bin/am".to_owned(),
+                    vec![
+                        "force-stop".to_owned(),
+                        "--user".to_owned(),
+                        "0".to_owned(),
+                        package.as_str().to_owned(),
+                    ],
+                ),
+                (
+                    "/system/bin/cmd".to_owned(),
+                    vec!["package", "list", "packages", "-3", "-U", "--user", "0",]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+            ]
         );
+    }
+
+    #[test]
+    fn force_stop_rejects_a_lingering_target_uid_process() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let process = root.path().join("proc/123");
+        fs::create_dir_all(&process).unwrap();
+        fs::write(
+            process.join("status"),
+            "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+        )
+        .unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([output(""), output(format!("package:{package} uid:10123\n"))]),
+            commands,
+        };
+        let (mut android, _recorded) = system_with_runner(root.path(), runner);
+
+        let error = android.force_stop(&package).unwrap_err();
+
+        assert!(error.to_string().contains("still has 1 process"));
     }
 
     #[test]
@@ -909,14 +1001,94 @@ mod tests {
                 output(format!("{package}/.MainActivity\n")),
                 output("Status: ok\n"),
                 output(format!("package:{package} uid:10123\n")),
+                output(""),
+                output(format!("package:{package} uid:10123\n")),
             ]),
-            commands,
+            commands: Rc::clone(&commands),
         };
-        let (mut android, _recorded) = system_with_runner(root.path(), runner);
+        let (mut android, recorded) = system_with_runner(root.path(), runner);
 
         let error = android.launch_verified(&package, &slot).unwrap_err();
 
         assert!(error.to_string().contains("PID 456"));
+        assert!(error.to_string().contains("containment failed"));
+        assert!(recorded.borrow().iter().any(|(program, arguments)| {
+            program == "/system/bin/am"
+                && arguments.first().map(String::as_str) == Some("force-stop")
+        }));
+    }
+
+    #[test]
+    fn launch_verification_failures_are_contained_and_leave_no_uid_processes() {
+        for failure in ["wrong_view", "pid_disappeared", "mountinfo_unreadable"] {
+            let root = tempfile::tempdir().unwrap();
+            let package = PackageName::new("com.example.app").unwrap();
+            let slot = SlotId::numbered(3);
+            let process = root.path().join("proc/123");
+            fs::create_dir_all(&process).unwrap();
+            fs::write(
+                process.join("status"),
+                "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+            )
+            .unwrap();
+            match failure {
+                "wrong_view" => fs::write(
+                    process.join("mountinfo"),
+                    format!(
+                        "1 0 0:1 /wrong {}/{} rw - ext4 none rw\n2 0 0:1 /wrong {}/{} rw - ext4 none rw\n",
+                        root.path().join("canonical-ce").display(),
+                        package,
+                        root.path().join("canonical-de").display(),
+                        package,
+                    ),
+                )
+                .unwrap(),
+                "pid_disappeared" => {}
+                "mountinfo_unreadable" => {
+                    fs::create_dir(process.join("mountinfo")).unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let commands = Rc::new(RefCell::new(Vec::new()));
+            let runner = ContainmentRunner {
+                outputs: VecDeque::from([
+                    output(format!("{package}/.MainActivity\n")),
+                    output("Status: ok\n"),
+                    output(format!("package:{package} uid:10123\n")),
+                    output(""),
+                    output(format!("package:{package} uid:10123\n")),
+                ]),
+                commands: Rc::clone(&commands),
+                proc_root: root.path().join("proc"),
+            };
+            let mut android = SystemAndroidOps {
+                build_id: "test".to_owned(),
+                ce_slots_root: root.path().join("slots-ce"),
+                de_slots_root: root.path().join("slots-de"),
+                canonical_ce_root: root.path().join("canonical-ce"),
+                canonical_de_root: root.path().join("canonical-de"),
+                mountinfo: root.path().join("mountinfo"),
+                proc_root: root.path().join("proc"),
+                runner: Box::new(runner),
+            };
+
+            let error = android.launch_verified(&package, &slot).unwrap_err();
+
+            assert!(
+                error.to_string().contains("force-stopped"),
+                "failure={failure} error={error}"
+            );
+            assert!(
+                fs::read_dir(root.path().join("proc"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+            assert!(commands.borrow().iter().any(|(program, arguments)| {
+                program == "/system/bin/am"
+                    && arguments.first().map(String::as_str) == Some("force-stop")
+            }));
+        }
     }
 
     #[test]

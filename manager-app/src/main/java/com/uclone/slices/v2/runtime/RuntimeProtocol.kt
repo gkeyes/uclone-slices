@@ -1,5 +1,6 @@
 package com.uclone.slices.v2.runtime
 
+import com.uclone.slices.v2.BuildConfig
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -149,6 +150,9 @@ object RuntimeProtocol {
                 .put("op", "delete_slot")
                 .put("package", command.packageName)
                 .put("slot", command.slotId)
+        }
+        if (command != RuntimeCommand.Probe) {
+            json.put("client_build_id", BuildConfig.VERSION_NAME)
         }
         return json.toString()
     }

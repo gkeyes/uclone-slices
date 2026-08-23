@@ -1,5 +1,6 @@
 package com.uclone.slices.v2.runtime
 
+import com.uclone.slices.v2.BuildConfig
 import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -53,6 +54,15 @@ class RuntimeProtocolTest {
                 else -> assertTrue(response is RuntimeReply.Package)
             }
         }
+    }
+
+    @Test
+    fun onlyNonProbeCommandsCarryTheManagerBuildId() {
+        val probe = JSONObject(RuntimeProtocol.encode(RuntimeCommand.Probe))
+        val list = JSONObject(RuntimeProtocol.encode(RuntimeCommand.ListPackages))
+
+        assertEquals(false, probe.has("client_build_id"))
+        assertEquals(BuildConfig.VERSION_NAME, list.getString("client_build_id"))
     }
 
     @Test

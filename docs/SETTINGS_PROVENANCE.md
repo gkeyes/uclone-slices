@@ -10,7 +10,6 @@
 | 文件行数上限 | 不引入。代码质量只看职责、依赖方向、公共接口和行为测试。 |
 | 槽显示名 80 字符上限 | 删除。首个产品链路没有这个限制。 |
 | 包名 255 字节上限 | 删除。模型只保留路径隔离所需的字符规则，已安装性由 Android 探测确认。 |
-| RPC 请求/响应 64 KiB 上限 | 删除。首版没有超限用例或 Manager 分支。 |
 | Manager 的 120 秒事务超时和 2 秒流超时 | 删除。没有来自真机测量的截止时间，也没有超时后的产品处理分支。 |
 | CI 45 分钟超时 | 删除。尚无 CI 历史可推导截止时间。 |
 | Gradle 2 GiB 堆设置 | 删除。不是构建工具的必要条件，也没有构建测量依据。 |
@@ -27,6 +26,8 @@
 | `rebind-intent.json` 与 `pre-0.1.7` 备份 | 重绑必须可从停止、切 Base、刷新身份和恢复活动槽的中断点继续；首次迁移只备份 Aggregate 与 CE/DE 槽对清单，不复制账号数据 | Runtime 中断恢复与 filesystem adapter 测试 |
 | 每 App `launch_after_reboot` 默认 `false` | 用户要求重启恢复默认只切换账户、不批量启动 App；只有明确开启且当前为非 Base 空间时才在恢复后启动，手动 `activate_slot` 语义不变 | 聚合迁移、Runtime 恢复矩阵、共享 fixture、Manager ViewModel 测试与真机重启验收 |
 | 每条连接一个换行结尾请求 | 重建方案明确约定 | `ucloned` 与 `slotctl` socket 测试 |
+| RPC 请求帧最大 64 KiB | 0.1.9 安全修复明确锁定；超长帧统一返回现有 `invalid_request`，不进入 Runtime 事务 | daemon 超长帧与无阻塞连接测试 |
+| 非 `probe` 请求的 `client_build_id` | 0.1.9 双向混装必须 fail-closed；`probe` 保持旧格式用于发现 Runtime build ID | Rust 零副作用拒绝、共享 fixture、Manager 编码与 mismatch-only-probe 测试 |
 | `base` 后从 `slot-1` 递增的内部槽 ID | V2 聚合模型的确定性标识规则；槽 ID 对 Manager 是不透明字符串 | 聚合测试和共享 fixtures |
 | 创建页默认选择空白槽 | 固定旧版行为基线中的真实创建入口默认值 | ViewModel 完整链路测试 |
 | Rust 1.95、edition 2024 | 旧版固定基线 `2ae26765…/slot-runtime/Cargo.toml`；V2 已在本机完整通过 | format、test、Clippy、doc |
@@ -37,17 +38,18 @@
 | NDK 29.0.14206865、Android API 29、aarch64 | 旧版固定提交的 Android arm64 构建链和设备可行性证据；V2 已完成交叉编译 | KernelSU ZIP 构建和完整性检查 |
 | Android owner user `0`、`/data/user/0`、`/data/user_de/0` | 首个里程碑沿用已验证的单用户 CE/DE 行为；多用户没有进入聚合模型或产品入口 | Android command-sequence 和 mountinfo 测试 |
 | `/data/misc_ce/0/uclone-slices-v2/slots` 与 `/data/misc_de/0/uclone-slices-v2/slots` | 固定旧版行为基线已经验证的分离 CE/DE 槽布局；控制面数据不充当应用数据槽 | 成对物化、半成品清理和 paired-mount 测试 |
+| UClone 根、`slots`、包父目录 `root:root 0700` 与 socket `0600` | 小红书 UID 能到达旧 `0777` 源路径的真机证据；0.1.9 只迁移父目录元数据，不递归触碰 slot 内容 | symlink/non-dir、迁移保留内容、owner/mode、KernelSU 静态与真机 UID 拒绝测试 |
 | Android `cp -a`、源目录 owner/mode、源 SELinux context | 固定旧版 Android materializer 的实际复制与目录属性操作；不增加条目数、容量或时间经验阈值 | host 目录语义测试、Android 交叉编译 |
 | `/proc/self/mountinfo` 与 `/proc/<pid>/mountinfo` | Runtime 通过 `nsenter -t 1 -m` 进入 init mount namespace；前者确认施加结果，后者确认每个 App PID 的真实视图 | paired-mount 与 App PID 视图测试 |
 | `am start -W -n <resolved activity>` | 当前 API 36 设备的 Launcher activity 可由 `cmd package resolve-activity` 解析；`-W` 返回启动完成状态 | Android argv 与 App PID 视图测试 |
-| `cmd activity get-started-user-state 0` 的 `RUNNING_UNLOCKED` | 当前 API 36 设备实际提供的 user0 生命周期查询；`cmd user is-user-unlocked` 在该设备不存在 | 真机只读探测与 probe 命令测试 |
+| `sys.user.0.ce_available=true` 与 `cmd activity get-started-user-state 0` 的 `RUNNING_UNLOCKED` | 当前 API 37 设备提供的 CE 与 user0 生命周期信号；daemon 在两者满足前不开放 socket | daemon 启动代码、Boot marker 测试与真机无 RPC 重启验收 |
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.1.7`、versionCode `8` | 增加覆盖升降级无损重绑、签名 sidecar、第十一个 wire 操作和混装只读门禁；Manager 与 Runtime 继续成对交付 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
+| 版本 `0.1.9`、versionCode `10` | 功能基线保持 0.1.7，只交付五项安全修复，不恢复桌面 Hook，不修改 Aggregate schema | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
 | MIUIX `0.7.2` | 用户明确指定 MIUIX 设计语言；该版本使用 Kotlin 2.2.x，能够保持项目既有 Kotlin 2.2.0 工具链，避免为 UI 升级引入构建系统迁移 | Manager compile、unit、lint、assemble 与真机界面验收 |
 | Manager `windowSoftInputMode=adjustResize` | 真机 `dumpsys window` 证实默认 `adjustPan` 会与 MIUIX `SuperDialog` 自带的 `imePadding()` 叠加，导致删除确认弹窗在键盘出现时被双重上移 | 输入“删除”时的真机窗口属性与弹窗位置验收 |
-| Manager Release 覆盖安装签名门禁 | GitHub Runner 产物先与设备现有 APK 比较证书；不匹配时只对已下载 Release APK 用已验证的本地 keystore 重签，不重新编译、不卸载、不清数据 | `apksigner verify --print-certs`、`adb install -r` 与设备版本核对 |
+| Manager Release 证书 `3a98013499c588855ac936d884d9e55497f72827c91ca01e50cf9ca4fc290648` | 2026-08-23 从目标机当前可覆盖安装的 0.1.8 Manager 只读提取；CI 必须使用固定 Release keystore | `verify-release-signing.sh`、`apksigner verify --print-certs` 与 `adb install -r` |
 | UI 的 8 dp 网格间距 | Material 布局网格，仅影响首个真实入口的排版，不进入业务或协议 | Android lint、assemble |
 | 首页当前空间高亮色 `#D83B50` | 用户明确要求当前账号使用西瓜红；只影响首页 Chip 的真实当前快照展示 | Manager 真机截图、Android lint、assemble |
 | GitHub Action commit SHA | 旧版 CI 中已使用的 v3/v4 action 固定提交 | CI workflow |

@@ -711,19 +711,29 @@ internal class SlotsViewModel(
         mutableState.update { it.copy(installedApps = localApps) }
         when (val probe = client.execute(RuntimeCommand.Probe)) {
             is RuntimeReply.Capabilities -> {
+                val compatible = probe.buildId == BuildConfig.VERSION_NAME
                 mutableState.update {
                     it.copy(
                         runtimeReady = true,
-                        runtimeCompatible = probe.buildId == BuildConfig.VERSION_NAME,
+                        runtimeCompatible = compatible,
                         buildId = probe.buildId,
-                        notice = if (probe.buildId == BuildConfig.VERSION_NAME) {
+                        packages = if (compatible) it.packages else emptyList(),
+                        selected = if (compatible) it.selected else null,
+                        destination = if (compatible) {
+                            it.destination
+                        } else {
+                            ManagerDestination.Spaces
+                        },
+                        notice = if (compatible) {
                             it.notice
                         } else {
                             UiNotice.RuntimeVersionMismatch
                         },
                     )
                 }
-                refreshPackages()
+                if (compatible) {
+                    refreshPackages()
+                }
             }
             is RuntimeReply.Error -> showError(probe.code)
             RuntimeReply.TransportFailure -> showTransportFailure()

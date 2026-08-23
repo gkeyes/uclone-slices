@@ -1,71 +1,53 @@
-# 0.1.7 升降级无损验收清单
+# 0.1.9 小红书最终验收清单
 
-这份清单用于 Android 16 / API 36 / arm64 KernelSU 真机。所有 APK 和模块必须来自同一个 `Validate V2` 提交 SHA；失败时先保存只读证据，不卸载、不清数据、不执行旧的 `enroll reset`。
+本轮只操作小红书 `com.xingin.xhs`。不安装 Fixture，不操作微信，不复制账号内容。所有正式产物必须来自同一提交 SHA；任一门禁失败即停止，不卸载、不清数据，并恢复原同签名 0.1.8 Manager/模块后重启。
 
-## 1. 安装前只读备份
+## 1. 安装前只读基线
 
-1. 记录设备、Manager、Runtime、KernelSU 模块版本和待测提交 SHA。
-2. 比较手机现有 Manager 与下载 Release APK 的签名证书。若不匹配，只对下载 APK 使用已验证匹配手机的本地 keystore 重签。
-3. 保存以下内容到带时间戳的设备外目录：
-   - `/data/adb/uclone-slices-v2/packages/*/aggregate.json`
-   - 已存在的 `binding-v1.json` 与 `rebind-intent.json`
-   - `/data/misc_ce/0/uclone-slices-v2/slots`、`/data/misc_de/0/uclone-slices-v2/slots` 的目录清单
-   - `/proc/self/mountinfo` 中两个 Slices 槽根相关记录
-4. 只核对文件和目录，不复制、移动、挂载或删除账号数据。
+1. 记录设备、0.1.8 Manager/模块、证书 SHA-256、APK/ZIP SHA-256 和待测提交 SHA。
+2. 记录小红书 Aggregate、槽位名称清单、CE/DE UClone 父目录权限、Runtime/init mountinfo 和 user0 UID；不读取或复制槽内账号文件。
+3. 保存当前可覆盖安装的 0.1.8 Manager APK 与模块代码，作为失败回退材料。
 
-## 2. 用固定 0.1.6 基线制造旧配置
+## 2. 双向混装拒绝
 
-1. 安装 artifact 中 `e0d4683` 的 0.1.6 Manager、Fixture 和模块，重启并解锁 user0。
-2. 在 `fixture-from-0.1.6` 的 Base 写入 `base-ce/base-de`，登记 Fixture，创建并切换“旧账号”，写入 `account-ce/account-de`。
-3. 记下 `aggregate.json`、活动槽 ID、账号名称、CE/DE 槽对和重启启动开关。
-4. 使用同一次 CI 生成且同签名的 `fixture-to-0.1.7` 覆盖升级；确认 0.1.6 Runtime 可复现旧配置从列表隐藏，但 CE/DE 槽目录和 Aggregate 仍存在。
+1. 覆盖安装同签名 0.1.9 Manager，保留 0.1.8 模块：Manager 必须只发送 `probe`，显示版本不匹配，包列表和选中状态为空；小红书 Aggregate、挂载和槽目录不变。
+2. 恢复同签名 0.1.8 Manager，安装 0.1.9 模块并重启：旧格式 `list/get` 和写请求必须返回 `invalid_request`，日志保留版本门禁记录，账号状态不变。
+3. 覆盖恢复 0.1.9 Manager，确认 Manager 与 Runtime 均为 `0.1.9`。
 
-## 3. 升级到 0.1.7 并无损重新绑定
+## 3. 源目录隔离
 
-1. 覆盖安装提交 SHA 对应的 0.1.7 Manager，刷入同 SHA 模块并重启。
-2. 确认 Manager 显示 `Runtime 0.1.7`，旧 Fixture 账号重新出现在列表，账号名称和活动槽未丢失。
-3. 对 `legacy_confirmation_required` 对话框核对旧账号列表；输入错误文字不能继续，输入“绑定”后执行“保留分空间并重新绑定”。
-4. 确认重新绑定后：
-   - Base 与普通槽的 CE/DE 标识均保持原值；
-   - 活动槽、账号名称和重启启动开关保持不变；
-   - App 没有被自动启动；
-   - `binding-v1.json` 已生成，`rebind-intent.json` 已清除；
-   - `state-backups/pre-0.1.7/<package>/` 含原 Aggregate 和 CE/DE 槽对清单。
+1. 保持小红书为 Base，使 `slot-1` inactive。
+2. CE/DE 的 `uclone-slices-v2`、`slots` 和 `com.xingin.xhs` 父目录必须为 `root:root 0700`；Runtime 根为 `0700`，socket 为 `0600`。
+3. 以小红书 user0 UID 对 inactive 源路径执行 `stat/read/write/chdir`，必须全部失败。
+4. 正常启动小红书 Base，确认可用；不得修改 slot 自身或其内容的 UID、mode、MCS 标签和数据。
 
-## 4. 自动升级与降级
+## 4. 正常切换与进程视图
 
-1. 再次安装 `fixture-to-0.1.7`，打开 Manager，确认签名兼容时自动重新绑定且 App 不启动。
-2. 使用 `adb install -r -d` 安装 `fixture-from-0.1.6`，再次确认自动重新绑定。
-3. 两个方向都核对账号名称、活动槽、CE/DE 标识和重启启动开关不变。
-4. 准备第二个已配置 App，只替换 Fixture；确认另一个 App 的 Aggregate、槽和挂载没有被重绑流程改动。
-5. 将 Fixture 的 CE 或 DE 测试副本制造缺失仅限隔离 QA 数据时，确认 Runtime 返回 `state_conflict` 且不删除另一半、不写入新身份。不要对真实账号执行此破坏性场景。
+1. 执行 `Base → slot-1 → Base`。
+2. 每次核对 Aggregate、Runtime/init mountinfo 和全部 user0 小红书 PID 的 CE/DE 视图一致。
+3. 不对真实账号注入 wrong-view 私有挂载故障；PID 消失、mountinfo 错误、错误视图和收容失败只由确定性 Rust 测试覆盖。
 
-## 5. 手动与重启语义回归
+## 5. RPC 阻塞
 
-1. 保持 Fixture 的“重启后自动切换并打开 App”关闭，另一个非 Base App 开启。
-2. 重启并解锁后打开 Manager：两者都恢复原活动槽，只有开启开关的 App 有进程。
-3. 手动点击 Fixture 的账号，确认仍发送 `activate_slot`、切换并启动 App；新开关和重新绑定均不得改变该语义。
-4. 切回 Base 并保持开关开启后重启，确认 Base 永不自动启动。
-5. Manager 与模块故意混装 0.1.6/0.1.7 时，只允许查看已有状态；登记、重绑、删除、切换和开关保存均被拦截，并提示先升级模块。
+1. 保持一个 root socket 连接三秒不发送换行，同时发送第二个 `probe`。
+2. 第二个 `probe` 必须立即成功；释放首连接后再次 `probe` 仍成功，结果必须为 `0 → 0 → 0`。
 
-## 6. 双向配置兼容和最终状态
+## 6. Boot 主动收敛
 
-1. 降回 CI 构建的 0.1.6 Manager 与模块，确认 `aggregate.json` 可读取，账号数据与 CE/DE 槽仍存在；0.1.6 会忽略独立 sidecar。
-2. 不在 0.1.6 中对身份变化记录执行旧清理恢复。
-3. 重新覆盖安装 0.1.7 Manager、刷入 0.1.7 模块并重启，作为最终设备状态。
-4. 最终记录 Manager `versionName/versionCode`、Runtime build ID、模块版本、提交 SHA、所有产物 SHA-256 和关键账号的 CE/DE 标识。
+1. 小红书切到 `slot-1`，关闭“重启后自动打开”，退出 Manager。
+2. 重启并解锁 user0；打开 Manager 前，只读取 Aggregate、`/proc/1/mountinfo` 和小红书 PID，不发送 RPC。
+3. 必须已经恢复 `slot-1` CE/DE，且小红书 user0 PID 为零。
+4. 手动打开小红书后，全部 PID 必须看到 `slot-1`。
+5. 同一 boot 重启 daemon 或刷新 Manager，不得再次自动启动 App。
 
-## 失败处理
+## 7. 验收结束与发布
 
-- `identity_mismatch`：旧分空间保持不动，保存当前 UID、APK 路径/inode 和 Manager 读取的证书摘要；不要提供修复或清理按钮。
-- `state_conflict`：保存 Aggregate、journal、CE/DE 清单、mountinfo 和 Runtime 日志；不要继续重绑。
-- 安装签名不匹配：停止安装，按证书门禁重签已下载 Release APK；不要卸载或清数据。
-- CI 或真机失败只能报告已验证根因和聚焦修复，不把源码/CI 通过写成真机已通过。
+1. 恢复小红书 Base，关闭重启自动启动；槽位名称和数据目录保持存在。
+2. 核对同一 SHA 的 Manager APK、KernelSU ZIP 和 `SHA256SUMS.txt`。
+3. 全部门禁通过后才把 GitHub 候选版标记为正式版本；失败时执行第 1 节保存的覆盖回退，不做数据迁移。
 
 ## 通过条件
 
-- 正常升级和降级均无损保留所有账号元数据、CE/DE 数据、活动槽和重启启动开关。
-- 0.1.6 旧配置只需一次“绑定”确认，不再删除账号。
-- UID、签名、槽对或真实视图不满足条件时零删除、零错误接管。
-- 重新绑定不启动 App；手动点击账号仍切换并启动；重启开关语义保持不变。
-- 0.1.6 与 0.1.7 Aggregate 双向可读，混装时危险操作被拦截。
+- 0.1.7/0.1.8 → 0.1.9 覆盖升级和回退不改变 Aggregate schema 或 CE/DE 账号数据。
+- 新旧混装双向无副作用拒绝，目录不可由小红书 UID 到达，正常 Base 与 slot 切换可用。
+- 错误启动验证必定收容到 UID 进程为零；半包连接不阻塞完整请求；Boot 在 socket 开放前只收敛一次。

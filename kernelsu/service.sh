@@ -1,15 +1,47 @@
 #!/system/bin/sh
 
+umask 077
+
 MODDIR=${0%/*}
 RUNTIME_ROOT=/data/adb/uclone-slices-v2
+CE_STORAGE_ROOT=/data/misc_ce/0/uclone-slices-v2
+DE_STORAGE_ROOT=/data/misc_de/0/uclone-slices-v2
 SOCKET=$RUNTIME_ROOT/runtime.sock
 PID_FILE=$RUNTIME_ROOT/ucloned.pid
 BUILD_ID=$(sed -n 's/^version=//p' "$MODDIR/module.prop")
 PID=
 PID_EXE=
+EXPECTED_PROBE_RESPONSE=
 
-mkdir -p "$RUNTIME_ROOT" || exit 1
 [ -n "$BUILD_ID" ] || exit 1
+EXPECTED_PROBE_RESPONSE=$(printf '{"ok":{"build_id":"%s"}}' "$BUILD_ID")
+
+secure_directory() {
+    DIRECTORY=$1
+    [ ! -L "$DIRECTORY" ] || return 1
+    if [ -e "$DIRECTORY" ]; then
+        [ -d "$DIRECTORY" ] || return 1
+    else
+        mkdir "$DIRECTORY" || return 1
+    fi
+    chown 0:0 "$DIRECTORY" || return 1
+    chmod 0700 "$DIRECTORY" || return 1
+    [ "$(stat -c '%u:%g:%a' "$DIRECTORY" 2>/dev/null)" = '0:0:700' ]
+}
+
+secure_existing_directory() {
+    DIRECTORY=$1
+    [ ! -L "$DIRECTORY" ] || return 1
+    [ -e "$DIRECTORY" ] || return 0
+    [ -d "$DIRECTORY" ] || return 1
+    chown 0:0 "$DIRECTORY" || return 1
+    chmod 0700 "$DIRECTORY" || return 1
+    [ "$(stat -c '%u:%g:%a' "$DIRECTORY" 2>/dev/null)" = '0:0:700' ]
+}
+
+secure_directory "$RUNTIME_ROOT" || exit 1
+secure_existing_directory "$CE_STORAGE_ROOT" || exit 1
+secure_existing_directory "$DE_STORAGE_ROOT" || exit 1
 
 runtime_transport_ready() {
     [ -f "$PID_FILE" ] || return 1
@@ -25,10 +57,11 @@ runtime_transport_ready() {
         printf '{"op":"probe"}\n' |
             "$MODDIR/bin/slotctl" rpc 2>/dev/null
     ) || return 1
-    case "$PROBE_RESPONSE" in
-        '{"ok":'*|'{"error":'*) return 0 ;;
-        *) return 1 ;;
-    esac
+    [ "$PROBE_RESPONSE" = "$EXPECTED_PROBE_RESPONSE" ] || return 1
+    [ ! -L "$SOCKET" ] || return 1
+    chown 0:0 "$SOCKET" || return 1
+    chmod 0600 "$SOCKET" || return 1
+    [ "$(stat -c '%u:%g:%a' "$SOCKET" 2>/dev/null)" = '0:0:600' ]
 }
 
 if runtime_transport_ready; then

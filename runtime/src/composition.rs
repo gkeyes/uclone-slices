@@ -39,6 +39,10 @@ impl ProductionRuntime {
         self.inner.list_packages()
     }
 
+    pub fn reconcile_boot(&mut self) -> Result<(), RuntimeError> {
+        self.inner.reconcile_boot()
+    }
+
     pub fn get_package(&mut self, package: &PackageName) -> Result<PackageSnapshot, RuntimeError> {
         self.inner.get_package(package)
     }

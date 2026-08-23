@@ -85,19 +85,41 @@ pub enum Response {
     Error { error: ErrorBody },
 }
 
-pub fn handle_line<P, S, A>(runtime: &mut Runtime<P, S, A>, line: &str) -> String
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecodeError {
+    InvalidRequest,
+    MissingClientBuildId,
+    ClientBuildMismatch,
+}
+
+pub fn handle_line<P, S, A>(
+    runtime: &mut Runtime<P, S, A>,
+    expected_build_id: &str,
+    line: &str,
+) -> String
 where
     P: PackageStore,
     S: SlotStorage,
     A: AndroidOps,
 {
-    let response = match decode_command(line) {
+    let response = match decode_command(line, expected_build_id) {
         Ok(command) => dispatch(runtime, command),
-        Err(_error) => Response::Error {
-            error: ErrorBody {
-                code: ErrorCode::InvalidRequest,
-            },
-        },
+        Err(error) => {
+            match error {
+                DecodeError::MissingClientBuildId => {
+                    eprintln!("op=protocol step=client_build_id error=missing")
+                }
+                DecodeError::ClientBuildMismatch => {
+                    eprintln!("op=protocol step=client_build_id error=mismatch")
+                }
+                DecodeError::InvalidRequest => {}
+            }
+            Response::Error {
+                error: ErrorBody {
+                    code: ErrorCode::InvalidRequest,
+                },
+            }
+        }
     };
     match serde_json::to_string(&response) {
         Ok(mut encoded) => {
@@ -108,44 +130,63 @@ where
     }
 }
 
-fn decode_command(line: &str) -> Result<Command, ()> {
-    let value = serde_json::from_str::<serde_json::Value>(line).map_err(|_error| ())?;
-    let object = value.as_object().ok_or(())?;
+fn decode_command(line: &str, expected_build_id: &str) -> Result<Command, DecodeError> {
+    let mut value = serde_json::from_str::<serde_json::Value>(line)
+        .map_err(|_error| DecodeError::InvalidRequest)?;
+    let object = value.as_object_mut().ok_or(DecodeError::InvalidRequest)?;
     let operation = object
         .get("op")
         .and_then(serde_json::Value::as_str)
-        .ok_or(())?;
-    let allowed = match operation {
-        "probe" | "list_packages" => &["op"][..],
-        "get_package" => &["op", "package"][..],
-        "enroll" => &["op", "package", "reset", "signing"][..],
-        "rebind_package" => &["op", "package", "signing", "trust_legacy"][..],
-        "unenroll" => &["op", "package"][..],
-        "set_launch_after_reboot" => &["op", "package", "enabled"][..],
-        "create_slot" => &["op", "package", "name", "seed"][..],
-        "activate_slot" => &["op", "package", "slot"][..],
-        "rename_slot" => &["op", "package", "slot", "name"][..],
-        "delete_slot" => &["op", "package", "slot"][..],
-        _ => return Err(()),
+        .map(str::to_owned)
+        .ok_or(DecodeError::InvalidRequest)?;
+    let allowed = match operation.as_str() {
+        "probe" => &["op"][..],
+        "list_packages" => &["op", "client_build_id"][..],
+        "get_package" => &["op", "package", "client_build_id"][..],
+        "enroll" => &["op", "package", "reset", "signing", "client_build_id"][..],
+        "rebind_package" => &[
+            "op",
+            "package",
+            "signing",
+            "trust_legacy",
+            "client_build_id",
+        ][..],
+        "unenroll" => &["op", "package", "client_build_id"][..],
+        "set_launch_after_reboot" => &["op", "package", "enabled", "client_build_id"][..],
+        "create_slot" => &["op", "package", "name", "seed", "client_build_id"][..],
+        "activate_slot" => &["op", "package", "slot", "client_build_id"][..],
+        "rename_slot" => &["op", "package", "slot", "name", "client_build_id"][..],
+        "delete_slot" => &["op", "package", "slot", "client_build_id"][..],
+        _ => return Err(DecodeError::InvalidRequest),
     };
     if !object.keys().all(|key| allowed.contains(&key.as_str())) {
-        return Err(());
+        return Err(DecodeError::InvalidRequest);
+    }
+    if operation != "probe" {
+        let client_build_id = object
+            .get("client_build_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(DecodeError::MissingClientBuildId)?;
+        if client_build_id != expected_build_id {
+            return Err(DecodeError::ClientBuildMismatch);
+        }
     }
     if operation == "enroll"
         && object
             .get("reset")
             .is_some_and(|reset| reset != &serde_json::Value::Bool(true))
     {
-        return Err(());
+        return Err(DecodeError::InvalidRequest);
     }
     if operation == "rebind_package"
         && object
             .get("trust_legacy")
             .is_some_and(|trust| !trust.is_boolean())
     {
-        return Err(());
+        return Err(DecodeError::InvalidRequest);
     }
-    serde_json::from_value(value).map_err(|_error| ())
+    object.remove("client_build_id");
+    serde_json::from_value(value).map_err(|_error| DecodeError::InvalidRequest)
 }
 
 fn dispatch<P, S, A>(runtime: &mut Runtime<P, S, A>, command: Command) -> Response
@@ -233,6 +274,8 @@ mod tests {
     use super::*;
     use crate::adapters::{MemoryAndroidOps, MemoryPackageStore, MemorySlotStorage};
 
+    const CLIENT_BUILD_ID: &str = "0.1.9";
+
     #[test]
     fn shared_fixtures_cover_the_core_command_flow() {
         let package = PackageName::new("com.example.app").unwrap();
@@ -254,7 +297,7 @@ mod tests {
         ] {
             let request = fixture(format!("{name}.request.json"));
             let expected = fixture(format!("{name}.response.json"));
-            let actual = handle_line(&mut runtime, request.trim());
+            let actual = handle_line(&mut runtime, CLIENT_BUILD_ID, request.trim());
             assert_eq!(actual.trim(), expected.trim(), "fixture {name}");
         }
     }
@@ -265,7 +308,7 @@ mod tests {
         let request = fixture("rename_slot.request.json".to_owned());
         let expected = fixture("rename_slot.response.json".to_owned());
 
-        let actual = handle_line(&mut runtime, request.trim());
+        let actual = handle_line(&mut runtime, CLIENT_BUILD_ID, request.trim());
 
         assert_eq!(actual.trim(), expected.trim());
     }
@@ -276,7 +319,7 @@ mod tests {
         let request = fixture("delete_slot.request.json".to_owned());
         let expected = fixture("delete_slot.response.json".to_owned());
 
-        let actual = handle_line(&mut runtime, request.trim());
+        let actual = handle_line(&mut runtime, CLIENT_BUILD_ID, request.trim());
 
         assert_eq!(actual.trim(), expected.trim());
     }
@@ -287,8 +330,8 @@ mod tests {
         let request = fixture("unenroll.request.json".to_owned());
         let expected = fixture("unenroll.response.json".to_owned());
 
-        let actual = handle_line(&mut runtime, request.trim());
-        let repeated = handle_line(&mut runtime, request.trim());
+        let actual = handle_line(&mut runtime, CLIENT_BUILD_ID, request.trim());
+        let repeated = handle_line(&mut runtime, CLIENT_BUILD_ID, request.trim());
 
         assert_eq!(actual.trim(), expected.trim());
         assert_eq!(repeated.trim(), expected.trim());
@@ -302,7 +345,11 @@ mod tests {
             MemoryAndroidOps::default(),
         );
 
-        let response = handle_line(&mut runtime, r#"{"op":"probe","future":true}"#);
+        let response = handle_line(
+            &mut runtime,
+            CLIENT_BUILD_ID,
+            r#"{"op":"probe","future":true}"#,
+        );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
     }
@@ -317,7 +364,8 @@ mod tests {
 
         let response = handle_line(
             &mut runtime,
-            r#"{"op":"unenroll","package":"com.example.app","slot":"base"}"#,
+            CLIENT_BUILD_ID,
+            r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.1.9"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -333,7 +381,8 @@ mod tests {
 
         let response = handle_line(
             &mut runtime,
-            r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes"}"#,
+            CLIENT_BUILD_ID,
+            r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.1.9"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -348,11 +397,11 @@ mod tests {
         );
 
         for request in [
-            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false}"#,
-            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false}"#,
+            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.1.9"}"#,
+            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.1.9"}"#,
         ] {
             assert_eq!(
-                handle_line(&mut runtime, request),
+                handle_line(&mut runtime, CLIENT_BUILD_ID, request),
                 "{\"error\":{\"code\":\"invalid_request\"}}\n"
             );
         }
@@ -368,7 +417,8 @@ mod tests {
 
         let response = handle_line(
             &mut runtime,
-            r#"{"op":"enroll","package":"com.example.app","reset":false}"#,
+            CLIENT_BUILD_ID,
+            r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.1.9"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -394,7 +444,7 @@ mod tests {
         let mut runtime = Runtime::new(packages, slots, android);
         let request = fixture("enroll_reset.request.json".to_owned());
         let expected = fixture("enroll_reset.response.json".to_owned());
-        let actual = handle_line(&mut runtime, request.trim());
+        let actual = handle_line(&mut runtime, CLIENT_BUILD_ID, request.trim());
 
         assert_eq!(actual.trim(), expected.trim());
         let (_packages, slots, _android) = runtime.into_parts();
@@ -413,11 +463,68 @@ mod tests {
 
         let request = fixture("rebind_package.request.json".to_owned());
         let expected = fixture("rebind_package.response.json".to_owned());
-        let actual = handle_line(&mut runtime, request.trim());
+        let actual = handle_line(&mut runtime, CLIENT_BUILD_ID, request.trim());
 
         assert_eq!(actual.trim(), expected.trim());
         let (_packages, slots, _android) = runtime.into_parts();
         assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
+    }
+
+    #[test]
+    fn probe_keeps_the_legacy_wire_shape() {
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            MemoryAndroidOps::default(),
+        );
+
+        let response = handle_line(&mut runtime, CLIENT_BUILD_ID, r#"{"op":"probe"}"#);
+
+        assert!(response.contains("build_id"));
+    }
+
+    #[test]
+    fn every_non_probe_request_requires_the_exact_client_build_id() {
+        for request in [
+            r#"{"op":"list_packages"}"#,
+            r#"{"op":"get_package","package":"com.example.app"}"#,
+            r#"{"op":"enroll","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}}"#,
+            r#"{"op":"list_packages","client_build_id":"0.1.8"}"#,
+        ] {
+            let mut runtime = Runtime::new(
+                MemoryPackageStore::default(),
+                MemorySlotStorage::default(),
+                MemoryAndroidOps::default(),
+            );
+
+            assert_eq!(
+                handle_line(&mut runtime, CLIENT_BUILD_ID, request),
+                "{\"error\":{\"code\":\"invalid_request\"}}\n",
+                "request: {request}",
+            );
+        }
+    }
+
+    #[test]
+    fn rejected_old_write_request_has_no_side_effect() {
+        let package = PackageName::new("com.example.app").unwrap();
+        let mut android = MemoryAndroidOps::default();
+        android.install(package.clone());
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            MemorySlotStorage::default(),
+            android,
+        );
+
+        let response = handle_line(
+            &mut runtime,
+            CLIENT_BUILD_ID,
+            r#"{"op":"enroll","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}}"#,
+        );
+
+        assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
+        let (packages, _slots, _android) = runtime.into_parts();
+        assert!(packages.load(&package).unwrap().is_none());
     }
 
     fn fixture(name: String) -> String {

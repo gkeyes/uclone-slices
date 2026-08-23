@@ -443,7 +443,7 @@ class SlotsViewModelTest {
     }
 
     @Test
-    fun mismatchedRuntimeIsReadOnlyButConfiguredDetailsRemainVisible() {
+    fun mismatchedRuntimeSendsOnlyProbeAndClearsRuntimeState() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(
             initialPackages = listOf(initial),
@@ -454,15 +454,17 @@ class SlotsViewModelTest {
         assertTrue(viewModel.state.value.runtimeReady)
         assertFalse(viewModel.state.value.runtimeCompatible)
         assertEquals(UiNotice.RuntimeVersionMismatch, viewModel.state.value.notice)
-        val commandsBeforeOpen = client.commands.toList()
+        assertEquals(listOf<RuntimeCommand>(RuntimeCommand.Probe), client.commands)
+        assertTrue(viewModel.state.value.packages.isEmpty())
+        assertNull(viewModel.state.value.selected)
 
         viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
 
-        assertEquals(commandsBeforeOpen, client.commands)
-        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
-        assertEquals(initial, viewModel.state.value.selected)
+        assertEquals(listOf<RuntimeCommand>(RuntimeCommand.Probe), client.commands)
+        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertNull(viewModel.state.value.selected)
         viewModel.onIntent(UiIntent.ActivateSlot("slot-1"))
-        assertEquals(commandsBeforeOpen, client.commands)
+        assertEquals(listOf<RuntimeCommand>(RuntimeCommand.Probe), client.commands)
         assertEquals(UiNotice.RuntimeVersionMismatch, viewModel.state.value.notice)
     }
 

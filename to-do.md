@@ -1,27 +1,22 @@
 # UClone Slices V2 待办
 
-更新日期：2026-08-14。
+更新日期：2026-08-23。
 
 这里仅记录尚未完成的工作。已经解决的问题由 Git 提交和回归测试保存，不继续以陈旧行号、设备二进制大小或一次性热修过程污染待办。
 
-## 0.1.7 升降级无损候选门禁
+## 0.1.9 候选门禁
 
-- [ ] 用户按 [`docs/DEVICE_QA.md`](docs/DEVICE_QA.md) 完成 0.1.6 旧配置迁移、Fixture 升级/降级、混装只读和最终 0.1.7 状态验收。
-- [ ] 确认刷入 0.1.7 后，无需 `force-start-runtime.sh` 即可连接 Runtime。
-  - 当前状态：PID/socket/probe 复用逻辑是候选修复；故障发生时没有保留强启前的完整探针输出，因此根因不标记为已确认。
-  - 再次失败时：先运行 `diagnose-runtime.sh` 并保存完整输出，再决定是否修改。
-- [ ] 确认已有 `com.xingin.xhs` 记录可以进入详情并启动当前槽。
-  - 已确认失败点：App 进程为 0，但 `iorapd` 持有 XHS 的 CE/DE cache 目录，普通 `umount` 返回 `Device or resource busy`；已知可用的 `92e09a1` Runtime 在相同现场也会复现，排除近期 reset 修改回归。
-  - 修复只在当前目标路径返回精确 EBUSY 时执行 lazy detach，并继续要求 mountinfo 数量减少；用户已确认最新模块不再出现旧模块的偶发“重新登记应用”弹窗。
-  - 仍需完成 `slot-1 → Base → slot-1` 双向启动验收后关闭本项。
+- [ ] 按 [`docs/DEVICE_QA.md`](docs/DEVICE_QA.md) 只使用 `com.xingin.xhs` 完成双向混装、目录隔离、正常切换、RPC 和 Boot 验收。
+- [ ] CI 同一 SHA 只交付 Manager、KernelSU ZIP 与 `SHA256SUMS.txt`，Manager 证书必须为固定指纹。
+- [ ] 验收结束恢复小红书 Base、关闭重启自动启动；全部通过后再把候选版标记为正式版本。
 ## 后续可靠性任务
 
-- [ ] 在 user0 解锁后、目标 App 可启动前，主动恢复已持久化的活动槽。
+- [ ] 在 0.1.9 真机门禁确认 user0 解锁后、socket 开放前的主动恢复。
   - 2026-07-24 使用 `tools/probe-fixture-reboot.sh` 完成两次隔离重启取证。
   - 重启前 Fixture 为 `active_slot=slot-1`，CE/DE 均挂载 `slot-1`，标识均为 `reboot-slot-1`。
   - 将 Manager `force-stop` 后重启，Runtime `0.1.2` 已连接且 Manager 无进程，但连续两次探针均得到 `active_slot=slot-1`、CE/DE 为 Base、Base 标识可见，结果为 `persisted_slot_but_base`。
   - 仅发送一次现有 `list_packages` 后，CE/DE 与两个标识立即恢复为 `slot-1`，结果为 `matched_persisted_view`；因此根因已定位为开机只启动 daemon，包读取前没有主动收敛。
-  - 0.1.6 新增的 `set_launch_after_reboot` 只持久化用户策略；恢复触发仍复用既有包读取链路，不增加专用恢复命令。使用同一探针覆盖“恢复前为红、恢复后为绿”。
+  - 0.1.9 已增加 daemon 内部 `reconcile_boot` 和每 boot 一次 marker；不增加 Manager UI 或公开 wire 命令，仍待小红书无 RPC 重启验收关闭本项。
 - [ ] 只有在探针确认 Runtime 成功启动后仍会自行退出时，再设计常驻收敛入口。
   - 当前 KernelSU 处理启动时已有 PID/socket 失效，不预先增加 supervisor、重试次数或超时策略。
 
@@ -32,7 +27,7 @@
   - 该界面保留 `StateFlow + UiIntent + RuntimeCommand`，未迁移 V1 ViewModel、旧协议编排、底部导航或尚不存在的产品功能。
 - [ ] 引入多语言资源时，将 `AppSections.spaceDisplayName` 中的“系统原始空间”改为由 UI 传入的资源字符串。
   - 当前应用仅交付中文界面，该硬编码不影响功能；为避免让纯状态辅助函数依赖 Android `Context`，本里程碑不为一处文案扩大结构改动。
-- [ ] 核心链路稳定后，再分别评估重启主动恢复、Base 恢复和一次性旧数据导入器；每项独立取证和立项。
+- [ ] 核心链路稳定后，再分别评估 Base 特殊恢复和一次性旧数据导入器；每项独立取证和立项。
 
 ## 固定约束
 

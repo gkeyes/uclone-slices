@@ -1,6 +1,6 @@
 use std::fs::{self, File};
 use std::io::Write as _;
-use std::os::unix::fs::{MetadataExt as _, chown};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, chown};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "android")]
 use std::process::Command;
@@ -244,6 +244,19 @@ pub(crate) struct FileSlotStorage {
     de_slots_root: PathBuf,
     canonical_ce_root: PathBuf,
     canonical_de_root: PathBuf,
+    owner: DirectoryOwner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectoryOwner {
+    uid: u32,
+    gid: u32,
+}
+
+impl DirectoryOwner {
+    const fn new(uid: u32, gid: u32) -> Self {
+        Self { uid, gid }
+    }
 }
 
 impl FileSlotStorage {
@@ -253,15 +266,32 @@ impl FileSlotStorage {
         canonical_ce_root: impl Into<PathBuf>,
         canonical_de_root: impl Into<PathBuf>,
     ) -> Result<Self, AdapterError> {
+        Self::open_with_owner(
+            ce_slots_root,
+            de_slots_root,
+            canonical_ce_root,
+            canonical_de_root,
+            DirectoryOwner::new(0, 0),
+        )
+    }
+
+    fn open_with_owner(
+        ce_slots_root: impl Into<PathBuf>,
+        de_slots_root: impl Into<PathBuf>,
+        canonical_ce_root: impl Into<PathBuf>,
+        canonical_de_root: impl Into<PathBuf>,
+        owner: DirectoryOwner,
+    ) -> Result<Self, AdapterError> {
         let ce_slots_root = ce_slots_root.into();
         let de_slots_root = de_slots_root.into();
-        fs::create_dir_all(&ce_slots_root).map_err(io_error)?;
-        fs::create_dir_all(&de_slots_root).map_err(io_error)?;
+        secure_storage_tree(&ce_slots_root, owner)?;
+        secure_storage_tree(&de_slots_root, owner)?;
         Ok(Self {
             ce_slots_root,
             de_slots_root,
             canonical_ce_root: canonical_ce_root.into(),
             canonical_de_root: canonical_de_root.into(),
+            owner,
         })
     }
 
@@ -286,8 +316,8 @@ impl SlotStorage for FileSlotStorage {
     ) -> Result<(), AdapterError> {
         let ce_package_root = self.ce_slots_root.join(package.as_str());
         let de_package_root = self.de_slots_root.join(package.as_str());
-        fs::create_dir_all(&ce_package_root).map_err(io_error)?;
-        fs::create_dir_all(&de_package_root).map_err(io_error)?;
+        secure_private_directory(&ce_package_root, self.owner)?;
+        secure_private_directory(&de_package_root, self.owner)?;
         let (target_ce, target_de) = self.slot_paths(package, slot.id());
         if target_ce.exists() || target_de.exists() {
             return Err(AdapterError::new("slot already exists"));
@@ -352,6 +382,66 @@ impl SlotStorage for FileSlotStorage {
             .then_some(())
             .ok_or_else(|| AdapterError::new("slot CE/DE pair is incomplete"))
     }
+}
+
+fn secure_storage_tree(slots_root: &Path, owner: DirectoryOwner) -> Result<(), AdapterError> {
+    let storage_root = slots_root
+        .parent()
+        .ok_or_else(|| AdapterError::new("slots root has no storage parent"))?;
+    secure_private_directory(storage_root, owner)?;
+    secure_private_directory(slots_root, owner)?;
+    for entry in fs::read_dir(slots_root).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        secure_private_directory(&entry.path(), owner)?;
+    }
+    Ok(())
+}
+
+fn secure_private_directory(path: &Path, owner: DirectoryOwner) -> Result<(), AdapterError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(path).map_err(io_error)?;
+            fs::symlink_metadata(path).map_err(io_error)?
+        }
+        Err(error) => return Err(io_error(error)),
+    };
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(AdapterError::state_conflict(format!(
+            "private storage ancestor is not a real directory: {}",
+            path.display()
+        )));
+    }
+    if metadata.uid() != owner.uid || metadata.gid() != owner.gid {
+        chown(path, Some(owner.uid), Some(owner.gid)).map_err(io_error)?;
+    }
+    if metadata.mode() & 0o7777 != 0o700 {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(io_error)?;
+    }
+    let secured = fs::symlink_metadata(path).map_err(io_error)?;
+    verify_private_directory(&secured, owner)
+}
+
+fn verify_private_directory(
+    metadata: &fs::Metadata,
+    owner: DirectoryOwner,
+) -> Result<(), AdapterError> {
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(AdapterError::state_conflict(
+            "private storage ancestor is not a real directory",
+        ));
+    }
+    if metadata.uid() != owner.uid || metadata.gid() != owner.gid {
+        return Err(AdapterError::state_conflict(
+            "private storage ancestor has the wrong owner",
+        ));
+    }
+    if metadata.mode() & 0o7777 != 0o700 {
+        return Err(AdapterError::state_conflict(
+            "private storage ancestor has the wrong mode",
+        ));
+    }
+    Ok(())
 }
 
 fn populate_domain(source: &Path, target: &Path, seed: SeedMode) -> Result<(), AdapterError> {
@@ -514,10 +604,28 @@ mod tests {
 
     use super::*;
     use crate::model::{DisplayName, PackageAggregate, PackageIdentity};
-    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::fs::symlink;
 
     fn identity() -> PackageIdentity {
         PackageIdentity::new(10_000, "/data/app/example/base.apk", 1, 2).unwrap()
+    }
+
+    fn open_slot_storage(
+        ce_slots: &Path,
+        de_slots: &Path,
+        canonical_ce: &Path,
+        canonical_de: &Path,
+    ) -> FileSlotStorage {
+        let existing_ancestor = ce_slots.ancestors().find(|path| path.exists()).unwrap();
+        let metadata = fs::metadata(existing_ancestor).unwrap();
+        FileSlotStorage::open_with_owner(
+            ce_slots,
+            de_slots,
+            canonical_ce,
+            canonical_de,
+            DirectoryOwner::new(metadata.uid(), metadata.gid()),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -599,7 +707,7 @@ mod tests {
         fs::write(de.join(package.as_str()).join("de.txt"), b"de").unwrap();
         let ce_slots = root.path().join("slots-ce");
         let de_slots = root.path().join("slots-de");
-        let mut storage = FileSlotStorage::open(&ce_slots, &de_slots, &ce, &de).unwrap();
+        let mut storage = open_slot_storage(&ce_slots, &de_slots, &ce, &de);
         let mut aggregate = PackageAggregate::enrolled(package.clone(), identity());
         let slot = aggregate
             .reserve_slot(DisplayName::new("Clone").unwrap())
@@ -612,6 +720,14 @@ mod tests {
         let (target_ce, target_de) = storage.slot_paths(&package, slot.id());
         assert_eq!(fs::read(target_ce.join("ce.txt")).unwrap(), b"ce");
         assert_eq!(fs::read(target_de.join("de.txt")).unwrap(), b"de");
+        assert_eq!(
+            fs::metadata(target_ce.parent().unwrap()).unwrap().mode() & 0o777,
+            0o700,
+        );
+        assert_eq!(
+            fs::metadata(target_de.parent().unwrap()).unwrap().mode() & 0o777,
+            0o700,
+        );
     }
 
     #[test]
@@ -626,13 +742,9 @@ mod tests {
         fs::create_dir_all(&canonical_de).unwrap();
         fs::set_permissions(&canonical_ce, fs::Permissions::from_mode(0o710)).unwrap();
         fs::set_permissions(&canonical_de, fs::Permissions::from_mode(0o750)).unwrap();
-        let mut storage = FileSlotStorage::open(
-            root.path().join("slots-ce"),
-            root.path().join("slots-de"),
-            &ce,
-            &de,
-        )
-        .unwrap();
+        let ce_slots = root.path().join("slots-ce");
+        let de_slots = root.path().join("slots-de");
+        let mut storage = open_slot_storage(&ce_slots, &de_slots, &ce, &de);
         let mut aggregate = PackageAggregate::enrolled(package.clone(), identity());
         let slot = aggregate
             .reserve_slot(DisplayName::new("Blank").unwrap())
@@ -654,13 +766,9 @@ mod tests {
         let de = root.path().join("base-de");
         let package = PackageName::new("com.example.app").unwrap();
         fs::create_dir_all(ce.join(package.as_str())).unwrap();
-        let mut storage = FileSlotStorage::open(
-            root.path().join("slots-ce"),
-            root.path().join("slots-de"),
-            &ce,
-            &de,
-        )
-        .unwrap();
+        let ce_slots = root.path().join("slots-ce");
+        let de_slots = root.path().join("slots-de");
+        let mut storage = open_slot_storage(&ce_slots, &de_slots, &ce, &de);
         let mut aggregate = PackageAggregate::enrolled(package.clone(), identity());
         let slot = aggregate
             .reserve_slot(DisplayName::new("Clone").unwrap())
@@ -690,13 +798,12 @@ mod tests {
         for directory in [&published_ce, &stale_ce, &stale_de, &unrelated] {
             fs::create_dir_all(directory).unwrap();
         }
-        let mut storage = FileSlotStorage::open(
+        let mut storage = open_slot_storage(
             &ce_slots,
             &de_slots,
-            root.path().join("base-ce"),
-            root.path().join("base-de"),
-        )
-        .unwrap();
+            &root.path().join("base-ce"),
+            &root.path().join("base-de"),
+        );
 
         storage.discard(&package, &slot).unwrap();
 
@@ -722,13 +829,12 @@ mod tests {
                 fs::create_dir_all(path).unwrap();
             }
         }
-        let mut storage = FileSlotStorage::open(
+        let mut storage = open_slot_storage(
             &ce_slots,
             &de_slots,
-            root.path().join("base-ce"),
-            root.path().join("base-de"),
-        )
-        .unwrap();
+            &root.path().join("base-ce"),
+            &root.path().join("base-de"),
+        );
 
         storage.discard_package(&package).unwrap();
 
@@ -736,5 +842,107 @@ mod tests {
         assert!(!de_slots.join(package.as_str()).exists());
         assert!(ce_slots.join(other.as_str()).join("slot-1").is_dir());
         assert!(de_slots.join(other.as_str()).join("slot-1").is_dir());
+    }
+
+    #[test]
+    fn opening_storage_hardens_only_source_ancestors() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let ce_storage = root.path().join("ce/uclone-slices-v2");
+        let de_storage = root.path().join("de/uclone-slices-v2");
+        let ce_slots = ce_storage.join("slots");
+        let de_slots = de_storage.join("slots");
+        let ce_package = ce_slots.join(package.as_str());
+        let de_package = de_slots.join(package.as_str());
+        let ce_slot = ce_package.join("slot-1");
+        let de_slot = de_package.join("slot-1");
+        for directory in [&ce_slot, &de_slot] {
+            fs::create_dir_all(directory).unwrap();
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o710)).unwrap();
+            fs::write(directory.join("account.db"), b"preserve").unwrap();
+            fs::set_permissions(
+                directory.join("account.db"),
+                fs::Permissions::from_mode(0o640),
+            )
+            .unwrap();
+        }
+        for directory in [
+            &ce_storage,
+            &de_storage,
+            &ce_slots,
+            &de_slots,
+            &ce_package,
+            &de_package,
+        ] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o777)).unwrap();
+        }
+
+        let _storage = open_slot_storage(
+            &ce_slots,
+            &de_slots,
+            &root.path().join("canonical-ce"),
+            &root.path().join("canonical-de"),
+        );
+
+        for directory in [
+            &ce_storage,
+            &de_storage,
+            &ce_slots,
+            &de_slots,
+            &ce_package,
+            &de_package,
+        ] {
+            assert_eq!(fs::metadata(directory).unwrap().mode() & 0o777, 0o700);
+        }
+        for directory in [&ce_slot, &de_slot] {
+            assert_eq!(fs::metadata(directory).unwrap().mode() & 0o777, 0o710);
+            assert_eq!(
+                fs::metadata(directory.join("account.db")).unwrap().mode() & 0o777,
+                0o640,
+            );
+            assert_eq!(fs::read(directory.join("account.db")).unwrap(), b"preserve");
+        }
+    }
+
+    #[test]
+    fn source_ancestor_symlink_and_non_directory_are_rejected() {
+        for kind in ["symlink", "file"] {
+            let root = tempfile::tempdir().unwrap();
+            let ce_storage = root.path().join("ce/uclone-slices-v2");
+            fs::create_dir_all(ce_storage.parent().unwrap()).unwrap();
+            if kind == "symlink" {
+                let target = root.path().join("elsewhere");
+                fs::create_dir(&target).unwrap();
+                symlink(target, &ce_storage).unwrap();
+            } else {
+                fs::write(&ce_storage, b"not a directory").unwrap();
+            }
+            let ancestor = fs::metadata(root.path()).unwrap();
+
+            let result = FileSlotStorage::open_with_owner(
+                ce_storage.join("slots"),
+                root.path().join("de/uclone-slices-v2/slots"),
+                root.path().join("canonical-ce"),
+                root.path().join("canonical-de"),
+                DirectoryOwner::new(ancestor.uid(), ancestor.gid()),
+            );
+
+            assert!(result.is_err(), "kind: {kind}");
+        }
+    }
+
+    #[test]
+    fn private_directory_verification_rejects_wrong_owner_and_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let metadata = fs::metadata(root.path()).unwrap();
+        let actual_owner = DirectoryOwner::new(metadata.uid(), metadata.gid());
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o777)).unwrap();
+        let wrong_mode = fs::metadata(root.path()).unwrap();
+
+        assert!(verify_private_directory(&wrong_mode, actual_owner).is_err());
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let secure = fs::metadata(root.path()).unwrap();
+        let wrong_owner = DirectoryOwner::new(secure.uid().saturating_add(1), secure.gid());
+        assert!(verify_private_directory(&secure, wrong_owner).is_err());
     }
 }

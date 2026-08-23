@@ -5,7 +5,7 @@
 
 UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空间管理器。它让同一个 App 在系统原始数据与多个独立 CE/DE 数据空间之间切换，并由 Runtime 完成停止、挂载、验证和启动。
 
-当前版本为 **v0.1.7 候选版**。同包名、同 UID 且签名谱系兼容的 App 覆盖升级或降级后，Runtime 会无损刷新 APK 身份并恢复原活动空间；0.1.6 遗留配置可由用户确认一次后保留账号重新绑定。
+当前版本为 **v0.1.9 候选版**，功能基线仍是稳定的 0.1.7，不包含桌面 Hook。0.1.9 只增加源目录隔离、错误视图进程收容、双向混装拒绝、开机主动收敛和无阻塞 RPC；不改变 `PackageAggregate` 或账号数据格式。
 
 ## 功能
 
@@ -17,7 +17,8 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 - App 正常升级或降级后自动无损重新绑定，保留账号名称、CE/DE 数据、当前账号和重启启动开关。
 - 0.1.6 旧配置缺少签名 sidecar 且 APK 已变化时，显示账号清单并要求一次“绑定”确认，不删除空间。
 - Runtime 事务中断后，根据持久化上下文继续收敛。
-- 重启后恢复非 Base 当前空间；每个 App 可独立选择恢复后是否自动启动，默认关闭。
+- daemon 在 user0 解锁后、开放 socket 前主动恢复非 Base 当前空间；每个 App 可独立选择恢复后是否自动启动，默认关闭，同一 boot 只执行一次。
+- 0.1.9 Manager 与 Runtime 必须成对使用；版本不匹配时只允许 `probe`，不查询或修改账号状态。
 - 首页账号展开状态保存在 Manager 本地，重启 Manager 后保持不变。
 - Manager 使用 MIUIX 组件、深浅色主题和原生过渡反馈，不改变 Runtime 操作语义。
 
@@ -25,7 +26,7 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 
 | 项目 | 当前范围 |
 |---|---|
-| Android | Android 10 / API 29 及以上；当前真机为 Android 16 / API 36 |
+| Android | Android 10 / API 29 及以上；当前真机为 Android 17 / API 37 |
 | CPU | arm64 |
 | Root | KernelSU，能够加载模块并授予 Manager 权限 |
 | 用户 | 已解锁的 user0 |
@@ -35,19 +36,20 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 
 ## 下载与安装
 
-当前候选产物由 `Validate V2` GitHub Actions 生成，不创建 tag 或 GitHub Release。下载同一提交 SHA 的两个产品文件：
+当前候选产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
 
-1. `uclone-slices-v2-manager-0.1.7-<sha>.apk`
-2. `uclone-slices-v2-kernelsu-0.1.7-<sha>.zip`
+1. `uclone-slices-v2-manager-0.1.9-<sha>.apk`
+2. `uclone-slices-v2-kernelsu-0.1.9-<sha>.zip`
+3. `SHA256SUMS.txt`
 
 安装步骤：
 
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.1.7`。
+4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.1.9`。
 
-同一个 Actions artifact 还包含两个覆盖升降级 Fixture、固定 `e0d4683` 的 0.1.6 QA 基线和 `SHA256SUMS.txt`。Fixture APK 与 QA 基线不是产品运行依赖。
+Fixture 只参与 CI 编译兼容检查，不属于正式交付物，也不用于本轮真机验收。
 
 > 安装前必须比较手机现有 APK 与下载 APK 的证书。若 Runner 签名不同，只能对下载的 Release APK 用已验证匹配手机的 keystore 重新签名；不要卸载或清数据。
 
@@ -77,12 +79,14 @@ flowchart LR
 - `PackageAggregate` 是唯一业务状态。
 - Use Case 完整处理操作顺序和中断恢复。
 - Manager 只提交用户意图并消费结果，不编排挂载步骤。
-- KernelSU Shell 只负责在 init mount namespace 启动 Runtime。
+- KernelSU Shell 只负责收紧控制面权限，并在 init mount namespace 启动 Runtime。
 - Runtime 只保留 `PackageStore`、`SlotStorage`、`AndroidOps` 三个底层端口。
 
 当前 wire 有十一个操作：
 
 `probe`、`list_packages`、`get_package`、`enroll`、`rebind_package`、`create_slot`、`activate_slot`、`rename_slot`、`delete_slot`、`unenroll`、`set_launch_after_reboot`
+
+`probe` 保持旧格式；其余请求必须携带与 Runtime 精确匹配的 `client_build_id`。
 
 错误码固定为：
 
@@ -135,6 +139,8 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 - CE 空间：`/data/misc_ce/0/uclone-slices-v2/slots/<package>/<slot>`
 - DE 空间：`/data/misc_de/0/uclone-slices-v2/slots/<package>/<slot>`
 - Runtime socket：`/data/adb/uclone-slices-v2/runtime.sock`
+
+Runtime 根目录、CE/DE 的 UClone 根、`slots` 和包名父目录均为 `root:root 0700`；socket 为 `root:root 0600`。slot 本身及其内容继续使用目标 App 的 UID、原 mode 和 MCS 标签。
 
 ## 开发规则
 

@@ -1,14 +1,20 @@
-use std::env;
-use std::fmt::Display;
-use std::fs;
-use std::io::{BufRead as _, BufReader, Write as _};
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::{Path, PathBuf};
+#[path = "ucloned/boot.rs"]
+mod boot;
+#[path = "ucloned/rpc.rs"]
+mod rpc;
 
+use std::env;
+use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
+use std::os::unix::net::UnixListener;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use boot::{BOOT_ID_PATH, prepare_runtime_root, reconcile_once_per_boot, wait_for_user0_ready};
+use rpc::{OPERATION_FAILED_RESPONSE, RequestHandler, serialize_transaction, spawn_connection};
 use uclone_slices_runtime::{handle_line, production};
 
 const DEFAULT_ROOT: &str = "/data/adb/uclone-slices-v2";
-const OPERATION_FAILED_RESPONSE: &str = "{\"error\":{\"code\":\"operation_failed\"}}\n";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root =
@@ -17,60 +23,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("runtime.sock"));
     let build_id = env::var("UCLONE_BUILD_ID")?;
-    fs::create_dir_all(&root)?;
+    prepare_runtime_root(&root)?;
+    wait_for_user0_ready();
+    let boot_id = fs::read_to_string(BOOT_ID_PATH)?;
+    let mut boot_runtime = production(&root, build_id.clone())?;
+    reconcile_once_per_boot(&root, boot_id.trim(), || boot_runtime.reconcile_boot())?;
+    drop(boot_runtime);
     remove_stale_socket(&socket)?;
     let listener = UnixListener::bind(&socket)?;
-    let mut runtime = None;
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                if let Err(error) = serve_one(stream, |line| {
-                    with_runtime(
-                        &mut runtime,
-                        || production(&root, build_id.clone()),
-                        |runtime| handle_line(runtime, line),
-                    )
-                }) {
-                    eprintln!("ucloned request failed: {error}");
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
+    let transaction_lock = Arc::new(Mutex::new(()));
+    let handler_root = root;
+    let handler_build_id = build_id;
+    let handler: Arc<RequestHandler> = Arc::new(move |line| {
+        serialize_transaction(&transaction_lock, || {
+            match production(&handler_root, handler_build_id.clone()) {
+                Ok(mut runtime) => handle_line(&mut runtime, &handler_build_id, line),
+                Err(error) => {
+                    eprintln!("ucloned Runtime unavailable: {error}");
+                    OPERATION_FAILED_RESPONSE.to_owned()
                 }
             }
+        })
+    });
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => drop(spawn_connection(stream, Arc::clone(&handler))),
             Err(error) => eprintln!("ucloned accept failed: {error}"),
         }
     }
-    Ok(())
-}
-
-fn with_runtime<T, E>(
-    runtime: &mut Option<T>,
-    create: impl FnOnce() -> Result<T, E>,
-    handle: impl FnOnce(&mut T) -> String,
-) -> String
-where
-    E: Display,
-{
-    if runtime.is_none() {
-        match create() {
-            Ok(created) => *runtime = Some(created),
-            Err(error) => {
-                eprintln!("ucloned Runtime unavailable: {error}");
-                return OPERATION_FAILED_RESPONSE.to_owned();
-            }
-        }
-    }
-    let Some(runtime) = runtime.as_mut() else {
-        return OPERATION_FAILED_RESPONSE.to_owned();
-    };
-    handle(runtime)
-}
-
-fn serve_one(
-    mut stream: UnixStream,
-    handler: impl FnOnce(&str) -> String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut line = String::new();
-    BufReader::new(stream.try_clone()?).read_line(&mut line)?;
-    let response = handler(line.trim_end());
-    stream.write_all(response.as_bytes())?;
     Ok(())
 }
 
@@ -79,52 +60,5 @@ fn remove_stale_socket(path: &Path) -> Result<(), std::io::Error> {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    use super::*;
-    use std::net::Shutdown;
-
-    #[test]
-    fn one_connection_carries_one_request() {
-        let (mut client, server) = UnixStream::pair().unwrap();
-        client.write_all(b"{\"op\":\"future\"}\n").unwrap();
-        client.shutdown(Shutdown::Write).unwrap();
-
-        let mut received = String::new();
-        serve_one(server, |line| {
-            received = line.to_owned();
-            "{\"error\":{\"code\":\"invalid_request\"}}\n".to_owned()
-        })
-        .unwrap();
-
-        let mut response = String::new();
-        std::io::Read::read_to_string(&mut client, &mut response).unwrap();
-        assert_eq!(received, "{\"op\":\"future\"}");
-        assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
-    }
-
-    #[test]
-    fn runtime_composition_failure_is_retried_on_the_next_request() {
-        let mut runtime = None;
-
-        let unavailable = with_runtime(
-            &mut runtime,
-            || Err::<u8, _>("CE storage is unavailable"),
-            |_runtime| "unexpected".to_owned(),
-        );
-        let available = with_runtime(
-            &mut runtime,
-            || Ok::<_, &str>(7),
-            |runtime| format!("ok:{runtime}"),
-        );
-
-        assert_eq!(unavailable, OPERATION_FAILED_RESPONSE);
-        assert_eq!(available, "ok:7");
-        assert_eq!(runtime, Some(7));
     }
 }
