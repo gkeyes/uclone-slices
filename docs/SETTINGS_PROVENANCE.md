@@ -41,6 +41,7 @@
 | UClone 根、`slots`、包父目录 `root:root 0700` 与 socket `0600` | 小红书 UID 能到达旧 `0777` 源路径的真机证据；0.1.9 只迁移父目录元数据，不递归触碰 slot 内容 | symlink/non-dir、迁移保留内容、owner/mode、KernelSU 静态与真机 UID 拒绝测试 |
 | Android `cp -a`、源目录 owner/mode、源 SELinux context | 固定旧版 Android materializer 的实际复制与目录属性操作；不增加条目数、容量或时间经验阈值 | host 目录语义测试、Android 交叉编译 |
 | `/proc/self/mountinfo` 与 `/proc/<pid>/mountinfo` | Runtime 通过 `nsenter -t 1 -m` 进入 init mount namespace；前者确认施加结果，后者确认每个 App PID 的真实视图 | paired-mount 与 App PID 视图测试 |
+| `force-stop` 后最多 1 秒、每 10 ms 确认 UID 进程归零 | Android 17 真机证明 `am force-stop` 返回与 `/proc` 移除之间存在短暂异步窗口；单次立即快照会误拒绝正常切换。持续存在到确认窗结束仍失败，归零前绝不改变挂载 | 瞬时退出/持续残留 Rust 测试与小红书多进程 `Base → slot-1 → Base` 真机验收 |
 | `am start -W -n <resolved activity>` | 当前 API 36 设备的 Launcher activity 可由 `cmd package resolve-activity` 解析；`-W` 返回启动完成状态 | Android argv 与 App PID 视图测试 |
 | `sys.user.0.ce_available=true` 与 `cmd activity get-started-user-state 0` 的 `RUNNING_UNLOCKED` | 当前 API 37 设备提供的 CE 与 user0 生命周期信号；daemon 在两者满足前不开放 socket | daemon 启动代码、Boot marker 测试与真机无 RPC 重启验收 |
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |

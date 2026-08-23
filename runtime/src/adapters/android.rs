@@ -2,11 +2,16 @@ use std::fs;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::model::{
     Capabilities, ObservedView, PackageIdentity, PackageInspection, PackageName, SlotId,
 };
 use crate::ports::{AdapterError, AndroidOps};
+
+const PROCESS_EXIT_CONFIRMATION_WINDOW: Duration = Duration::from_secs(1);
+const PROCESS_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone)]
 struct CommandOutput {
@@ -204,6 +209,24 @@ impl SystemAndroidOps {
         Ok(processes)
     }
 
+    fn confirm_package_processes_stopped(&self, uid: u32) -> Result<(), AdapterError> {
+        let deadline = Instant::now() + PROCESS_EXIT_CONFIRMATION_WINDOW;
+        loop {
+            let remaining = self.package_processes(uid)?;
+            if remaining.is_empty() {
+                return Ok(());
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(AdapterError::new(format!(
+                    "force-stopped package still has {} process(es) for UID {uid}",
+                    remaining.len()
+                )));
+            }
+            thread::sleep(PROCESS_EXIT_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+        }
+    }
+
     fn ensure_unmounted(&mut self, mount_point: &Path) -> Result<(), AdapterError> {
         loop {
             let content = fs::read_to_string(&self.mountinfo)
@@ -320,15 +343,7 @@ impl AndroidOps for SystemAndroidOps {
             &["force-stop", "--user", "0", package.as_str()],
         )?;
         let uid = self.package_uid(package)?;
-        let remaining = self.package_processes(uid)?;
-        if remaining.is_empty() {
-            Ok(())
-        } else {
-            Err(AdapterError::new(format!(
-                "force-stopped package still has {} process(es) for UID {uid}",
-                remaining.len()
-            )))
-        }
+        self.confirm_package_processes_stopped(uid)
     }
 
     fn observe_view(&mut self, package: &PackageName) -> Result<ObservedView, AdapterError> {
@@ -863,6 +878,35 @@ mod tests {
         let error = android.force_stop(&package).unwrap_err();
 
         assert!(error.to_string().contains("still has 1 process"));
+    }
+
+    #[test]
+    fn force_stop_waits_for_kernel_process_exit_before_succeeding() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let proc_root = root.path().join("proc");
+        let process = proc_root.join("123");
+        fs::create_dir_all(&process).unwrap();
+        fs::write(
+            process.join("status"),
+            "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+        )
+        .unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([output(""), output(format!("package:{package} uid:10123\n"))]),
+            commands,
+        };
+        let (mut android, _recorded) = system_with_runner(root.path(), runner);
+        let remover = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            fs::remove_dir_all(&proc_root).unwrap();
+            fs::create_dir(&proc_root).unwrap();
+        });
+
+        android.force_stop(&package).unwrap();
+
+        remover.join().unwrap();
     }
 
     #[test]
