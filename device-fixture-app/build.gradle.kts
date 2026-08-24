@@ -11,8 +11,8 @@ android {
         applicationId = "com.uclone.slices.fixture"
         minSdk = 29
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.2.0"
+        versionCode = 12
+        versionName = "0.2.1"
     }
 
     flavorDimensions += "fixtureVersion"
@@ -24,8 +24,8 @@ android {
         }
         create("to") {
             dimension = "fixtureVersion"
-            versionCode = 11
-            versionName = "0.2.0-fixture"
+            versionCode = 12
+            versionName = "0.2.1-fixture"
         }
     }
 

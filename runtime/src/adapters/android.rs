@@ -11,7 +11,7 @@ use crate::model::{
 };
 use crate::ports::{AdapterError, AndroidOps};
 
-const PROCESS_EXIT_CONFIRMATION_WINDOW: Duration = Duration::from_secs(1);
+const PROCESS_EXIT_CONFIRMATION_WINDOW: Duration = Duration::from_secs(10);
 const PROCESS_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone)]
@@ -245,21 +245,12 @@ impl SystemAndroidOps {
     }
 
     fn confirm_package_processes_stopped(&self, uid: u32) -> Result<(), AdapterError> {
-        let deadline = Instant::now() + PROCESS_EXIT_CONFIRMATION_WINDOW;
-        loop {
-            let remaining = self.package_processes(uid)?;
-            if remaining.is_empty() {
-                return Ok(());
-            }
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(AdapterError::new(format!(
-                    "force-stopped package still has {} process(es) for UID {uid}",
-                    remaining.len()
-                )));
-            }
-            thread::sleep(PROCESS_EXIT_POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
-        }
+        confirm_processes_stably_stopped(
+            uid,
+            PROCESS_EXIT_CONFIRMATION_WINDOW,
+            PROCESS_EXIT_POLL_INTERVAL,
+            || self.package_processes(uid),
+        )
     }
 
     fn ensure_unmounted(&mut self, mount_point: &Path) -> Result<(), AdapterError> {
@@ -322,6 +313,43 @@ impl SystemAndroidOps {
                 "{verification_error}; containment failed: {containment_error}"
             )),
         }
+    }
+}
+
+fn confirm_processes_stably_stopped<F>(
+    uid: u32,
+    confirmation_window: Duration,
+    poll_interval: Duration,
+    mut processes: F,
+) -> Result<(), AdapterError>
+where
+    F: FnMut() -> Result<Vec<PathBuf>, AdapterError>,
+{
+    let deadline = Instant::now() + confirmation_window;
+    let mut previous_scan_was_empty = false;
+    loop {
+        let remaining = processes()?;
+        if remaining.is_empty() {
+            if previous_scan_was_empty {
+                return Ok(());
+            }
+            previous_scan_was_empty = true;
+        } else {
+            previous_scan_was_empty = false;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            if remaining.is_empty() {
+                return Err(AdapterError::new(format!(
+                    "force-stopped package process state did not remain empty for UID {uid}"
+                )));
+            }
+            return Err(AdapterError::new(format!(
+                "force-stopped package still has {} process(es) for UID {uid}",
+                remaining.len()
+            )));
+        }
+        thread::sleep(poll_interval.min(deadline.saturating_duration_since(now)));
     }
 }
 
@@ -1077,6 +1105,63 @@ mod tests {
         android.force_stop(&package).unwrap();
 
         remover.join().unwrap();
+    }
+
+    #[test]
+    fn force_stop_waits_for_a_slow_multi_process_handoff() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let proc_root = root.path().join("proc");
+        let main_process = proc_root.join("123");
+        let push_process = proc_root.join("456");
+        fs::create_dir_all(&main_process).unwrap();
+        fs::write(
+            main_process.join("status"),
+            "Name:\tapp_main\nUid:\t10123\t10123\t10123\t10123\n",
+        )
+        .unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([output(""), output(format!("package:{package} uid:10123\n"))]),
+            commands,
+        };
+        let (mut android, _recorded) = system_with_runner(root.path(), runner);
+        let remover = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            fs::create_dir_all(&push_process).unwrap();
+            fs::write(
+                push_process.join("status"),
+                "Name:\tapp_push\nUid:\t10123\t10123\t10123\t10123\n",
+            )
+            .unwrap();
+            fs::remove_dir_all(main_process).unwrap();
+            std::thread::sleep(Duration::from_millis(800));
+            fs::remove_dir_all(push_process).unwrap();
+        });
+
+        let result = android.force_stop(&package);
+        remover.join().unwrap();
+
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn process_stop_confirmation_rejects_a_single_empty_scan_between_processes() {
+        let mut scans = VecDeque::from([
+            Vec::<PathBuf>::new(),
+            vec![PathBuf::from("/proc/456")],
+            Vec::<PathBuf>::new(),
+            Vec::<PathBuf>::new(),
+        ]);
+        let mut scan_count = 0_usize;
+
+        confirm_processes_stably_stopped(10_123, Duration::from_secs(1), Duration::ZERO, || {
+            scan_count += 1;
+            Ok(scans.pop_front().unwrap_or_default())
+        })
+        .unwrap();
+
+        assert_eq!(scan_count, 4);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write as _;
 #[cfg(not(target_os = "android"))]
@@ -340,6 +341,8 @@ pub(crate) struct FileSlotStorage {
     canonical_ce_root: PathBuf,
     canonical_de_root: PathBuf,
     owner: DirectoryOwner,
+    #[cfg(test)]
+    available_bytes_by_device: std::collections::BTreeMap<u64, u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,7 +390,16 @@ impl FileSlotStorage {
             canonical_ce_root: canonical_ce_root.into(),
             canonical_de_root: canonical_de_root.into(),
             owner,
+            #[cfg(test)]
+            available_bytes_by_device: std::collections::BTreeMap::new(),
         })
+    }
+
+    #[cfg(test)]
+    fn set_available_bytes(&mut self, path: &Path, available: u64) -> Result<(), AdapterError> {
+        let device = fs::metadata(path).map_err(io_error)?.dev();
+        self.available_bytes_by_device.insert(device, available);
+        Ok(())
     }
 
     fn slot_paths(&self, package: &PackageName, slot: &SlotId) -> (PathBuf, PathBuf) {
@@ -540,6 +552,48 @@ impl FileSlotStorage {
         } else {
             Ok(self.slot_paths(package, target))
         }
+    }
+
+    fn available_bytes(&self, path: &Path) -> Result<(u64, u64), AdapterError> {
+        let device = fs::metadata(path).map_err(io_error)?.dev();
+        #[cfg(test)]
+        if let Some(available) = self.available_bytes_by_device.get(&device) {
+            return Ok((device, *available));
+        }
+        let statistics =
+            rustix::fs::statvfs(path).map_err(|error| io_error(std::io::Error::from(error)))?;
+        let fragment_size = if statistics.f_frsize == 0 {
+            statistics.f_bsize
+        } else {
+            statistics.f_frsize
+        };
+        let available = statistics
+            .f_bavail
+            .checked_mul(fragment_size)
+            .ok_or_else(|| AdapterError::state_conflict("available storage size overflow"))?;
+        Ok((device, available))
+    }
+
+    fn ensure_base_restore_capacity(
+        &self,
+        staged_ce: &Path,
+        staged_de: &Path,
+        target_ce: &Path,
+        target_de: &Path,
+    ) -> Result<(), AdapterError> {
+        let mut requirements = Vec::with_capacity(2);
+        for (staged, target) in [(staged_ce, target_ce), (staged_de, target_de)] {
+            let target_device = fs::metadata(target).map_err(io_error)?.dev();
+            let (staging_device, available) = self.available_bytes(staged)?;
+            if target_device != staging_device {
+                return Err(AdapterError::state_conflict(
+                    "Base restore staging and target are on different filesystems",
+                ));
+            }
+            let required = copied_tree_bytes(target)?;
+            requirements.push((staging_device, required, available));
+        }
+        ensure_filesystem_capacity(requirements)
     }
 }
 
@@ -707,6 +761,23 @@ impl SlotStorage for FileSlotStorage {
         Ok(())
     }
 
+    fn ensure_restore_capacity(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        transfer_id: &TransferId,
+        account: &ArchiveAccountId,
+        target: &SlotId,
+    ) -> Result<(), AdapterError> {
+        if !target.is_base() {
+            return Ok(());
+        }
+        self.validate_staged_account(package, token, transfer_id, account)?;
+        let (staged_ce, staged_de) = self.transfer_account_paths(package, token, account)?;
+        let (target_ce, target_de) = self.replacement_target_paths(package, token, target)?;
+        self.ensure_base_restore_capacity(&staged_ce, &staged_de, &target_ce, &target_de)
+    }
+
     fn prepare_maintenance(
         &mut self,
         package: &PackageName,
@@ -751,9 +822,12 @@ impl SlotStorage for FileSlotStorage {
     ) -> Result<(), AdapterError> {
         self.validate_staged_account(package, token, transfer_id, account)?;
         let (staged_ce, staged_de) = self.transfer_account_paths(package, token, account)?;
+        let (target_ce, target_de) = self.replacement_target_paths(package, token, target)?;
+        if target.is_base() {
+            self.ensure_base_restore_capacity(&staged_ce, &staged_de, &target_ce, &target_de)?;
+        }
         normalize_restored_tree(&self.canonical_ce_root.join(package.as_str()), &staged_ce)?;
         normalize_restored_tree(&self.canonical_de_root.join(package.as_str()), &staged_de)?;
-        let (target_ce, target_de) = self.replacement_target_paths(package, token, target)?;
         let (rollback_ce, rollback_de) = self.rollback_paths(package, token, target)?;
         let ce_result = replace_domain(&staged_ce, &target_ce, &rollback_ce, target.is_base());
         if let Err(error) = ce_result {
@@ -1059,6 +1133,48 @@ fn replace_domain(
     }
     sync_directory(rollback)?;
     sync_directory(rollback_parent)
+}
+
+fn copied_tree_bytes(root: &Path) -> Result<u64, AdapterError> {
+    let metadata = fs::symlink_metadata(root).map_err(io_error)?;
+    let mut bytes = metadata
+        .blocks()
+        .checked_mul(512)
+        .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?
+        .max(metadata.len())
+        .max(metadata.blksize());
+    if metadata.file_type().is_dir() {
+        for entry in fs::read_dir(root).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            bytes = bytes
+                .checked_add(copied_tree_bytes(&entry.path())?)
+                .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
+        }
+    }
+    Ok(bytes)
+}
+
+fn ensure_filesystem_capacity(
+    requirements: impl IntoIterator<Item = (u64, u64, u64)>,
+) -> Result<(), AdapterError> {
+    let mut filesystems = BTreeMap::<u64, (u64, u64)>::new();
+    for (device, required, available) in requirements {
+        let entry = filesystems.entry(device).or_insert((0, available));
+        entry.0 = entry
+            .0
+            .checked_add(required)
+            .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
+        entry.1 = entry.1.min(available);
+    }
+    if filesystems
+        .values()
+        .any(|(required, available)| required > available)
+    {
+        return Err(AdapterError::insufficient_storage(
+            "insufficient storage for Base rollback copy",
+        ));
+    }
+    Ok(())
 }
 
 fn rollback_domain(
@@ -1828,6 +1944,9 @@ mod tests {
             .unwrap();
         fs::write(Path::new(&staging[0].ce_path).join("new-ce"), b"new").unwrap();
         fs::write(Path::new(&staging[0].de_path).join("new-de"), b"new").unwrap();
+        storage
+            .set_available_bytes(Path::new(&staging[0].ce_path), 0)
+            .unwrap();
 
         storage
             .replace_account(&package, &token, &transfer, &account, slot.id())
@@ -1914,6 +2033,76 @@ mod tests {
         assert_eq!(fs::read(target_de.join("old-de-b")).unwrap(), b"old-de-b");
         assert!(!target_ce.join("new-ce").exists());
         assert!(!target_de.join("new-de").exists());
+    }
+
+    #[test]
+    fn base_restore_rejects_combined_ce_de_rollback_that_exceeds_shared_filesystem_space() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        let target_ce = canonical_ce_root.join(package.as_str());
+        let target_de = canonical_de_root.join(package.as_str());
+        fs::create_dir_all(&target_ce).unwrap();
+        fs::create_dir_all(&target_de).unwrap();
+        fs::write(target_ce.join("old-ce"), b"old-ce").unwrap();
+        fs::write(target_de.join("old-de"), b"old-de").unwrap();
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let mut storage = open_slot_storage(
+            &root.path().join("ce/uclone-slices-v2/slots"),
+            &root.path().join("de/uclone-slices-v2/slots"),
+            &canonical_ce_root,
+            &canonical_de_root,
+        );
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let transfer = TransferId::new("transfer-base-capacity").unwrap();
+        let account = ArchiveAccountId::new("account-base-capacity").unwrap();
+        let staging = storage
+            .prepare_restore_staging(&package, &token, &transfer, std::slice::from_ref(&account))
+            .unwrap();
+        let staged_ce = Path::new(&staging[0].ce_path);
+        let staged_de = Path::new(&staging[0].de_path);
+        fs::write(staged_ce.join("new-ce"), b"new-ce").unwrap();
+        fs::write(staged_de.join("new-de"), b"new-de").unwrap();
+        let ce_required = copied_tree_bytes(&target_ce).unwrap();
+        let de_required = copied_tree_bytes(&target_de).unwrap();
+        assert_eq!(
+            fs::metadata(staged_ce).unwrap().dev(),
+            fs::metadata(staged_de).unwrap().dev()
+        );
+        let individually_sufficient = ce_required.max(de_required);
+        assert!(individually_sufficient < ce_required + de_required);
+        storage
+            .set_available_bytes(staged_ce, individually_sufficient)
+            .unwrap();
+
+        let result =
+            storage.replace_account(&package, &token, &transfer, &account, &SlotId::base());
+
+        assert!(
+            result
+                .as_ref()
+                .is_err_and(AdapterError::is_insufficient_storage)
+        );
+        assert_eq!(fs::read(target_ce.join("old-ce")).unwrap(), b"old-ce");
+        assert_eq!(fs::read(target_de.join("old-de")).unwrap(), b"old-de");
+        assert_eq!(fs::read(staged_ce.join("new-ce")).unwrap(), b"new-ce");
+        assert_eq!(fs::read(staged_de.join("new-de")).unwrap(), b"new-de");
+        let (rollback_ce, rollback_de) = storage
+            .rollback_paths(&package, &token, &SlotId::base())
+            .unwrap();
+        assert!(!rollback_ce.exists());
+        assert!(!rollback_de.exists());
+    }
+
+    #[test]
+    fn capacity_requirements_are_combined_only_for_the_same_filesystem() {
+        assert!(
+            ensure_filesystem_capacity([(11, 6, 10), (11, 6, 10)])
+                .is_err_and(|error| error.is_insufficient_storage())
+        );
+        assert!(ensure_filesystem_capacity([(11, 6, 10), (22, 6, 10)]).is_ok());
     }
 
     #[test]

@@ -35,7 +35,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.uclone.slices.v2.R
+import com.uclone.slices.v2.runtime.AccountIoKind
 import com.uclone.slices.v2.runtime.ArchiveScope
+import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.RestoreItemState
 import com.uclone.slices.v2.runtime.RestoreTarget
 import com.uclone.slices.v2.ui.BASE_SLOT_ID
@@ -75,6 +77,7 @@ internal fun BackupRestoreScreen(
             slotsState = slotsState,
             contentPadding = contentPadding,
             onBack = onBack,
+            onIntent = onIntent,
             onChooseBackup = { onIntent(BackupUiIntent.ChooseBackupPackage(it)) },
             onChooseRestore = { openDocument.launch(arrayOf("*/*")) },
         )
@@ -102,6 +105,7 @@ internal fun BackupRestoreScreen(
             state = state,
             contentPadding = contentPadding,
             onBack = onBack,
+            onIntent = onIntent,
             onDismiss = { onIntent(BackupUiIntent.DismissResult) },
         )
     }
@@ -135,15 +139,20 @@ private fun LandingContent(
     slotsState: SlotsUiState,
     contentPadding: PaddingValues,
     onBack: () -> Unit,
+    onIntent: (BackupUiIntent) -> Unit,
     onChooseBackup: (String) -> Unit,
     onChooseRestore: () -> Unit,
 ) {
+    val eligiblePackages = slotsState.packages.filter { it.bindingState == BindingState.Ready }
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(contentPadding),
         contentPadding = PaddingValues(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item { BackupHeader(stringResource(R.string.backup_restore_title), onBack) }
+        if (state.accountIoStatuses.isNotEmpty() || state.accountIoRecoveryError != null) {
+            item { AccountIoRecoveryContent(state, onIntent) }
+        }
         item {
             SlicesPanel(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
@@ -174,7 +183,7 @@ private fun LandingContent(
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
-        if (slotsState.packages.isEmpty()) {
+        if (eligiblePackages.isEmpty()) {
             item {
                 Text(
                     text = stringResource(R.string.no_backup_apps),
@@ -182,7 +191,7 @@ private fun LandingContent(
                 )
             }
         } else {
-            items(slotsState.packages, key = { it.packageName }) { snapshot ->
+            items(eligiblePackages, key = { it.packageName }) { snapshot ->
                 val label = slotsState.installedApps.firstOrNull {
                     it.packageName == snapshot.packageName
                 }?.label ?: snapshot.packageName
@@ -625,6 +634,7 @@ private fun ResultContent(
     state: BackupRestoreUiState,
     contentPadding: PaddingValues,
     onBack: () -> Unit,
+    onIntent: (BackupUiIntent) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val restoreResult = state.jobState as? BackupJobState.RestoreComplete
@@ -671,6 +681,9 @@ private fun ResultContent(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         item { BackupHeader(title, onBack) }
+        if (state.accountIoStatuses.isNotEmpty() || state.accountIoRecoveryError != null) {
+            item { AccountIoRecoveryContent(state, onIntent) }
+        }
         item {
             SlicesPanel(
                 modifier = Modifier.fillMaxWidth(),
@@ -750,6 +763,109 @@ private fun ResultContent(
         }
     }
 }
+
+@Composable
+private fun AccountIoRecoveryContent(
+    state: BackupRestoreUiState,
+    onIntent: (BackupUiIntent) -> Unit,
+) {
+    val pending = state.pendingAccountIoRecovery
+    SlicesPanel(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.errorContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.account_io_recovery_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Text(
+                text = stringResource(R.string.account_io_recovery_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            state.accountIoStatuses.forEach { status ->
+                Text(
+                    text = status.packageName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.account_io_recovery_status,
+                        accountIoKindLabel(status.kind),
+                        status.phase,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                if (pending?.ioToken == status.ioToken) {
+                    Text(
+                        text = stringResource(
+                            R.string.account_io_recovery_confirm_message,
+                            status.packageName,
+                            accountIoKindLabel(status.kind),
+                            status.phase,
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        SlicesActionButton(
+                            text = stringResource(R.string.cancel),
+                            onClick = { onIntent(BackupUiIntent.CancelAccountIoRecovery) },
+                            enabled = !state.recoveringAccountIo,
+                            primary = false,
+                            modifier = Modifier.weight(1f),
+                        )
+                        SlicesActionButton(
+                            text = stringResource(R.string.account_io_recovery_confirm),
+                            onClick = { onIntent(BackupUiIntent.ConfirmAccountIoRecovery) },
+                            enabled = !state.recoveringAccountIo,
+                            danger = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                } else {
+                    SlicesActionButton(
+                        text = stringResource(R.string.account_io_recovery_request),
+                        onClick = {
+                            onIntent(BackupUiIntent.RequestAccountIoRecovery(status.ioToken))
+                        },
+                        enabled = !state.recoveringAccountIo,
+                        danger = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            state.accountIoRecoveryError?.let { error ->
+                Text(
+                    text = stringResource(
+                        R.string.account_io_recovery_failed,
+                        backupErrorMessage(error),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun accountIoKindLabel(kind: AccountIoKind): String = stringResource(
+    when (kind) {
+        AccountIoKind.Backup -> R.string.account_io_kind_backup
+        AccountIoKind.Restore -> R.string.account_io_kind_restore
+    },
+)
 
 @Composable
 private fun PasswordField(

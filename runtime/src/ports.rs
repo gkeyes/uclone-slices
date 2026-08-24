@@ -10,6 +10,7 @@ use crate::model::{
 #[error("{message}")]
 pub(crate) struct AdapterError {
     state_conflict: bool,
+    insufficient_storage: bool,
     message: String,
 }
 
@@ -17,6 +18,7 @@ impl AdapterError {
     pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             state_conflict: false,
+            insufficient_storage: false,
             message: message.into(),
         }
     }
@@ -24,12 +26,25 @@ impl AdapterError {
     pub(crate) fn state_conflict(message: impl Into<String>) -> Self {
         Self {
             state_conflict: true,
+            insufficient_storage: false,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn insufficient_storage(message: impl Into<String>) -> Self {
+        Self {
+            state_conflict: false,
+            insufficient_storage: true,
             message: message.into(),
         }
     }
 
     pub(crate) fn is_state_conflict(&self) -> bool {
         self.state_conflict
+    }
+
+    pub(crate) fn is_insufficient_storage(&self) -> bool {
+        self.insufficient_storage
     }
 }
 
@@ -108,6 +123,17 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
         transfer_id: &TransferId,
         account: &ArchiveAccountId,
     ) -> Result<(), AdapterError>;
+
+    fn ensure_restore_capacity(
+        &self,
+        _package: &PackageName,
+        _token: &AccountIoToken,
+        _transfer_id: &TransferId,
+        _account: &ArchiveAccountId,
+        _target: &SlotId,
+    ) -> Result<(), AdapterError> {
+        Ok(())
+    }
 
     fn prepare_maintenance(
         &mut self,

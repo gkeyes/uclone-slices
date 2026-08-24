@@ -214,10 +214,10 @@ where
                 .block_launch(package)
                 .map_err(|error| logged_adapter("begin_backup_io", package, "block_launch", error))
             {
-                let _recovery = self.finish_backup_intent(&intent, true);
+                let _recovery = self.finish_backup_before_view_change(&intent, true);
                 return Err(error);
             }
-            if let Err(error) = self.stop_and_apply_view(package, &SlotId::base()) {
+            if let Err(error) = self.apply_view_verified(package, &SlotId::base()) {
                 let _recovery = self.finish_backup_intent(&intent, true);
                 return Err(error);
             }
@@ -278,7 +278,7 @@ where
         if intent.kind != AccountIoKind::Backup {
             return Err(RuntimeError::StateConflict);
         }
-        self.finish_backup_intent(&intent, true)
+        self.finish_backup_intent(&intent, false)
     }
 
     pub fn begin_restore_io(
@@ -430,6 +430,17 @@ where
                     error,
                 )
             })?;
+        self.slots
+            .ensure_restore_capacity(
+                &package,
+                token,
+                &transfer_id,
+                archive_account_id,
+                &mapping.target_slot,
+            )
+            .map_err(|error| {
+                logged_adapter("commit_restore_account", &package, "check_capacity", error)
+            })?;
 
         if !intent.maintenance_active {
             let enabled = self.android.read_enabled_state(&package).map_err(|error| {
@@ -504,6 +515,14 @@ where
             archive_account_id,
             &mapping.target_slot,
         ) {
+            if error.is_insufficient_storage() {
+                return Err(logged_adapter(
+                    "commit_restore_account",
+                    &package,
+                    "replace_pair",
+                    error,
+                ));
+            }
             log_adapter("commit_restore_account", &package, "replace_pair", &error);
             if let Err(rollback) =
                 self.slots
@@ -1013,6 +1032,14 @@ where
         self.android
             .force_stop(package)
             .map_err(|error| logged_adapter("account_io", package, "force_stop", error))?;
+        self.apply_view_verified(package, target)
+    }
+
+    fn apply_view_verified(
+        &mut self,
+        package: &PackageName,
+        target: &SlotId,
+    ) -> Result<(), RuntimeError> {
         self.android
             .apply_view(package, target)
             .map_err(|error| logged_adapter("account_io", package, "apply_view", error))?;
@@ -1067,6 +1094,47 @@ where
         self.packages
             .clear_account_io_intent(package)
             .map_err(|error| logged_conflict("finish_backup_io", package, "clear_intent", error))?;
+        launch_error.map_or(Ok(()), Err)
+    }
+
+    fn finish_backup_before_view_change(
+        &mut self,
+        intent: &AccountIoIntent,
+        relaunch: bool,
+    ) -> Result<(), RuntimeError> {
+        let package = &intent.package;
+        let mut launch_error = None;
+        if let Some(enabled) = intent.previous_enabled_state {
+            self.android
+                .restore_enabled_state(package, enabled)
+                .map_err(|error| {
+                    logged_conflict("begin_backup_io", package, "restore_enabled_state", error)
+                })?;
+        }
+        let enabled_allows_launch = !matches!(
+            intent.previous_enabled_state,
+            Some(
+                PackageEnabledState::Disabled
+                    | PackageEnabledState::DisabledUser
+                    | PackageEnabledState::DisabledUntilUsed
+            )
+        );
+        if relaunch
+            && intent.previous_was_running
+            && enabled_allows_launch
+            && let Err(error) = self
+                .android
+                .launch_verified(package, &intent.previous_active_slot)
+        {
+            log_adapter("begin_backup_io", package, "restore_launch", &error);
+            launch_error = Some(RuntimeError::OperationFailed);
+        }
+        self.slots
+            .cleanup_account_io(package, &intent.io_token)
+            .map_err(|error| logged_conflict("begin_backup_io", package, "cleanup", error))?;
+        self.packages
+            .clear_account_io_intent(package)
+            .map_err(|error| logged_conflict("begin_backup_io", package, "clear_intent", error))?;
         launch_error.map_or(Ok(()), Err)
     }
 
@@ -1914,7 +1982,9 @@ fn model_error(error: ModelError) -> RuntimeError {
 }
 
 fn adapter_error(error: AdapterError) -> RuntimeError {
-    if error.is_state_conflict() {
+    if error.is_insufficient_storage() {
+        RuntimeError::InsufficientStorage
+    } else if error.is_state_conflict() {
         RuntimeError::StateConflict
     } else {
         RuntimeError::OperationFailed
@@ -1956,6 +2026,129 @@ mod tests {
     };
 
     type TestRuntime = Runtime<MemoryPackageStore, MemorySlotStorage, MemoryAndroidOps>;
+
+    #[derive(Debug, Default)]
+    struct CapacityDeniedStorage(MemorySlotStorage);
+
+    impl SlotStorage for CapacityDeniedStorage {
+        fn materialize(
+            &mut self,
+            package: &PackageName,
+            slot: &crate::model::Slot,
+            seed: SeedMode,
+        ) -> Result<(), AdapterError> {
+            self.0.materialize(package, slot, seed)
+        }
+
+        fn discard(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError> {
+            self.0.discard(package, slot)
+        }
+
+        fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+            self.0.discard_package(package)
+        }
+
+        fn require_complete_pair(
+            &self,
+            package: &PackageName,
+            slot: &SlotId,
+        ) -> Result<(), AdapterError> {
+            self.0.require_complete_pair(package, slot)
+        }
+
+        fn account_paths(
+            &self,
+            package: &PackageName,
+            slot: &SlotId,
+        ) -> Result<(String, String), AdapterError> {
+            self.0.account_paths(package, slot)
+        }
+
+        fn prepare_restore_staging(
+            &mut self,
+            package: &PackageName,
+            token: &AccountIoToken,
+            transfer_id: &TransferId,
+            accounts: &[ArchiveAccountId],
+        ) -> Result<Vec<crate::model::RestoreStaging>, AdapterError> {
+            self.0
+                .prepare_restore_staging(package, token, transfer_id, accounts)
+        }
+
+        fn validate_staged_account(
+            &self,
+            package: &PackageName,
+            token: &AccountIoToken,
+            transfer_id: &TransferId,
+            account: &ArchiveAccountId,
+        ) -> Result<(), AdapterError> {
+            self.0
+                .validate_staged_account(package, token, transfer_id, account)
+        }
+
+        fn ensure_restore_capacity(
+            &self,
+            _package: &PackageName,
+            _token: &AccountIoToken,
+            _transfer_id: &TransferId,
+            _account: &ArchiveAccountId,
+            target: &SlotId,
+        ) -> Result<(), AdapterError> {
+            if target.is_base() {
+                Err(AdapterError::insufficient_storage(
+                    "injected insufficient Base rollback capacity",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+
+        fn prepare_maintenance(
+            &mut self,
+            package: &PackageName,
+            token: &AccountIoToken,
+        ) -> Result<(), AdapterError> {
+            self.0.prepare_maintenance(package, token)
+        }
+
+        fn replace_account(
+            &mut self,
+            package: &PackageName,
+            token: &AccountIoToken,
+            transfer_id: &TransferId,
+            account: &ArchiveAccountId,
+            target: &SlotId,
+        ) -> Result<(), AdapterError> {
+            self.0
+                .replace_account(package, token, transfer_id, account, target)
+        }
+
+        fn rollback_account(
+            &mut self,
+            package: &PackageName,
+            token: &AccountIoToken,
+            target: &SlotId,
+        ) -> Result<(), AdapterError> {
+            self.0.rollback_account(package, token, target)
+        }
+
+        fn finalize_account(
+            &mut self,
+            package: &PackageName,
+            token: &AccountIoToken,
+            target: &SlotId,
+        ) -> Result<(), AdapterError> {
+            self.0.finalize_account(package, token, target)
+        }
+
+        fn cleanup_account_io(
+            &mut self,
+            package: &PackageName,
+            token: &AccountIoToken,
+        ) -> Result<(), AdapterError> {
+            self.0.cleanup_account_io(package, token)
+        }
+    }
 
     fn package() -> PackageName {
         PackageName::new("com.example.app").unwrap()
@@ -3359,7 +3552,7 @@ mod tests {
     }
 
     #[test]
-    fn full_backup_uses_one_no_launch_base_window_then_restores_the_running_view() {
+    fn full_backup_restores_the_running_view_without_relaunching_the_app() {
         let package = package();
         let (mut runtime, active) = with_slot();
         runtime.activate_slot(&package, &active).unwrap();
@@ -3382,7 +3575,87 @@ mod tests {
             android.enabled_state(&package),
             Some(PackageEnabledState::Default),
         );
-        assert!(android.is_running(&package));
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn active_base_backup_restores_base_without_relaunching_the_app() {
+        let package = package();
+        let (mut runtime, _inactive) = with_slot();
+
+        let lease = runtime
+            .begin_backup_io(
+                &package,
+                AccountIoScope::Account {
+                    slot: SlotId::base(),
+                },
+            )
+            .unwrap();
+        assert!(!runtime.android.is_running(&package));
+
+        runtime.finish_backup_io(&lease.io_token).unwrap();
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert_eq!(android.view(&package), Some(&ObservedView::Base));
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn active_non_base_backup_restores_the_slot_without_relaunching_the_app() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+
+        let lease = runtime
+            .begin_backup_io(
+                &package,
+                AccountIoScope::Account {
+                    slot: active.clone(),
+                },
+            )
+            .unwrap();
+        assert!(!runtime.android.is_running(&package));
+
+        runtime.finish_backup_io(&lease.io_token).unwrap();
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert_eq!(android.view(&package), Some(&ObservedView::Slot(active)));
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn active_backup_does_not_force_stop_twice_after_launch_is_blocked() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+        let starting_calls = runtime.android.calls().len();
+
+        let lease = runtime
+            .begin_backup_io(
+                &package,
+                AccountIoScope::Account {
+                    slot: active.clone(),
+                },
+            )
+            .unwrap();
+
+        let calls = &runtime.android.calls()[starting_calls..];
+        let launch_blocked = calls
+            .iter()
+            .position(|call| matches!(call, AndroidCall::BlockLaunch(value) if value == &package))
+            .unwrap();
+        assert!(
+            calls[launch_blocked + 1..]
+                .iter()
+                .all(|call| !matches!(call, AndroidCall::ForceStop(_)))
+        );
+        runtime.abort_account_io(&lease.io_token).unwrap();
     }
 
     #[test]
@@ -3426,6 +3699,90 @@ mod tests {
             Some(PackageEnabledState::Default),
         );
         assert!(android.is_running(&package));
+    }
+
+    #[test]
+    fn launch_block_failure_does_not_need_a_second_force_stop_to_release_the_lease() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+        runtime.android.fail_next(AndroidFailure::BlockLaunch);
+        runtime.android.fail_next(AndroidFailure::ForceStop);
+
+        assert_eq!(
+            runtime.begin_backup_io(&package, AccountIoScope::AllAccounts),
+            Err(RuntimeError::OperationFailed),
+        );
+
+        let (packages, _slots, android) = runtime.into_parts();
+        assert!(packages.load_account_io_intent(&package).unwrap().is_none());
+        assert_eq!(android.view(&package), Some(&ObservedView::Slot(active)));
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+        assert!(android.is_running(&package));
+    }
+
+    #[test]
+    fn launch_block_failure_clears_the_lease_even_if_relaunch_fails() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+        runtime.android.fail_next(AndroidFailure::BlockLaunch);
+        runtime.android.fail_next(AndroidFailure::Launch);
+
+        assert_eq!(
+            runtime.begin_backup_io(&package, AccountIoScope::AllAccounts),
+            Err(RuntimeError::OperationFailed),
+        );
+
+        let (packages, _slots, android) = runtime.into_parts();
+        assert!(packages.load_account_io_intent(&package).unwrap().is_none());
+        assert_eq!(android.view(&package), Some(&ObservedView::Slot(active)));
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn launch_block_failure_keeps_a_recoverable_intent_when_enabled_state_cannot_be_restored() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+        runtime.android.fail_next(AndroidFailure::BlockLaunch);
+        runtime.android.fail_next(AndroidFailure::RestoreEnabled);
+
+        assert_eq!(
+            runtime.begin_backup_io(&package, AccountIoScope::AllAccounts),
+            Err(RuntimeError::OperationFailed),
+        );
+
+        let (packages, slots, android) = runtime.into_parts();
+        assert!(packages.load_account_io_intent(&package).unwrap().is_some());
+        assert_eq!(
+            android.view(&package),
+            Some(&ObservedView::Slot(active.clone()))
+        );
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::DisabledUser),
+        );
+        assert!(!android.is_running(&package));
+
+        let mut runtime = Runtime::new(packages, slots, android);
+        runtime.reconcile_boot().unwrap();
+
+        let (packages, _slots, android) = runtime.into_parts();
+        assert!(packages.load_account_io_intent(&package).unwrap().is_none());
+        assert_eq!(android.view(&package), Some(&ObservedView::Slot(active)));
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+        assert!(!android.is_running(&package));
     }
 
     #[test]
@@ -3495,6 +3852,69 @@ mod tests {
             .unwrap();
         assert!(base_view > 0);
         assert!(maintenance > base_view);
+    }
+
+    #[test]
+    fn insufficient_base_rollback_capacity_preserves_ready_intent_and_staging() {
+        let package = package();
+        let mut android = MemoryAndroidOps::default();
+        android.install(package.clone());
+        let mut runtime = Runtime::new(
+            MemoryPackageStore::default(),
+            CapacityDeniedStorage::default(),
+            android,
+        );
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let archive_id = ArchiveAccountId::new("account-capacity").unwrap();
+        let transfer_id = TransferId::new("transfer-capacity").unwrap();
+        let lease = runtime
+            .begin_restore_io(
+                &package,
+                transfer_id.clone(),
+                vec![RestoreMapping {
+                    archive_account_id: archive_id.clone(),
+                    archive_kind: ArchivedAccountKind::Base,
+                    name: DisplayName::new("Base").unwrap(),
+                    target: RestoreTarget::Existing {
+                        slot: SlotId::base(),
+                    },
+                }],
+                ArchivedState {
+                    scope: ArchiveScope::Account,
+                    active_account_id: Some(archive_id.clone()),
+                    launch_after_reboot: false,
+                },
+            )
+            .unwrap();
+        let intent_before = runtime
+            .packages
+            .load_account_io_intent(&package)
+            .unwrap()
+            .unwrap();
+        let calls_before = runtime.android.calls().to_vec();
+
+        assert_eq!(
+            runtime.commit_restore_account(&lease.io_token, &archive_id),
+            Err(RuntimeError::InsufficientStorage),
+        );
+
+        assert_eq!(
+            runtime
+                .packages
+                .load_account_io_intent(&package)
+                .unwrap()
+                .unwrap(),
+            intent_before,
+        );
+        assert_eq!(runtime.android.calls(), calls_before);
+        runtime
+            .slots
+            .validate_staged_account(&package, &lease.io_token, &transfer_id, &archive_id)
+            .unwrap();
+        assert_eq!(
+            runtime.commit_restore_account(&lease.io_token, &archive_id),
+            Err(RuntimeError::InsufficientStorage),
+        );
     }
 
     #[test]

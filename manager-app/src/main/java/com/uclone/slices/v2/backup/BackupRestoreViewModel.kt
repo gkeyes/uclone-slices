@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
+import com.uclone.slices.v2.runtime.AccountIoStatus
 import com.uclone.slices.v2.runtime.AccountIoScope
 import com.uclone.slices.v2.runtime.ArchiveScope
 import com.uclone.slices.v2.runtime.ArchivedAccountKind
@@ -22,6 +23,7 @@ import com.uclone.slices.v2.runtime.SigningIdentity
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,6 +66,10 @@ internal data class BackupRestoreUiState(
     val destructiveConfirmation: String = "",
     val jobState: BackupJobState = BackupJobState.Idle,
     val errorCode: String? = null,
+    val accountIoStatuses: List<AccountIoStatus> = emptyList(),
+    val pendingAccountIoRecovery: AccountIoStatus? = null,
+    val accountIoRecoveryError: String? = null,
+    val recoveringAccountIo: Boolean = false,
 ) {
     val running: Boolean
         get() = jobState is BackupJobState.Running
@@ -87,6 +93,10 @@ internal sealed interface BackupUiIntent {
     ) : BackupUiIntent
     data class DestructiveConfirmationChanged(val value: String) : BackupUiIntent
     data object StartRestore : BackupUiIntent
+    data object RefreshAccountIoStatus : BackupUiIntent
+    data class RequestAccountIoRecovery(val ioToken: String) : BackupUiIntent
+    data object ConfirmAccountIoRecovery : BackupUiIntent
+    data object CancelAccountIoRecovery : BackupUiIntent
     data object DismissResult : BackupUiIntent
     data object Leave : BackupUiIntent
 }
@@ -96,12 +106,15 @@ internal class BackupRestoreViewModel(
     private val runtime: RuntimeClient,
     private val installedApps: InstalledAppsSource,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val injectedScope: CoroutineScope? = null,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(BackupRestoreUiState())
     val state: StateFlow<BackupRestoreUiState> = mutableState.asStateFlow()
+    private val coroutineScope: CoroutineScope
+        get() = injectedScope ?: viewModelScope
 
     init {
-        viewModelScope.launch {
+        coroutineScope.launch {
             BackupRestoreJobRegistry.state.collectLatest(::applyJobState)
         }
     }
@@ -136,12 +149,19 @@ internal class BackupRestoreViewModel(
                 it.copy(destructiveConfirmation = intent.value, errorCode = null)
             }
             BackupUiIntent.StartRestore -> startRestore()
+            BackupUiIntent.RefreshAccountIoStatus -> refreshAccountIoStatus()
+            is BackupUiIntent.RequestAccountIoRecovery -> requestAccountIoRecovery(intent.ioToken)
+            BackupUiIntent.ConfirmAccountIoRecovery -> confirmAccountIoRecovery()
+            BackupUiIntent.CancelAccountIoRecovery -> mutableState.update {
+                it.copy(pendingAccountIoRecovery = null)
+            }
             BackupUiIntent.DismissResult -> {
                 discardCurrentSession()
                 BackupRestoreJobRegistry.reset()
                 mutableState.update {
                     BackupRestoreUiState(page = BackupRestorePage.Landing)
                 }
+                refreshAccountIoStatus()
             }
             BackupUiIntent.Leave -> leave()
         }
@@ -155,14 +175,21 @@ internal class BackupRestoreViewModel(
     }
 
     private fun openLanding() {
-        if (state.value.running) return
+        currentLocalJob()?.let { running ->
+            mutableState.update { it.copy(jobState = running) }
+            return
+        }
         discardCurrentSession()
         BackupRestoreJobRegistry.reset()
         mutableState.value = BackupRestoreUiState(page = BackupRestorePage.Landing)
+        refreshAccountIoStatus()
     }
 
     private fun openBackup(packageName: String, slotId: String?) {
-        if (state.value.running) return
+        currentLocalJob()?.let { running ->
+            mutableState.update { it.copy(jobState = running) }
+            return
+        }
         discardCurrentSession()
         BackupRestoreJobRegistry.reset()
         mutableState.value = BackupRestoreUiState(
@@ -170,6 +197,7 @@ internal class BackupRestoreViewModel(
             packageName = packageName,
             slotId = slotId,
         )
+        refreshAccountIoStatus()
     }
 
     private fun startBackup(destination: Uri) {
@@ -185,13 +213,17 @@ internal class BackupRestoreViewModel(
             null
         }
         takePersistableWritePermission(context, destination)
-        viewModelScope.launch(dispatcher) {
+        coroutineScope.launch(dispatcher) {
             val snapshot = when (val reply = runtime.execute(RuntimeCommand.GetPackage(packageName))) {
                 is RuntimeReply.Package -> reply.packageSnapshot
                 else -> {
                     password?.fill('\u0000')
                     return@launch fail(runtimeCode(reply))
                 }
+            }
+            if (!backupBindingAllows(snapshot.bindingState)) {
+                password?.fill('\u0000')
+                return@launch fail("identity_mismatch")
             }
             val app = installedApps.load().firstOrNull { it.packageName == packageName }
                 ?: run {
@@ -290,12 +322,17 @@ internal class BackupRestoreViewModel(
             is BackupJobState.BackupComplete,
             is BackupJobState.RestoreComplete,
             is BackupJobState.Failure,
-            -> mutableState.update {
-                it.copy(
-                    page = BackupRestorePage.Result,
-                    jobState = jobState,
-                    errorCode = (jobState as? BackupJobState.Failure)?.code,
-                )
+            -> {
+                mutableState.update {
+                    it.copy(
+                        page = BackupRestorePage.Result,
+                        jobState = jobState,
+                        errorCode = (jobState as? BackupJobState.Failure)?.code,
+                    )
+                }
+                if (jobState is BackupJobState.Failure && jobState.code == "io_busy") {
+                    refreshAccountIoStatus()
+                }
             }
             is BackupJobState.Running -> mutableState.update {
                 it.copy(jobState = jobState, errorCode = null)
@@ -471,6 +508,85 @@ internal class BackupRestoreViewModel(
         else -> "operation_failed"
     }
 
+    private fun refreshAccountIoStatus() {
+        if (accountIoRecoveryBlocked()) return
+        coroutineScope.launch(dispatcher) {
+            when (val reply = runtime.execute(RuntimeCommand.ListAccountIoStatus)) {
+                is RuntimeReply.AccountIoStatuses -> mutableState.update { current ->
+                    if (accountIoRecoveryBlocked()) {
+                        current
+                    } else {
+                        current.copy(
+                            accountIoStatuses = reply.statuses,
+                            pendingAccountIoRecovery = current.pendingAccountIoRecovery
+                                ?.takeIf { pending -> reply.statuses.any { it.ioToken == pending.ioToken } },
+                            accountIoRecoveryError = null,
+                            recoveringAccountIo = false,
+                        )
+                    }
+                }
+                else -> mutableState.update { current ->
+                    if (accountIoRecoveryBlocked()) current else current.copy(
+                        accountIoRecoveryError = runtimeCode(reply),
+                        recoveringAccountIo = false,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun requestAccountIoRecovery(ioToken: String) {
+        val current = state.value
+        if (accountIoRecoveryBlocked() || current.recoveringAccountIo) return
+        val status = current.accountIoStatuses.firstOrNull { it.ioToken == ioToken } ?: return
+        mutableState.update {
+            it.copy(
+                pendingAccountIoRecovery = status,
+                accountIoRecoveryError = null,
+            )
+        }
+    }
+
+    private fun confirmAccountIoRecovery() {
+        val current = state.value
+        val pending = current.pendingAccountIoRecovery ?: return
+        if (accountIoRecoveryBlocked() || current.recoveringAccountIo) return
+        if (current.accountIoStatuses.none { it.ioToken == pending.ioToken }) {
+            mutableState.update { it.copy(pendingAccountIoRecovery = null) }
+            return
+        }
+        mutableState.update {
+            it.copy(recoveringAccountIo = true, accountIoRecoveryError = null)
+        }
+        coroutineScope.launch(dispatcher) {
+            when (val reply = runtime.execute(RuntimeCommand.AbortAccountIo(pending.ioToken))) {
+                RuntimeReply.Ack -> {
+                    mutableState.update {
+                        it.copy(
+                            pendingAccountIoRecovery = null,
+                            accountIoRecoveryError = null,
+                            recoveringAccountIo = false,
+                        )
+                    }
+                    refreshAccountIoStatus()
+                }
+                else -> mutableState.update {
+                    it.copy(
+                        pendingAccountIoRecovery = null,
+                        accountIoRecoveryError = runtimeCode(reply),
+                        recoveringAccountIo = false,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun accountIoRecoveryBlocked(): Boolean =
+        state.value.running || currentLocalJob() != null
+
+    private fun currentLocalJob(): BackupJobState.Running? =
+        BackupRestoreJobRegistry.state.value as? BackupJobState.Running
+
     private fun fail(code: String) {
         mutableState.update { it.copy(errorCode = code) }
     }
@@ -493,6 +609,9 @@ internal class BackupRestoreViewModel(
     }
 }
 
+internal fun backupBindingAllows(bindingState: BindingState): Boolean =
+    bindingState == BindingState.Ready
+
 internal fun archiveSigningMatches(
     archiveKind: SigningKind,
     archive: List<String>,
@@ -501,6 +620,12 @@ internal fun archiveSigningMatches(
     if (installed == null || archiveKind != installed.kind) return false
     return when (archiveKind) {
         SigningKind.Multiple -> archive == installed.sha256
-        SigningKind.Lineage -> archive.any(installed.sha256::contains)
+        SigningKind.Lineage -> lineageExtends(archive, installed.sha256) ||
+            lineageExtends(installed.sha256, archive)
     }
 }
+
+private fun lineageExtends(longer: List<String>, shorter: List<String>): Boolean =
+    longer.size >= shorter.size && (
+        longer.take(shorter.size) == shorter || longer.takeLast(shorter.size) == shorter
+    )

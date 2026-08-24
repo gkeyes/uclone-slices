@@ -5,7 +5,7 @@
 
 UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空间管理器。它让同一个 App 在系统原始数据与多个独立 CE/DE 数据空间之间切换，并由 Runtime 完成停止、挂载、验证和启动。
 
-当前开发版本为 **v0.2.0 候选版**，功能基线仍包含 0.1.9 的全部安全修复，不包含桌面 Hook。0.2.0 新增账号级备份与恢复；`PackageAggregate` 和既有 CE/DE 账号目录格式保持不变。
+当前开发版本为 **v0.2.1 候选版**，功能基线仍包含 0.1.9 的全部安全修复，不包含桌面 Hook。0.2.0 引入账号级备份与恢复；0.2.1 修复活动账号备份、后台多进程 App 停止、残留账号操作恢复、签名谱系判断和 Base 恢复容量门禁。`PackageAggregate`、`.ucsbackup` v1 和既有 CE/DE 账号目录格式均保持不变。
 
 ## 功能
 
@@ -18,7 +18,7 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 - 0.1.6 旧配置缺少签名 sidecar 且 APK 已变化时，显示账号清单并要求一次“绑定”确认，不删除空间。
 - Runtime 事务中断后，根据持久化上下文继续收敛。
 - daemon 在 user0 解锁后、开放 socket 前主动恢复非 Base 当前空间；每个 App 可独立选择恢复后是否自动启动，默认关闭，同一 boot 只执行一次。
-- 0.2.0 Manager 与 Runtime 必须成对使用；版本不匹配时只允许 `probe`，不查询或修改账号状态。
+- 0.2.1 Manager 与 Runtime 必须成对使用；版本不匹配时只允许 `probe`，不查询或修改账号状态。
 - 首页账号展开状态保存在 Manager 本地，重启 Manager 后保持不变。
 - Manager 使用 MIUIX 组件、深浅色主题和原生过渡反馈，不改变 Runtime 操作语义。
 - 可将 Base、单个分账号或同一 App 的全部账号导出为 `.ucsbackup` 文件；默认使用密码加密。
@@ -42,8 +42,8 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 
 候选产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
 
-1. `uclone-slices-v2-manager-0.2.0-<sha>.apk`
-2. `uclone-slices-v2-kernelsu-0.2.0-<sha>.zip`
+1. `uclone-slices-v2-manager-0.2.1-<sha>.apk`
+2. `uclone-slices-v2-kernelsu-0.2.1-<sha>.zip`
 3. `SHA256SUMS.txt`
 
 安装步骤：
@@ -51,7 +51,7 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.2.0`。
+4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.2.1`。
 
 Fixture 只参与 CI 编译兼容检查，不属于正式交付物，也不用于本轮真机验收。
 

@@ -193,9 +193,11 @@ internal class BackupRestoreEngine(
             job.password?.fill('\u0000')
             withContext(NonCancellable) {
                 if (!documentComplete) truncateOrDeleteDocument(destination)
-                val finish = runtime.execute(RuntimeCommand.FinishBackupIo(lease.ioToken))
-                if (finish != RuntimeReply.Ack) {
-                    result = BackupJobState.Failure(runtimeCode(finish))
+                val finalization = runtime.execute(
+                    backupFinalizationCommand(lease.ioToken, documentComplete),
+                )
+                if (finalization != RuntimeReply.Ack) {
+                    result = BackupJobState.Failure(runtimeCode(finalization))
                 }
             }
         }
@@ -474,4 +476,13 @@ internal class BackupRestoreEngine(
     private companion object {
         const val RESTORE_MARGIN = 64L * 1024 * 1024
     }
+}
+
+internal fun backupFinalizationCommand(
+    ioToken: String,
+    documentComplete: Boolean,
+): RuntimeCommand = if (documentComplete) {
+    RuntimeCommand.FinishBackupIo(ioToken)
+} else {
+    RuntimeCommand.AbortAccountIo(ioToken)
 }

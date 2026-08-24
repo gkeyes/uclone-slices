@@ -41,18 +41,18 @@
 | UClone 根、`slots`、包父目录 `root:root 0700` 与 socket `0600` | 小红书 UID 能到达旧 `0777` 源路径的真机证据；0.1.9 只迁移父目录元数据，不递归触碰 slot 内容 | symlink/non-dir、迁移保留内容、owner/mode、KernelSU 静态与真机 UID 拒绝测试 |
 | Android `cp -a`、源目录 owner/mode、源 SELinux context | 固定旧版 Android materializer 的实际复制与目录属性操作；不增加条目数、容量或时间经验阈值 | host 目录语义测试、Android 交叉编译 |
 | `/proc/self/mountinfo` 与 `/proc/<pid>/mountinfo` | Runtime 通过 `nsenter -t 1 -m` 进入 init mount namespace；前者确认施加结果，后者确认每个 App PID 的真实视图 | paired-mount 与 App PID 视图测试 |
-| `force-stop` 后最多 1 秒、每 10 ms 确认 UID 进程归零 | Android 17 真机证明 `am force-stop` 返回与 `/proc` 移除之间存在短暂异步窗口；单次立即快照会误拒绝正常切换。持续存在到确认窗结束仍失败，归零前绝不改变挂载 | 瞬时退出/持续残留 Rust 测试与小红书多进程 `Base → slot-1 → Base` 真机验收 |
+| `force-stop` 后最多 10 秒、每 10 ms 扫描且连续两次确认 UID 进程归零 | Android 17 真机中的 Chrome App Zygote 在 `am force-stop` 返回后约 5 秒才退出，微信切换也记录到旧 1 秒窗口结束时仍有 2 个同 UID 进程；单次立即快照或 1 秒窗口会误拒绝正常操作，单个空扫描也可能只是主进程与 push 进程的交接空窗。持续存在到确认窗结束仍失败，稳定归零前绝不改变挂载 | 瞬时退出/单次空扫描后重现/主进程与 push 进程交接/持续残留 Rust 测试与多进程 App 真机验收 |
 | `am start -W -n <resolved activity>` | 当前 API 36 设备的 Launcher activity 可由 `cmd package resolve-activity` 解析；`-W` 返回启动完成状态 | Android argv 与 App PID 视图测试 |
 | `sys.user.0.ce_available=true` 与 `cmd activity get-started-user-state 0` 的 `RUNNING_UNLOCKED` | 当前 API 37 设备提供的 CE 与 user0 生命周期信号；daemon 在两者满足前不开放 socket | daemon 启动代码、Boot marker 测试与真机无 RPC 重启验收 |
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.2.0`、versionCode `11` | 在 0.1.9 安全基线上增加账号备份/恢复；不恢复桌面 Hook，不修改 Aggregate schema | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
+| 版本 `0.2.1`、versionCode `12` | 在 0.2.0 账号备份/恢复基线上做安全修复；不恢复桌面 Hook，不修改 Aggregate 或 `.ucsbackup` v1 格式 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
 | `.ucsbackup` magic `UCSBKP01`、format v1、manifest/control 4 MiB、256 账号、4096 字节路径、1,000,000 条目、1 TiB 逻辑数据 | 0.2.0 首个归档格式的固定兼容与资源安全边界；4 MiB manifest 是更紧的实际条目边界，其余限制用于在解析或恶意输入阶段提前拒绝 | Rust 归档往返、超限和恶意路径测试 |
 | zstd level 3 | zstd crate 的默认压缩级别，作为首版格式实现选择；不作为数据正确性或时限门槛 | 明文/加密归档往返测试 |
 | 默认开启 age passphrase 加密 | 账号归档可能包含凭据；默认保护、允许用户明确选择未加密。密码仅走内存和 helper stdin | Helper 协议测试、Manager UI/lint |
 | 顶层排除 `cache`、`code_cache` | 产品范围是账号状态而非可再生成缓存；APK、OBB、媒体和外部存储本来不位于被授予的 CE/DE 根 | 归档排除测试与恢复往返测试 |
-| 恢复空间预检为 manifest 逻辑大小加 64 MiB | manifest 逻辑大小覆盖暂存数据；64 MiB 是控制文件、目录和压缩/解压运行余量。Base 旧数据副本仍由 Runtime 在删除前完整写入并在 ENOSPC 时安全失败 | Manager service 测试边界、Runtime Base 回滚测试、真机大数据验收 |
+| Manager 恢复暂存预检为 manifest 逻辑大小加 64 MiB；Runtime 另按目标树实际占用预检 Base 回滚副本 | manifest 逻辑大小覆盖暂存数据；64 MiB 是控制文件、目录和压缩/解压运行余量。Base 覆盖还会复制旧 CE/DE，Runtime 按文件系统分别汇总其 `st_blocks`、长度和块大小估算，在停止 App 或修改目标前用 `statvfs` 检查；不足统一返回 `insufficient_storage` | Manager service 测试边界、Runtime 同/异文件系统容量与零改动测试、真机大数据验收 |
 | Helper 路径 `/data/adb/uclone-slices-v2/manager-helper/<version>/uclone_archive`、`root:root 0700` | Manager APK 内嵌同构建 helper，运行前校验 SHA-256；固定版本目录避免混用旧 helper | Release assemble、APK 内容和 helper checksum 门禁 |
 | Helper 在 `/system/bin/nsenter -t 1 -m` 中执行 | Base/当前槽的稳定源视图由 Runtime 在 init mount namespace 建立；Manager 自身的挂载空间不能作为账号源真相 | 固定命令检查、真机 Base/活动槽备份验收 |
 | Base alias 成对挂载检测与 `restore-started` 回滚标记 | 正常事务通过 alias 修改未暴露的真实 Base；重启后 bind mount 消失，必须改用未挂载的真实 Base。旧副本逐项移回时用持久标记保证再次掉电可继续且不删除已恢复部分 | mountinfo 精确路径测试、Base/槽部分回滚重试测试、真机中断恢复 |

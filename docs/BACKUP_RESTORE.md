@@ -1,4 +1,4 @@
-# v0.2.0 账号备份与恢复
+# v0.2.1 账号备份与恢复
 
 ## 产品范围
 
@@ -45,21 +45,21 @@ Manifest 记录格式版本、包名、签名类型、证书 SHA-256、来源版
 
 ## Runtime 事务
 
-Manager 负责 SAF 导入导出、归档、压缩、加密、预览和结果展示。Runtime/KernelSU 必须同步升级到 0.2.0，因为只有 Runtime 能在同一事务锁和 init mount namespace 内安全控制 App、Base 和 CE/DE 槽对。
+Manager 负责 SAF 导入导出、归档、压缩、加密、预览和结果展示。Runtime/KernelSU 必须同步升级到 0.2.1，因为只有 Runtime 能在同一事务锁和 init mount namespace 内安全控制 App、Base 和 CE/DE 槽对。
 
 ### 备份
 
 - 非活动分账号：Runtime 只授予只读源路径 lease，不停止当前 App。
-- Base、当前账号或全部账号：Runtime 先持久化 intent，保存 App 原启用状态，阻止 App 再次启动，停止 App，并在一个窗口内暴露一致的 Base/槽源路径。
+- Base、当前账号或全部账号：Runtime 先持久化 intent，保存 App 原启用状态，阻止 App 再次启动，停止 App，并在一个窗口内暴露一致的 Base/槽源路径。主进程、push 进程和 App Zygote 等同 UID 进程全部归零前，不会改变 CE/DE 视图。
 - 辅助程序固定在 init mount namespace 中运行，避免从 Manager 进程的旧挂载视图读取错误账号。
-- 完成或失败后 Runtime 恢复原活动账号和原启用状态；仅当 App 原先正在运行时重新启动。
+- 备份成功后 Runtime 恢复原活动账号和原启用状态，但保持 App 停止，由用户自行打开；备份准备失败或用户中止时仍恢复操作前的运行状态。
 
 ### 恢复
 
 - Runtime 先验证目标映射并创建 CE/DE 成对暂存目录，随后返回 lease。
 - 辅助程序只将已验证内容解包到暂存目录，不直接替换 Base 或正式槽。
 - 第一次提交前 Runtime 保存 App 启用状态，先禁止再次启动并确认进程停止，再切换 Base 和私有空维护视图。
-- 每个账号先记录 replacing intent，再执行 CE/DE 成对替换。Base 在删除旧内容前完成旧数据副本和同步；回滚使用持久化开始标记，可在逐项恢复旧内容时再次中断并安全续做。
+- 每个账号先记录 replacing intent，再执行 CE/DE 成对替换。Base 在进入维护或改动目标前，按真实文件系统可用空间预检完整旧数据回滚副本；容量不足时保持目标、暂存和 intent 不变。通过后才在删除旧内容前完成旧数据副本和同步；回滚使用持久化开始标记，可在逐项恢复旧内容时再次中断并安全续做。
 - 成功账号立即提交并保留；失败账号记录失败后可继续处理其他账号。
 - 完整恢复优先恢复归档中的活动账号和重启启动设置；单账号恢复将该账号作为恢复后的当前账号。若目标活动账号未成功，则保持恢复前的活动账号和重启设置。
 - 最终启动失败不回滚已经恢复的数据；结果明确记录 `app_started=false`，App 保持停止。
@@ -68,7 +68,9 @@ Manager 负责 SAF 导入导出、归档、压缩、加密、预览和结果展�
 
 事务 intent 位于 Runtime 控制目录，普通账号 Aggregate schema 不变。Runtime 在开机普通收敛之前优先恢复未完成的账号 I/O：未提交的当前账号回滚，已提交账号保留，App 恢复到安全视图但不自动启动，然后清理暂存、维护挂载和回滚目录。重启后临时 Base alias 已消失时，Runtime 只会在真实 Base 路径不存在残留槽/维护挂载的条件下直接收敛；CE/DE alias 状态不成对时 fail-closed。
 
-0.2.0 Manager 与 Runtime 必须精确配对；旧 Manager 的无 build ID 请求由新 Runtime 无副作用拒绝。降回 0.1.9 不需要转换 Aggregate 或 CE/DE 账号目录，但 0.1.9 无法处理正在进行的 0.2.0 account-I/O intent，因此只能在没有活动备份/恢复事务时回退。
+若 Manager 进程被系统终止但设备未重启，备份页会只读显示 Runtime 中残留操作的 App、类型和阶段；只有用户二次确认当前精确 token 后才执行 `abort_account_io`。Manager 不会自动中止来自其他客户端或仍在运行的本地任务。
+
+0.2.1 Manager 与 Runtime 必须精确配对；0.2.0 Manager/Runtime 的 build ID 与 0.2.1 不匹配时，只允许无副作用 `probe`。0.2.1 继续读写 0.2.0 的 `.ucsbackup` v1，且未改变 Aggregate 或 CE/DE 账号目录。降回 0.1.9 不需要转换账号数据，但 0.1.9 无法处理正在进行的 account-I/O intent，因此只能在没有活动备份/恢复事务时回退。
 
 ## 验证边界
 
