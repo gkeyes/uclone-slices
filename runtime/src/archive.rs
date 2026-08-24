@@ -573,9 +573,7 @@ fn collect_entries(
             });
             collect_entries(root, &path, depth.saturating_add(1), entries)?;
         } else if metadata.file_type().is_file() {
-            if metadata.nlink() != 1
-                || (metadata.len() != 0 && metadata.blocks().saturating_mul(512) < metadata.len())
-            {
+            if metadata.nlink() != 1 {
                 return Err(ArchiveError::Invalid);
             }
             entries.push(ManifestEntry {
@@ -1387,6 +1385,49 @@ mod tests {
             );
             assert!(!ce.join("cache").exists());
         }
+    }
+
+    #[test]
+    fn sparse_regular_file_round_trips_by_logical_content() {
+        let root = tempfile::tempdir().unwrap();
+        let request = request(root.path(), true);
+        let sparse = request.sources[0].ce_path.join("Web Data");
+        let mut file = File::create(&sparse).unwrap();
+        file.write_all(b"SQLite format 3\0").unwrap();
+        file.set_len(16 * 1024 * 1024).unwrap();
+        file.sync_all().unwrap();
+        let source_bytes = fs::read(&sparse).unwrap();
+        let source_metadata = fs::metadata(&sparse).unwrap();
+        assert!(source_metadata.blocks().saturating_mul(512) < source_metadata.len());
+
+        let password = request.password.clone();
+        let output = request.output_path.clone();
+        let manifest = create_backup(request).unwrap();
+        assert_eq!(inspect_backup(&output, password.clone()).unwrap(), manifest);
+        let archived = manifest.accounts[0]
+            .ce
+            .entries
+            .iter()
+            .find(|entry| entry.path == "Web Data")
+            .unwrap();
+        assert_eq!(archived.kind, ManifestEntryKind::File);
+        assert_eq!(archived.size, source_metadata.len());
+
+        let ce = root.path().join("restore-sparse/ce");
+        let de = root.path().join("restore-sparse/de");
+        fs::create_dir_all(&ce).unwrap();
+        fs::create_dir_all(&de).unwrap();
+        restore_backup(RestoreRequest {
+            input_path: output,
+            password,
+            destinations: vec![RestoreDestination {
+                archive_account_id: "account-0".to_owned(),
+                ce_path: ce.clone(),
+                de_path: de,
+            }],
+        })
+        .unwrap();
+        assert_eq!(fs::read(ce.join("Web Data")).unwrap(), source_bytes);
     }
 
     #[test]
