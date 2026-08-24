@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _, symlink};
+use std::os::unix::fs::{
+    MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _, fchown, symlink,
+};
 use std::path::{Component, Path, PathBuf};
 
 use age::secrecy::SecretString;
@@ -232,7 +234,22 @@ pub fn write_response(
     writer.write_all(b"\n").map_err(io_error)
 }
 
-pub fn create_backup(mut request: BackupRequest) -> Result<ArchiveManifest, ArchiveError> {
+pub fn create_backup(request: BackupRequest) -> Result<ArchiveManifest, ArchiveError> {
+    create_backup_with_owner(request, None)
+}
+
+pub fn create_backup_for_owner(
+    request: BackupRequest,
+    uid: u32,
+    gid: u32,
+) -> Result<ArchiveManifest, ArchiveError> {
+    create_backup_with_owner(request, Some((uid, gid)))
+}
+
+fn create_backup_with_owner(
+    mut request: BackupRequest,
+    output_owner: Option<(u32, u32)>,
+) -> Result<ArchiveManifest, ArchiveError> {
     validate_backup_request(&request)?;
     let manifest = build_manifest(&request)?;
     let password = request.password.take().map(SecretString::from);
@@ -253,21 +270,24 @@ pub fn create_backup(mut request: BackupRequest) -> Result<ArchiveManifest, Arch
                 0
             }])
             .map_err(io_error)?;
-        match password {
+        let mut output = match password {
             Some(password) => {
                 let encryptor = age::Encryptor::with_user_passphrase(password);
                 let age_writer = encryptor.wrap_output(output).map_err(io_error)?;
                 let age_writer = write_compressed_tar(age_writer, &manifest, &request.sources)?;
-                let mut output = age_writer.finish().map_err(io_error)?;
-                output.flush().map_err(io_error)?;
-                output.sync_all().map_err(io_error)?;
+                age_writer.finish().map_err(io_error)?
             }
-            None => {
-                let mut output = write_compressed_tar(output, &manifest, &request.sources)?;
-                output.flush().map_err(io_error)?;
-                output.sync_all().map_err(io_error)?;
-            }
+            None => write_compressed_tar(output, &manifest, &request.sources)?,
+        };
+        if let Some((uid, gid)) = output_owner {
+            fchown(&output, Some(uid), Some(gid)).map_err(io_error)?;
+            output
+                .set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(io_error)?;
         }
+        output.flush().map_err(io_error)?;
+        output.sync_all().map_err(io_error)?;
+        drop(output);
         fs::rename(&temporary, &request.output_path).map_err(io_error)?;
         let parent = request.output_path.parent().ok_or(ArchiveError::Invalid)?;
         File::open(parent)
@@ -1428,6 +1448,21 @@ mod tests {
         })
         .unwrap();
         assert_eq!(fs::read(ce.join("Web Data")).unwrap(), source_bytes);
+    }
+
+    #[test]
+    fn requested_output_owner_and_private_mode_are_applied_before_publish() {
+        let root = tempfile::tempdir().unwrap();
+        let root_metadata = fs::metadata(root.path()).unwrap();
+        let request = request(root.path(), true);
+        let output = request.output_path.clone();
+
+        create_backup_for_owner(request, root_metadata.uid(), root_metadata.gid()).unwrap();
+
+        let output_metadata = fs::metadata(output).unwrap();
+        assert_eq!(output_metadata.uid(), root_metadata.uid());
+        assert_eq!(output_metadata.gid(), root_metadata.gid());
+        assert_eq!(output_metadata.mode() & 0o777, 0o600);
     }
 
     #[test]

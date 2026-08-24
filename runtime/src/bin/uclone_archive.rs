@@ -1,10 +1,11 @@
 use std::env;
 use std::io::{Read, Write as _};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
 
 use uclone_slices_runtime::archive::{
-    ArchiveError, HelperRequest, HelperResponse, create_backup, inspect_backup, read_control_frame,
-    restore_backup, write_response,
+    ArchiveError, HelperRequest, HelperResponse, create_backup_for_owner, inspect_backup,
+    read_control_frame, restore_backup, write_response,
 };
 
 const MANAGER_PACKAGE: &str = "com.uclone.slices.v2";
@@ -39,6 +40,7 @@ fn run() -> Result<HelperResponse, ArchiveError> {
     match request {
         HelperRequest::Backup(request) => {
             validate_manager_cache_path(&request.output_path, false)?;
+            let (manager_uid, manager_gid) = manager_cache_owner(&request.output_path)?;
             for source in &request.sources {
                 validate_backup_source(
                     &request.package,
@@ -47,7 +49,8 @@ fn run() -> Result<HelperResponse, ArchiveError> {
                     &source.de_path,
                 )?;
             }
-            create_backup(request).map(|manifest| HelperResponse::Manifest { manifest })
+            create_backup_for_owner(request, manager_uid, manager_gid)
+                .map(|manifest| HelperResponse::Manifest { manifest })
         }
         HelperRequest::Inspect {
             input_path,
@@ -106,6 +109,26 @@ fn validate_manager_cache_path(path: &Path, must_exist: bool) -> Result<(), Arch
         (false, Err(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         _ => Err(ArchiveError::Invalid),
     }
+}
+
+fn manager_cache_owner(path: &Path) -> Result<(u32, u32), ArchiveError> {
+    let allowed = [
+        PathBuf::from("/data/user/0")
+            .join(MANAGER_PACKAGE)
+            .join("cache"),
+        PathBuf::from("/data/data")
+            .join(MANAGER_PACKAGE)
+            .join("cache"),
+    ];
+    let root = allowed
+        .iter()
+        .find(|root| path.starts_with(root))
+        .ok_or(ArchiveError::Invalid)?;
+    let metadata = std::fs::symlink_metadata(root).map_err(|_error| ArchiveError::Invalid)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() || metadata.uid() == 0 {
+        return Err(ArchiveError::Invalid);
+    }
+    Ok((metadata.uid(), metadata.gid()))
 }
 
 fn require_real_parent_chain(root: &Path, path: &Path) -> Result<(), ArchiveError> {
