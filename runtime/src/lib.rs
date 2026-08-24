@@ -1,4 +1,5 @@
 mod adapters;
+pub mod archive;
 mod composition;
 mod model;
 mod ports;

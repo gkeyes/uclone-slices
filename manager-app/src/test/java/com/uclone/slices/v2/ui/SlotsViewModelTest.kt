@@ -776,6 +776,14 @@ private open class FakeRuntimeClient(
                 snapshot = snapshot.copy(launchAfterReboot = command.enabled)
                 RuntimeReply.Package(snapshot)
             }
+            is RuntimeCommand.BeginBackupIo,
+            is RuntimeCommand.FinishBackupIo,
+            is RuntimeCommand.BeginRestoreIo,
+            is RuntimeCommand.CommitRestoreAccount,
+            is RuntimeCommand.FinishRestoreIo,
+            is RuntimeCommand.AbortAccountIo,
+            RuntimeCommand.ListAccountIoStatus,
+            -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
     }
 }
@@ -828,6 +836,13 @@ private class BlockingRuntimeClient : RuntimeClient {
             is RuntimeCommand.RebindPackage,
             is RuntimeCommand.Unenroll,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.BeginBackupIo,
+            is RuntimeCommand.FinishBackupIo,
+            is RuntimeCommand.BeginRestoreIo,
+            is RuntimeCommand.CommitRestoreAccount,
+            is RuntimeCommand.FinishRestoreIo,
+            is RuntimeCommand.AbortAccountIo,
+            RuntimeCommand.ListAccountIoStatus,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }
@@ -859,6 +874,13 @@ private class BlockingRebindRuntimeClient : RuntimeClient {
             is RuntimeCommand.DeleteSlot,
             is RuntimeCommand.Unenroll,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.BeginBackupIo,
+            is RuntimeCommand.FinishBackupIo,
+            is RuntimeCommand.BeginRestoreIo,
+            is RuntimeCommand.CommitRestoreAccount,
+            is RuntimeCommand.FinishRestoreIo,
+            is RuntimeCommand.AbortAccountIo,
+            RuntimeCommand.ListAccountIoStatus,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }
@@ -888,6 +910,13 @@ private class BlockingQuickRuntimeClient : RuntimeClient {
             is RuntimeCommand.RenameSlot,
             is RuntimeCommand.DeleteSlot,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.BeginBackupIo,
+            is RuntimeCommand.FinishBackupIo,
+            is RuntimeCommand.BeginRestoreIo,
+            is RuntimeCommand.CommitRestoreAccount,
+            is RuntimeCommand.FinishRestoreIo,
+            is RuntimeCommand.AbortAccountIo,
+            RuntimeCommand.ListAccountIoStatus,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
 }

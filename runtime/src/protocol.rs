@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode, SigningIdentity, SlotId,
+    AccountIoLease, AccountIoScope, AccountIoStatus, AccountIoToken, ArchiveAccountId,
+    ArchivedState, Capabilities, DisplayName, PackageName, PackageSnapshot, RestoreBatchResult,
+    RestoreItemResult, RestoreMapping, SeedMode, SigningIdentity, SlotId, TransferId,
 };
 use crate::ports::{AndroidOps, PackageStore, SlotStorage};
 use crate::usecases::{Runtime, RuntimeError};
@@ -52,6 +54,30 @@ pub enum Command {
         package: PackageName,
         slot: SlotId,
     },
+    BeginBackupIo {
+        package: PackageName,
+        scope: AccountIoScope,
+    },
+    FinishBackupIo {
+        io_token: AccountIoToken,
+    },
+    BeginRestoreIo {
+        package: PackageName,
+        transfer_id: TransferId,
+        mappings: Vec<RestoreMapping>,
+        archived_state: ArchivedState,
+    },
+    CommitRestoreAccount {
+        io_token: AccountIoToken,
+        archive_account_id: ArchiveAccountId,
+    },
+    FinishRestoreIo {
+        io_token: AccountIoToken,
+    },
+    AbortAccountIo {
+        io_token: AccountIoToken,
+    },
+    ListAccountIoStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +86,10 @@ pub enum SuccessPayload {
     Capabilities(Capabilities),
     PackageList { packages: Vec<PackageSnapshot> },
     Package { package: PackageSnapshot },
+    AccountIoLease(AccountIoLease),
+    AccountIoList { account_io: Vec<AccountIoStatus> },
+    RestoreItem(RestoreItemResult),
+    RestoreBatch(RestoreBatchResult),
     Empty {},
 }
 
@@ -71,6 +101,12 @@ pub enum ErrorCode {
     StateConflict,
     IdentityMismatch,
     OperationFailed,
+    IoBusy,
+    BackupInvalid,
+    BackupPasswordRequired,
+    BackupAuthFailed,
+    InsufficientStorage,
+    BackupIncompatible,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +193,21 @@ fn decode_command(line: &str, expected_build_id: &str) -> Result<Command, Decode
         "activate_slot" => &["op", "package", "slot", "client_build_id"][..],
         "rename_slot" => &["op", "package", "slot", "name", "client_build_id"][..],
         "delete_slot" => &["op", "package", "slot", "client_build_id"][..],
+        "begin_backup_io" => &["op", "package", "scope", "client_build_id"][..],
+        "finish_backup_io" => &["op", "io_token", "client_build_id"][..],
+        "begin_restore_io" => &[
+            "op",
+            "package",
+            "transfer_id",
+            "mappings",
+            "archived_state",
+            "client_build_id",
+        ][..],
+        "commit_restore_account" => {
+            &["op", "io_token", "archive_account_id", "client_build_id"][..]
+        }
+        "finish_restore_io" | "abort_account_io" => &["op", "io_token", "client_build_id"][..],
+        "list_account_io_status" => &["op", "client_build_id"][..],
         _ => return Err(DecodeError::InvalidRequest),
     };
     if !object.keys().all(|key| allowed.contains(&key.as_str())) {
@@ -243,6 +294,35 @@ where
         Command::DeleteSlot { package, slot } => runtime
             .delete_slot(&package, &slot)
             .map(|package| SuccessPayload::Package { package }),
+        Command::BeginBackupIo { package, scope } => runtime
+            .begin_backup_io(&package, scope)
+            .map(SuccessPayload::AccountIoLease),
+        Command::FinishBackupIo { io_token } => runtime
+            .finish_backup_io(&io_token)
+            .map(|()| SuccessPayload::Empty {}),
+        Command::BeginRestoreIo {
+            package,
+            transfer_id,
+            mappings,
+            archived_state,
+        } => runtime
+            .begin_restore_io(&package, transfer_id, mappings, archived_state)
+            .map(SuccessPayload::AccountIoLease),
+        Command::CommitRestoreAccount {
+            io_token,
+            archive_account_id,
+        } => runtime
+            .commit_restore_account(&io_token, &archive_account_id)
+            .map(SuccessPayload::RestoreItem),
+        Command::FinishRestoreIo { io_token } => runtime
+            .finish_restore_io(&io_token)
+            .map(SuccessPayload::RestoreBatch),
+        Command::AbortAccountIo { io_token } => runtime
+            .abort_account_io(&io_token)
+            .map(|()| SuccessPayload::Empty {}),
+        Command::ListAccountIoStatus => runtime
+            .list_account_io_status()
+            .map(|account_io| SuccessPayload::AccountIoList { account_io }),
     };
     match result {
         Ok(ok) => Response::Ok { ok },
@@ -261,6 +341,12 @@ fn error_code(error: RuntimeError) -> ErrorCode {
         RuntimeError::StateConflict => ErrorCode::StateConflict,
         RuntimeError::IdentityMismatch => ErrorCode::IdentityMismatch,
         RuntimeError::OperationFailed => ErrorCode::OperationFailed,
+        RuntimeError::IoBusy => ErrorCode::IoBusy,
+        RuntimeError::BackupInvalid => ErrorCode::BackupInvalid,
+        RuntimeError::BackupPasswordRequired => ErrorCode::BackupPasswordRequired,
+        RuntimeError::BackupAuthFailed => ErrorCode::BackupAuthFailed,
+        RuntimeError::InsufficientStorage => ErrorCode::InsufficientStorage,
+        RuntimeError::BackupIncompatible => ErrorCode::BackupIncompatible,
     }
 }
 
@@ -274,7 +360,7 @@ mod tests {
     use super::*;
     use crate::adapters::{MemoryAndroidOps, MemoryPackageStore, MemorySlotStorage};
 
-    const CLIENT_BUILD_ID: &str = "0.1.9";
+    const CLIENT_BUILD_ID: &str = "0.2.0";
 
     #[test]
     fn shared_fixtures_cover_the_core_command_flow() {
@@ -365,7 +451,7 @@ mod tests {
         let response = handle_line(
             &mut runtime,
             CLIENT_BUILD_ID,
-            r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.1.9"}"#,
+            r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.2.0"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -382,7 +468,7 @@ mod tests {
         let response = handle_line(
             &mut runtime,
             CLIENT_BUILD_ID,
-            r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.1.9"}"#,
+            r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.2.0"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -397,8 +483,8 @@ mod tests {
         );
 
         for request in [
-            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.1.9"}"#,
-            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.1.9"}"#,
+            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.2.0"}"#,
+            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.2.0"}"#,
         ] {
             assert_eq!(
                 handle_line(&mut runtime, CLIENT_BUILD_ID, request),
@@ -418,7 +504,7 @@ mod tests {
         let response = handle_line(
             &mut runtime,
             CLIENT_BUILD_ID,
-            r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.1.9"}"#,
+            r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.2.0"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -503,6 +589,33 @@ mod tests {
                 "request: {request}",
             );
         }
+    }
+
+    #[test]
+    fn account_backup_io_is_exposed_as_a_versioned_runtime_transaction() {
+        let mut runtime = runtime_with_slot();
+
+        let response = handle_line(
+            &mut runtime,
+            "0.2.0",
+            r#"{"op":"begin_backup_io","package":"com.example.app","scope":{"kind":"account","slot":"base"},"client_build_id":"0.2.0"}"#,
+        );
+
+        assert!(response.contains("\"io_token\""), "response: {response}");
+        assert!(response.contains("\"sources\""), "response: {response}");
+    }
+
+    #[test]
+    fn account_io_status_is_queryable_without_mutating_package_state() {
+        let mut runtime = runtime_with_slot();
+
+        let response = handle_line(
+            &mut runtime,
+            "0.2.0",
+            r#"{"op":"list_account_io_status","client_build_id":"0.2.0"}"#,
+        );
+
+        assert_eq!(response, "{\"ok\":{\"account_io\":[]}}\n");
     }
 
     #[test]

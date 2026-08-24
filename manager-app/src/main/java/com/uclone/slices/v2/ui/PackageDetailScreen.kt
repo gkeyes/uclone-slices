@@ -88,6 +88,13 @@ internal fun PackageDetailScreen(
                 onLaunch = {
                     onIntent(UiIntent.ActivateSlot(packageSnapshot.activeSlot))
                 },
+                onBackup = activeSlot?.let { slot ->
+                    {
+                        onIntent(
+                            UiIntent.OpenBackupRestore(packageSnapshot.packageName, slot.id),
+                        )
+                    }
+                },
                 onRename = activeSlot
                     ?.takeUnless { it.id == BASE_SLOT_ID }
                     ?.let { slot ->
@@ -136,6 +143,9 @@ internal fun PackageDetailScreen(
                     slot = slot,
                     enabled = !state.busy && operationsEnabled,
                     onActivate = { onIntent(UiIntent.ActivateSlot(slot.id)) },
+                    onBackup = {
+                        onIntent(UiIntent.OpenBackupRestore(packageSnapshot.packageName, slot.id))
+                    },
                     onRename = if (slot.id == BASE_SLOT_ID) {
                         null
                     } else {
@@ -215,6 +225,7 @@ private fun CurrentSpaceCard(
     activeSlot: SlotSnapshot?,
     enabled: Boolean,
     onLaunch: () -> Unit,
+    onBackup: (() -> Unit)?,
     onRename: (() -> Unit)?,
 ) {
     SlicesPanel(
@@ -241,10 +252,11 @@ private fun CurrentSpaceCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                onRename?.let {
+                onBackup?.let {
                     SpaceActionsMenu(
                         enabled = enabled,
-                        onRename = it,
+                        onBackup = it,
+                        onRename = onRename,
                         onDelete = null,
                     )
                 }
@@ -300,6 +312,7 @@ private fun OtherSpaceCard(
     slot: SlotSnapshot,
     enabled: Boolean,
     onActivate: () -> Unit,
+    onBackup: () -> Unit,
     onRename: (() -> Unit)?,
     onDelete: (() -> Unit)?,
 ) {
@@ -342,13 +355,12 @@ private fun OtherSpaceCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                onRename?.let {
-                    SpaceActionsMenu(
-                        enabled = enabled,
-                        onRename = it,
-                        onDelete = onDelete,
-                    )
-                }
+                SpaceActionsMenu(
+                    enabled = enabled,
+                    onBackup = onBackup,
+                    onRename = onRename,
+                    onDelete = onDelete,
+                )
             }
             SlicesActionButton(
                 text = stringResource(R.string.switch_and_launch),
@@ -366,7 +378,8 @@ private fun OtherSpaceCard(
 @Composable
 private fun SpaceActionsMenu(
     enabled: Boolean,
-    onRename: () -> Unit,
+    onBackup: () -> Unit,
+    onRename: (() -> Unit)?,
     onDelete: (() -> Unit)?,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -386,12 +399,21 @@ private fun SpaceActionsMenu(
             onDismissRequest = { expanded = false },
         ) {
             DropdownMenuItem(
+                text = { Text(stringResource(R.string.backup_this_account_action)) },
+                onClick = {
+                    expanded = false
+                    onBackup()
+                },
+            )
+            onRename?.let { rename ->
+                DropdownMenuItem(
                 text = { Text(stringResource(R.string.rename_space)) },
                 onClick = {
                     expanded = false
-                    onRename()
+                        rename()
                 },
             )
+            }
             onDelete?.let { delete ->
                 DropdownMenuItem(
                     text = {

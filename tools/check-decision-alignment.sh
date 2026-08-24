@@ -14,6 +14,7 @@ RUST_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"/\1/p' "$ROOT/rust-toolchain.toml"
 RUST_VERSION=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' "$ROOT/runtime/Cargo.toml")
 MANAGER_MIN_SDK=$(sed -n 's/^[[:space:]]*minSdk = \([0-9][0-9]*\)/\1/p' "$ROOT/manager-app/build.gradle.kts")
 RUNTIME_ANDROID_API=$(sed -n 's/^API=\([0-9][0-9]*\)/\1/p' "$ROOT/tools/build-kernelsu.sh")
+HELPER_ANDROID_API=$(sed -n 's/^API=\([0-9][0-9]*\)/\1/p' "$ROOT/tools/build-manager-helper.sh")
 
 [ "$RUNTIME_VERSION" = "$MANAGER_VERSION" ]
 [ "$RUNTIME_VERSION" = "$FIXTURE_VERSION" ]
@@ -22,3 +23,4 @@ RUNTIME_ANDROID_API=$(sed -n 's/^API=\([0-9][0-9]*\)/\1/p' "$ROOT/tools/build-ke
 [ "$MANAGER_VERSION_CODE" = "$MODULE_VERSION_CODE" ]
 [ "$RUST_TOOLCHAIN" = "$RUST_VERSION.0" ]
 [ "$MANAGER_MIN_SDK" = "$RUNTIME_ANDROID_API" ]
+[ "$MANAGER_MIN_SDK" = "$HELPER_ANDROID_API" ]

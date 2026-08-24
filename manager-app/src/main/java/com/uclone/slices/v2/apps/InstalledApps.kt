@@ -16,6 +16,7 @@ data class InstalledApp(
     val label: String,
     val icon: Drawable? = null,
     val signingIdentity: SigningIdentity? = null,
+    val versionName: String = "",
 )
 
 fun interface InstalledAppsSource {
@@ -46,6 +47,10 @@ class PackageManagerInstalledApps(
                     label = packageManager.getApplicationLabel(application).toString(),
                     icon = packageManager.getApplicationIcon(application),
                     signingIdentity = signingIdentity(application.packageName),
+                    versionName = packageManager.getPackageInfo(
+                        application.packageName,
+                        0,
+                    ).versionName.orEmpty(),
                 )
             }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })

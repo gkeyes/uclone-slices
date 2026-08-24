@@ -1,0 +1,1 @@
+{"ok":{"io_token":"0123456789abcdef0123456789abcdef","package":"com.example.app","kind":"backup","sources":[{"archive_account_id":"base","slot":"base","name":"系统原始空间","ce_path":"/data/user/0/com.example.app","de_path":"/data/user_de/0/com.example.app"}]}}

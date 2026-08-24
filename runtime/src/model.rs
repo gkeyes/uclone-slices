@@ -321,6 +321,7 @@ pub struct PackageInspection {
 pub enum ObservedView {
     Base,
     Slot(SlotId),
+    Maintenance(AccountIoToken),
     Inconsistent,
 }
 
@@ -335,6 +336,351 @@ impl ObservedView {
 
     pub fn matches(&self, slot: &SlotId) -> bool {
         self == &Self::for_slot(slot)
+    }
+}
+
+fn valid_account_io_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value != "."
+        && value != ".."
+        && !value.starts_with('.')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct AccountIoToken(String);
+
+impl AccountIoToken {
+    pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
+        let value = value.into();
+        (value.len() == 32
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')))
+        .then_some(Self(value))
+        .ok_or(ModelError::InvalidState)
+    }
+
+    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+        let mut value = String::with_capacity(32);
+        for byte in bytes {
+            use core::fmt::Write as _;
+            let _ignored = write!(value, "{byte:02x}");
+        }
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AccountIoToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AccountIoToken {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct ArchiveAccountId(String);
+
+impl ArchiveAccountId {
+    pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
+        let value = value.into();
+        valid_account_io_id(&value)
+            .then_some(Self(value))
+            .ok_or(ModelError::InvalidState)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ArchiveAccountId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ArchiveAccountId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct TransferId(String);
+
+impl TransferId {
+    pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
+        let value = value.into();
+        valid_account_io_id(&value)
+            .then_some(Self(value))
+            .ok_or(ModelError::InvalidState)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for TransferId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AccountIoScope {
+    Account { slot: SlotId },
+    AllAccounts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountIoKind {
+    Backup,
+    Restore,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveScope {
+    Account,
+    AllAccounts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchivedAccountKind {
+    Base,
+    Slot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RestoreTarget {
+    Existing { slot: SlotId },
+    New,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreMapping {
+    pub archive_account_id: ArchiveAccountId,
+    pub archive_kind: ArchivedAccountKind,
+    pub name: DisplayName,
+    pub target: RestoreTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchivedState {
+    pub scope: ArchiveScope,
+    pub active_account_id: Option<ArchiveAccountId>,
+    #[serde(default)]
+    pub launch_after_reboot: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageEnabledState {
+    Default,
+    Enabled,
+    Disabled,
+    DisabledUser,
+    DisabledUntilUsed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountIoPhase {
+    Preparing,
+    Ready,
+    Replacing {
+        archive_account_id: ArchiveAccountId,
+        target_slot: SlotId,
+    },
+    Finalizing,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreItemState {
+    Restored,
+    Failed,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreItemResult {
+    pub archive_account_id: ArchiveAccountId,
+    pub target_slot: Option<SlotId>,
+    pub state: RestoreItemState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreBatchResult {
+    pub package: PackageName,
+    pub items: Vec<RestoreItemResult>,
+    pub active_slot: SlotId,
+    pub launch_after_reboot: bool,
+    pub app_started: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountIoSource {
+    pub archive_account_id: ArchiveAccountId,
+    pub slot: SlotId,
+    pub name: String,
+    pub ce_path: String,
+    pub de_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestoreStaging {
+    pub archive_account_id: ArchiveAccountId,
+    pub ce_path: String,
+    pub de_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountIoLease {
+    pub io_token: AccountIoToken,
+    pub package: PackageName,
+    pub kind: AccountIoKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<AccountIoSource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub staging: Vec<RestoreStaging>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountIoStatus {
+    pub io_token: AccountIoToken,
+    pub package: PackageName,
+    pub kind: AccountIoKind,
+    pub phase: AccountIoPhase,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub completed: Vec<RestoreItemResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResolvedRestoreMapping {
+    pub archive_account_id: ArchiveAccountId,
+    pub archive_kind: ArchivedAccountKind,
+    pub name: DisplayName,
+    pub previous_name: Option<DisplayName>,
+    pub target_slot: SlotId,
+    pub create_slot: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountIoIntent {
+    pub schema_version: u8,
+    pub io_token: AccountIoToken,
+    pub package: PackageName,
+    pub kind: AccountIoKind,
+    pub scope: Option<AccountIoScope>,
+    pub transfer_id: Option<TransferId>,
+    #[serde(default)]
+    pub mappings: Vec<ResolvedRestoreMapping>,
+    pub archived_state: Option<ArchivedState>,
+    pub previous_active_slot: SlotId,
+    pub previous_launch_after_reboot: bool,
+    pub previous_was_running: bool,
+    pub previous_enabled_state: Option<PackageEnabledState>,
+    #[serde(default)]
+    pub maintenance_active: bool,
+    pub phase: AccountIoPhase,
+    #[serde(default)]
+    pub completed: Vec<RestoreItemResult>,
+}
+
+impl AccountIoIntent {
+    pub(crate) fn validate(&self) -> Result<(), ModelError> {
+        if self.schema_version != 1 {
+            return Err(ModelError::InvalidState);
+        }
+        match self.kind {
+            AccountIoKind::Backup => {
+                if self.scope.is_none()
+                    || self.transfer_id.is_some()
+                    || !self.mappings.is_empty()
+                    || self.archived_state.is_some()
+                {
+                    return Err(ModelError::InvalidState);
+                }
+            }
+            AccountIoKind::Restore => {
+                if self.scope.is_some()
+                    || self.transfer_id.is_none()
+                    || self.mappings.is_empty()
+                    || self.archived_state.is_none()
+                {
+                    return Err(ModelError::InvalidState);
+                }
+                let source_ids = self
+                    .mappings
+                    .iter()
+                    .map(|mapping| &mapping.archive_account_id)
+                    .collect::<BTreeSet<_>>();
+                let targets = self
+                    .mappings
+                    .iter()
+                    .map(|mapping| &mapping.target_slot)
+                    .collect::<BTreeSet<_>>();
+                if source_ids.len() != self.mappings.len() || targets.len() != self.mappings.len() {
+                    return Err(ModelError::InvalidState);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn status(&self) -> AccountIoStatus {
+        AccountIoStatus {
+            io_token: self.io_token.clone(),
+            package: self.package.clone(),
+            kind: self.kind,
+            phase: self.phase.clone(),
+            completed: self.completed.clone(),
+        }
     }
 }
 
@@ -572,6 +918,53 @@ impl PackageAggregate {
             .checked_add(1)
             .ok_or(ModelError::StateConflict)?;
         Ok(Slot { id, display_name })
+    }
+
+    pub(crate) fn reserve_restored_slot(
+        &mut self,
+        display_name: DisplayName,
+    ) -> Result<SlotId, ModelError> {
+        let slot = self.reserve_slot(display_name)?;
+        Ok(slot.id)
+    }
+
+    pub(crate) fn install_restored_slot(
+        &mut self,
+        target: &SlotId,
+        display_name: DisplayName,
+    ) -> Result<(), ModelError> {
+        self.require_ready()?;
+        if target.is_base() || self.slot(target).is_some() {
+            return Err(ModelError::StateConflict);
+        }
+        self.slots.push(Slot {
+            id: target.clone(),
+            display_name,
+        });
+        self.validate()
+    }
+
+    pub(crate) fn remove_restored_slot(&mut self, target: &SlotId) -> Result<(), ModelError> {
+        self.require_ready()?;
+        if target.is_base() || target == &self.active_slot {
+            return Err(ModelError::StateConflict);
+        }
+        let index = self
+            .slots
+            .iter()
+            .position(|slot| slot.id() == target)
+            .ok_or(ModelError::SlotNotFound)?;
+        self.slots.remove(index);
+        self.validate()
+    }
+
+    pub(crate) fn set_restored_active_slot(&mut self, target: &SlotId) -> Result<(), ModelError> {
+        self.require_ready()?;
+        if self.slot(target).is_none() {
+            return Err(ModelError::SlotNotFound);
+        }
+        self.active_slot = target.clone();
+        self.validate()
     }
 
     pub fn begin_creation(&mut self, slot: &Slot, restore_running: bool) -> Result<(), ModelError> {

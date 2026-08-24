@@ -1,6 +1,8 @@
 use std::fs::{self, File};
 use std::io::Write as _;
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, chown};
+#[cfg(not(target_os = "android"))]
+use std::os::unix::fs::symlink;
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, chown, lchown};
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "android")]
 use std::process::Command;
@@ -9,7 +11,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{
-    PackageAggregate, PackageBinding, PackageName, RebindIntent, SeedMode, Slot, SlotId,
+    AccountIoIntent, AccountIoToken, ArchiveAccountId, PackageAggregate, PackageBinding,
+    PackageName, RebindIntent, RestoreBatchResult, RestoreStaging, SeedMode, Slot, SlotId,
+    TransferId,
 };
 use crate::ports::{AdapterError, PackageStore, SlotStorage};
 
@@ -41,6 +45,18 @@ impl FilePackageStore {
         self.packages_root
             .join(package.as_str())
             .join("rebind-intent.json")
+    }
+
+    fn account_io_intent_path(&self, package: &PackageName) -> PathBuf {
+        self.packages_root
+            .join(package.as_str())
+            .join("account-io-intent-v1.json")
+    }
+
+    fn account_io_result_path(&self, package: &PackageName) -> PathBuf {
+        self.packages_root
+            .join(package.as_str())
+            .join("account-io-result-v1.json")
     }
 
     fn backup_path(&self, package: &PackageName) -> Result<PathBuf, AdapterError> {
@@ -169,6 +185,70 @@ impl PackageStore for FilePackageStore {
         }
     }
 
+    fn list_account_io_intents(&self) -> Result<Vec<AccountIoIntent>, AdapterError> {
+        let mut intents = Vec::new();
+        for entry in fs::read_dir(&self.packages_root).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            if !entry.file_type().map_err(io_error)?.is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                return Err(AdapterError::state_conflict(
+                    "package directory is not UTF-8",
+                ));
+            };
+            let package = PackageName::new(name)
+                .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+            if let Some(intent) = self.load_account_io_intent(&package)? {
+                intents.push(intent);
+            }
+        }
+        intents.sort_by(|left, right| left.package.cmp(&right.package));
+        Ok(intents)
+    }
+
+    fn load_account_io_intent(
+        &self,
+        package: &PackageName,
+    ) -> Result<Option<AccountIoIntent>, AdapterError> {
+        let intent = read_optional_json::<AccountIoIntent>(&self.account_io_intent_path(package))?;
+        if let Some(intent) = &intent {
+            intent
+                .validate()
+                .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+            if &intent.package != package {
+                return Err(AdapterError::state_conflict(
+                    "account I/O intent package does not match its path",
+                ));
+            }
+        }
+        Ok(intent)
+    }
+
+    fn save_account_io_intent(&mut self, intent: &AccountIoIntent) -> Result<(), AdapterError> {
+        intent
+            .validate()
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        write_json_atomic(&self.account_io_intent_path(&intent.package), intent)
+    }
+
+    fn clear_account_io_intent(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        remove_file_and_sync_parent(&self.account_io_intent_path(package))
+    }
+
+    fn save_account_io_result(
+        &mut self,
+        package: &PackageName,
+        result: &RestoreBatchResult,
+    ) -> Result<(), AdapterError> {
+        if &result.package != package {
+            return Err(AdapterError::state_conflict(
+                "account I/O result package does not match its path",
+            ));
+        }
+        write_json_atomic(&self.account_io_result_path(package), result)
+    }
+
     fn backup_before_v1_binding(
         &mut self,
         aggregate: &PackageAggregate,
@@ -214,6 +294,21 @@ fn read_optional_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, Ada
             .map(Some)
             .map_err(|error| AdapterError::state_conflict(error.to_string())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+fn remove_file_and_sync_parent(path: &Path) -> Result<(), AdapterError> {
+    match fs::remove_file(path) {
+        Ok(()) => {
+            let parent = path
+                .parent()
+                .ok_or_else(|| AdapterError::new("state path has no parent"))?;
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(io_error)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error(error)),
     }
 }
@@ -305,6 +400,147 @@ impl FileSlotStorage {
                 .join(slot.as_str()),
         )
     }
+
+    fn storage_roots(&self) -> Result<(PathBuf, PathBuf), AdapterError> {
+        Ok((
+            self.ce_slots_root
+                .parent()
+                .ok_or_else(|| AdapterError::new("CE slots root has no storage parent"))?
+                .to_path_buf(),
+            self.de_slots_root
+                .parent()
+                .ok_or_else(|| AdapterError::new("DE slots root has no storage parent"))?
+                .to_path_buf(),
+        ))
+    }
+
+    fn transfer_account_paths(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        account: &ArchiveAccountId,
+    ) -> Result<(PathBuf, PathBuf), AdapterError> {
+        let (ce_root, de_root) = self.storage_roots()?;
+        Ok((
+            ce_root
+                .join("transfers")
+                .join(token.as_str())
+                .join(package.as_str())
+                .join(account.as_str()),
+            de_root
+                .join("transfers")
+                .join(token.as_str())
+                .join(package.as_str())
+                .join(account.as_str()),
+        ))
+    }
+
+    fn maintenance_paths(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(PathBuf, PathBuf), AdapterError> {
+        let (ce_root, de_root) = self.storage_roots()?;
+        Ok((
+            ce_root
+                .join("maintenance")
+                .join(token.as_str())
+                .join(package.as_str()),
+            de_root
+                .join("maintenance")
+                .join(token.as_str())
+                .join(package.as_str()),
+        ))
+    }
+
+    fn base_alias_paths(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(PathBuf, PathBuf), AdapterError> {
+        let (ce_root, de_root) = self.storage_roots()?;
+        Ok((
+            ce_root
+                .join("maintenance-base")
+                .join(token.as_str())
+                .join(package.as_str()),
+            de_root
+                .join("maintenance-base")
+                .join(token.as_str())
+                .join(package.as_str()),
+        ))
+    }
+
+    fn rollback_paths(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        target: &SlotId,
+    ) -> Result<(PathBuf, PathBuf), AdapterError> {
+        let (ce_root, de_root) = self.storage_roots()?;
+        Ok((
+            ce_root
+                .join("rollback")
+                .join(token.as_str())
+                .join(package.as_str())
+                .join(target.as_str()),
+            de_root
+                .join("rollback")
+                .join(token.as_str())
+                .join(package.as_str())
+                .join(target.as_str()),
+        ))
+    }
+
+    #[cfg(target_os = "android")]
+    fn replacement_target_paths(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        target: &SlotId,
+    ) -> Result<(PathBuf, PathBuf), AdapterError> {
+        if target.is_base() {
+            let (alias_ce, alias_de) = self.base_alias_paths(package, token)?;
+            let (ce_mounted, de_mounted) = base_alias_mount_presence(&alias_ce, &alias_de)?;
+            if paired_alias_mount_state(ce_mounted, de_mounted)? {
+                Ok((alias_ce, alias_de))
+            } else {
+                let canonical_ce = self.canonical_ce_root.join(package.as_str());
+                let canonical_de = self.canonical_de_root.join(package.as_str());
+                let (ce_mounted, de_mounted) = path_mount_presence(&canonical_ce, &canonical_de)?;
+                if ce_mounted || de_mounted {
+                    return Err(AdapterError::state_conflict(
+                        "base recovery target still has a managed view mounted",
+                    ));
+                }
+                if !real_directory(&canonical_ce)? || !real_directory(&canonical_de)? {
+                    return Err(AdapterError::state_conflict(
+                        "base recovery target is unavailable",
+                    ));
+                }
+                Ok((canonical_ce, canonical_de))
+            }
+        } else {
+            Ok(self.slot_paths(package, target))
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    fn replacement_target_paths(
+        &self,
+        package: &PackageName,
+        _token: &AccountIoToken,
+        target: &SlotId,
+    ) -> Result<(PathBuf, PathBuf), AdapterError> {
+        if target.is_base() {
+            Ok((
+                self.canonical_ce_root.join(package.as_str()),
+                self.canonical_de_root.join(package.as_str()),
+            ))
+        } else {
+            Ok(self.slot_paths(package, target))
+        }
+    }
 }
 
 impl SlotStorage for FileSlotStorage {
@@ -382,6 +618,210 @@ impl SlotStorage for FileSlotStorage {
             .then_some(())
             .ok_or_else(|| AdapterError::new("slot CE/DE pair is incomplete"))
     }
+
+    fn account_paths(
+        &self,
+        package: &PackageName,
+        slot: &SlotId,
+    ) -> Result<(String, String), AdapterError> {
+        let (ce, de) = if slot.is_base() {
+            (
+                self.canonical_ce_root.join(package.as_str()),
+                self.canonical_de_root.join(package.as_str()),
+            )
+        } else {
+            self.require_complete_pair(package, slot)?;
+            self.slot_paths(package, slot)
+        };
+        if !real_directory(&ce)? || !real_directory(&de)? {
+            return Err(AdapterError::new("account CE/DE pair is unavailable"));
+        }
+        Ok((path_text_owned(&ce)?, path_text_owned(&de)?))
+    }
+
+    fn prepare_restore_staging(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        transfer_id: &TransferId,
+        accounts: &[ArchiveAccountId],
+    ) -> Result<Vec<RestoreStaging>, AdapterError> {
+        if accounts.is_empty() {
+            return Err(AdapterError::state_conflict(
+                "restore requires at least one account",
+            ));
+        }
+        let mut staging = Vec::with_capacity(accounts.len());
+        for account in accounts {
+            let (ce, de) = self.transfer_account_paths(package, token, account)?;
+            for path in [&ce, &de] {
+                if path.exists() {
+                    return Err(AdapterError::state_conflict(
+                        "restore staging path already exists",
+                    ));
+                }
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| AdapterError::new("staging path has no parent"))?;
+                fs::create_dir_all(parent).map_err(io_error)?;
+                secure_private_directory(parent, self.owner)?;
+                fs::create_dir(path).map_err(io_error)?;
+                secure_private_directory(path, self.owner)?;
+                fs::write(parent.join("transfer-id"), transfer_id.as_str()).map_err(io_error)?;
+                sync_directory(parent)?;
+            }
+            staging.push(RestoreStaging {
+                archive_account_id: account.clone(),
+                ce_path: path_text_owned(&ce)?,
+                de_path: path_text_owned(&de)?,
+            });
+        }
+        Ok(staging)
+    }
+
+    fn validate_staged_account(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        transfer_id: &TransferId,
+        account: &ArchiveAccountId,
+    ) -> Result<(), AdapterError> {
+        let (ce, de) = self.transfer_account_paths(package, token, account)?;
+        for path in [&ce, &de] {
+            if !real_directory(path)? {
+                return Err(AdapterError::state_conflict(
+                    "staged account domain is not a real directory",
+                ));
+            }
+            let parent = path
+                .parent()
+                .ok_or_else(|| AdapterError::new("staging path has no parent"))?;
+            let recorded = fs::read_to_string(parent.join("transfer-id")).map_err(io_error)?;
+            if recorded != transfer_id.as_str() {
+                return Err(AdapterError::state_conflict(
+                    "staged account transfer ID does not match",
+                ));
+            }
+            validate_staged_tree(path)?;
+        }
+        Ok(())
+    }
+
+    fn prepare_maintenance(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(), AdapterError> {
+        let canonical_ce = self.canonical_ce_root.join(package.as_str());
+        let canonical_de = self.canonical_de_root.join(package.as_str());
+        if !real_directory(&canonical_ce)? || !real_directory(&canonical_de)? {
+            return Err(AdapterError::new("base CE/DE pair is unavailable"));
+        }
+        let (maintenance_ce, maintenance_de) = self.maintenance_paths(package, token)?;
+        let (alias_ce, alias_de) = self.base_alias_paths(package, token)?;
+        for (source, maintenance, alias) in [
+            (&canonical_ce, &maintenance_ce, &alias_ce),
+            (&canonical_de, &maintenance_de, &alias_de),
+        ] {
+            if maintenance.exists() || alias.exists() {
+                return Err(AdapterError::state_conflict(
+                    "maintenance path already exists",
+                ));
+            }
+            for path in [maintenance, alias] {
+                let parent = path
+                    .parent()
+                    .ok_or_else(|| AdapterError::new("maintenance path has no parent"))?;
+                fs::create_dir_all(parent).map_err(io_error)?;
+                secure_private_directory(parent, self.owner)?;
+                fs::create_dir(path).map_err(io_error)?;
+                apply_root_profile(source, path)?;
+            }
+        }
+        bind_base_aliases(&canonical_ce, &canonical_de, &alias_ce, &alias_de)
+    }
+
+    fn replace_account(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        transfer_id: &TransferId,
+        account: &ArchiveAccountId,
+        target: &SlotId,
+    ) -> Result<(), AdapterError> {
+        self.validate_staged_account(package, token, transfer_id, account)?;
+        let (staged_ce, staged_de) = self.transfer_account_paths(package, token, account)?;
+        normalize_restored_tree(&self.canonical_ce_root.join(package.as_str()), &staged_ce)?;
+        normalize_restored_tree(&self.canonical_de_root.join(package.as_str()), &staged_de)?;
+        let (target_ce, target_de) = self.replacement_target_paths(package, token, target)?;
+        let (rollback_ce, rollback_de) = self.rollback_paths(package, token, target)?;
+        let ce_result = replace_domain(&staged_ce, &target_ce, &rollback_ce, target.is_base());
+        if let Err(error) = ce_result {
+            let _rollback = rollback_domain(&target_ce, &rollback_ce, target.is_base());
+            return Err(error);
+        }
+        let de_result = replace_domain(&staged_de, &target_de, &rollback_de, target.is_base());
+        if let Err(error) = de_result {
+            let de_rollback = rollback_domain(&target_de, &rollback_de, target.is_base());
+            let ce_rollback = rollback_domain(&target_ce, &rollback_ce, target.is_base());
+            if de_rollback.is_err() || ce_rollback.is_err() {
+                return Err(AdapterError::state_conflict(format!(
+                    "DE replacement failed and paired rollback was incomplete: {error}"
+                )));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn rollback_account(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        target: &SlotId,
+    ) -> Result<(), AdapterError> {
+        let (rollback_ce, rollback_de) = self.rollback_paths(package, token, target)?;
+        if !rollback_ce.exists() && !rollback_de.exists() {
+            return Ok(());
+        }
+        let (target_ce, target_de) = self.replacement_target_paths(package, token, target)?;
+        let ce = rollback_domain(&target_ce, &rollback_ce, target.is_base());
+        let de = rollback_domain(&target_de, &rollback_de, target.is_base());
+        ce.and(de)
+    }
+
+    fn finalize_account(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        target: &SlotId,
+    ) -> Result<(), AdapterError> {
+        let (ce, de) = self.rollback_paths(package, token, target)?;
+        remove_tree_if_exists(&ce)?;
+        remove_tree_if_exists(&de)?;
+        Ok(())
+    }
+
+    fn cleanup_account_io(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(), AdapterError> {
+        let (alias_ce, alias_de) = self.base_alias_paths(package, token)?;
+        unmount_base_aliases(&alias_ce, &alias_de)?;
+        let (ce_root, de_root) = self.storage_roots()?;
+        for root in [&ce_root, &de_root] {
+            for category in ["transfers", "maintenance", "maintenance-base", "rollback"] {
+                remove_tree_if_exists(
+                    &root
+                        .join(category)
+                        .join(token.as_str())
+                        .join(package.as_str()),
+                )?;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn secure_storage_tree(slots_root: &Path, owner: DirectoryOwner) -> Result<(), AdapterError> {
@@ -442,6 +882,405 @@ fn verify_private_directory(
         ));
     }
     Ok(())
+}
+
+fn real_directory(path: &Path) -> Result<bool, AdapterError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(metadata.file_type().is_dir() && !metadata.file_type().is_symlink()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+fn path_text_owned(path: &Path) -> Result<String, AdapterError> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| AdapterError::new("path is not UTF-8"))
+}
+
+fn sync_directory(path: &Path) -> Result<(), AdapterError> {
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(io_error)
+}
+
+fn validate_staged_tree(root: &Path) -> Result<(), AdapterError> {
+    const MAX_ENTRIES: usize = 1_000_000;
+    const MAX_PATH_BYTES: usize = 4096;
+    let mut pending = vec![root.to_path_buf()];
+    let mut entries = 0_usize;
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            entries = entries.saturating_add(1);
+            if entries > MAX_ENTRIES {
+                return Err(AdapterError::state_conflict(
+                    "staged account contains too many entries",
+                ));
+            }
+            let path = entry.path();
+            if path.as_os_str().as_encoded_bytes().len() > MAX_PATH_BYTES {
+                return Err(AdapterError::state_conflict(
+                    "staged account path is too long",
+                ));
+            }
+            let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
+            let kind = metadata.file_type();
+            if kind.is_dir() {
+                pending.push(path);
+            } else if kind.is_file() {
+                if metadata.nlink() != 1 {
+                    return Err(AdapterError::state_conflict(
+                        "staged account contains a hard link",
+                    ));
+                }
+                if metadata.len() != 0 && metadata.blocks().saturating_mul(512) < metadata.len() {
+                    return Err(AdapterError::state_conflict(
+                        "staged account contains a sparse file",
+                    ));
+                }
+            } else if kind.is_symlink() {
+                let target = fs::read_link(&path).map_err(io_error)?;
+                if target.is_absolute() || !relative_link_stays_inside(root, &path, &target) {
+                    return Err(AdapterError::state_conflict(
+                        "staged account contains an escaping symbolic link",
+                    ));
+                }
+            } else {
+                return Err(AdapterError::state_conflict(
+                    "staged account contains a special file",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_restored_tree(profile_source: &Path, root: &Path) -> Result<(), AdapterError> {
+    let profile = fs::metadata(profile_source).map_err(io_error)?;
+    let uid = profile.uid();
+    let gid = profile.gid();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
+        if metadata.file_type().is_symlink() {
+            if metadata.uid() != uid || metadata.gid() != gid {
+                lchown(&path, Some(uid), Some(gid)).map_err(io_error)?;
+            }
+            continue;
+        }
+        if metadata.uid() != uid || metadata.gid() != gid {
+            chown(&path, Some(uid), Some(gid)).map_err(io_error)?;
+        }
+        let safe_mode = metadata.mode() & 0o1777;
+        if metadata.mode() & 0o7777 != safe_mode {
+            fs::set_permissions(&path, fs::Permissions::from_mode(safe_mode)).map_err(io_error)?;
+        }
+        if metadata.file_type().is_dir() {
+            for entry in fs::read_dir(&path).map_err(io_error)? {
+                pending.push(entry.map_err(io_error)?.path());
+            }
+        }
+    }
+    apply_android_context(profile_source, root)
+}
+
+fn relative_link_stays_inside(root: &Path, link: &Path, target: &Path) -> bool {
+    use std::path::Component;
+
+    let Some(parent) = link.parent() else {
+        return false;
+    };
+    let Ok(relative_parent) = parent.strip_prefix(root) else {
+        return false;
+    };
+    let mut depth = 0_usize;
+    for component in relative_parent.components().chain(target.components()) {
+        match component {
+            Component::Normal(_) => depth = depth.saturating_add(1),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let Some(next) = depth.checked_sub(1) else {
+                    return false;
+                };
+                depth = next;
+            }
+            Component::Prefix(_) | Component::RootDir => return false,
+        }
+    }
+    true
+}
+
+fn replace_domain(
+    staged: &Path,
+    target: &Path,
+    rollback: &Path,
+    keep_target_root: bool,
+) -> Result<(), AdapterError> {
+    if rollback.exists() {
+        return Err(AdapterError::state_conflict(
+            "restore rollback directory already exists",
+        ));
+    }
+    let rollback_parent = rollback
+        .parent()
+        .ok_or_else(|| AdapterError::new("rollback path has no parent"))?;
+    fs::create_dir_all(rollback_parent).map_err(io_error)?;
+    fs::create_dir(rollback).map_err(io_error)?;
+    let old = rollback.join("old");
+    let missing = rollback.join("old-missing");
+    if keep_target_root {
+        if !real_directory(target)? {
+            return Err(AdapterError::state_conflict(
+                "base replacement target is unavailable",
+            ));
+        }
+        fs::create_dir(&old).map_err(io_error)?;
+        copy_tree(target, &old)?;
+        sync_tree(&old)?;
+        fs::write(rollback.join("backup-complete"), b"").map_err(io_error)?;
+        sync_directory(rollback)?;
+        remove_directory_contents(target)?;
+        move_directory_contents(staged, target)?;
+        remove_tree_if_exists(staged)?;
+        sync_directory(target)?;
+    } else {
+        let target_parent = target
+            .parent()
+            .ok_or_else(|| AdapterError::new("replacement target has no parent"))?;
+        fs::create_dir_all(target_parent).map_err(io_error)?;
+        if target.exists() {
+            fs::rename(target, &old).map_err(io_error)?;
+        } else {
+            fs::write(&missing, b"").map_err(io_error)?;
+        }
+        fs::rename(staged, target).map_err(io_error)?;
+        sync_directory(target_parent)?;
+    }
+    sync_directory(rollback)?;
+    sync_directory(rollback_parent)
+}
+
+fn rollback_domain(
+    target: &Path,
+    rollback: &Path,
+    keep_target_root: bool,
+) -> Result<(), AdapterError> {
+    if !rollback.exists() {
+        return Ok(());
+    }
+    let old = rollback.join("old");
+    let old_missing = rollback.join("old-missing").is_file();
+    let restore_started = rollback.join("restore-started");
+    let old_available = real_directory(&old)?;
+    if keep_target_root {
+        if !real_directory(target)? {
+            return Err(AdapterError::state_conflict(
+                "base rollback target is unavailable",
+            ));
+        }
+        if !rollback.join("backup-complete").is_file() {
+            return remove_tree_if_exists(rollback);
+        }
+        if !restore_started.is_file() && !old_available {
+            return Err(AdapterError::state_conflict(
+                "base rollback has no complete prior-state copy",
+            ));
+        }
+        if !restore_started.is_file() {
+            remove_directory_contents(target)?;
+            fs::write(&restore_started, b"").map_err(io_error)?;
+            sync_directory(rollback)?;
+        }
+        if old_available {
+            move_directory_contents(&old, target)?;
+        }
+        sync_directory(target)?;
+    } else {
+        if old_available {
+            if !restore_started.is_file() {
+                remove_tree_if_exists(target)?;
+                if let Some(parent) = target.parent() {
+                    sync_directory(parent)?;
+                }
+                fs::write(&restore_started, b"").map_err(io_error)?;
+                sync_directory(rollback)?;
+            }
+            fs::rename(&old, target).map_err(io_error)?;
+        } else if old_missing {
+            remove_tree_if_exists(target)?;
+        } else if restore_started.is_file() && real_directory(target)? {
+            // The old tree was already atomically renamed before interruption.
+        } else {
+            return Err(AdapterError::state_conflict(
+                "restore rollback has no prior-state marker",
+            ));
+        }
+        if let Some(parent) = target.parent() {
+            sync_directory(parent)?;
+        }
+    }
+    remove_tree_if_exists(rollback)?;
+    let parent = rollback
+        .parent()
+        .ok_or_else(|| AdapterError::new("rollback path has no parent"))?;
+    sync_directory(parent)
+}
+
+fn move_directory_contents(source: &Path, target: &Path) -> Result<(), AdapterError> {
+    for entry in fs::read_dir(source).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        fs::rename(entry.path(), target.join(entry.file_name())).map_err(io_error)?;
+        sync_directory(source)?;
+        sync_directory(target)?;
+    }
+    Ok(())
+}
+
+fn sync_tree(root: &Path) -> Result<(), AdapterError> {
+    let mut directories = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        directories.push(directory.clone());
+        for entry in fs::read_dir(&directory).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(io_error)?;
+            if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+                pending.push(entry.path());
+            } else if metadata.file_type().is_file() {
+                File::open(entry.path())
+                    .and_then(|file| file.sync_all())
+                    .map_err(io_error)?;
+            }
+        }
+    }
+    for directory in directories.into_iter().rev() {
+        sync_directory(&directory)?;
+    }
+    Ok(())
+}
+
+fn remove_directory_contents(path: &Path) -> Result<(), AdapterError> {
+    for entry in fs::read_dir(path).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(io_error)?;
+        if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+            fs::remove_dir_all(entry.path()).map_err(io_error)?;
+        } else {
+            fs::remove_file(entry.path()).map_err(io_error)?;
+        }
+    }
+    sync_directory(path)
+}
+
+#[cfg(target_os = "android")]
+fn bind_base_aliases(
+    canonical_ce: &Path,
+    canonical_de: &Path,
+    alias_ce: &Path,
+    alias_de: &Path,
+) -> Result<(), AdapterError> {
+    for (source, target) in [(canonical_ce, alias_ce), (canonical_de, alias_de)] {
+        let status = Command::new("/system/bin/mount")
+            .arg("--bind")
+            .arg(source)
+            .arg(target)
+            .status()
+            .map_err(io_error)?;
+        if !status.success() {
+            let _cleanup = unmount_base_aliases(alias_ce, alias_de);
+            return Err(AdapterError::new(
+                "could not bind the Base maintenance alias",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "android"))]
+fn bind_base_aliases(
+    _canonical_ce: &Path,
+    _canonical_de: &Path,
+    _alias_ce: &Path,
+    _alias_de: &Path,
+) -> Result<(), AdapterError> {
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn unmount_base_aliases(alias_ce: &Path, alias_de: &Path) -> Result<(), AdapterError> {
+    let (ce_mounted, de_mounted) = base_alias_mount_presence(alias_ce, alias_de)?;
+    let mut command_error = None;
+    for (target, mounted) in [(alias_ce, ce_mounted), (alias_de, de_mounted)] {
+        if !mounted {
+            continue;
+        }
+        let status = match Command::new("/system/bin/umount").arg(target).status() {
+            Ok(status) => status,
+            Err(error) => {
+                if command_error.is_none() {
+                    command_error = Some(io_error(error));
+                }
+                continue;
+            }
+        };
+        if !status.success() && command_error.is_none() {
+            command_error = Some(AdapterError::new(
+                "could not unmount the Base maintenance alias",
+            ));
+        }
+    }
+    let (ce_remaining, de_remaining) = base_alias_mount_presence(alias_ce, alias_de)?;
+    if ce_remaining || de_remaining {
+        Err(command_error.unwrap_or_else(|| {
+            AdapterError::state_conflict("Base maintenance alias remained mounted")
+        }))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn unmount_base_aliases(_alias_ce: &Path, _alias_de: &Path) -> Result<(), AdapterError> {
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn base_alias_mount_presence(
+    alias_ce: &Path,
+    alias_de: &Path,
+) -> Result<(bool, bool), AdapterError> {
+    path_mount_presence(alias_ce, alias_de)
+}
+
+#[cfg(target_os = "android")]
+fn path_mount_presence(first: &Path, second: &Path) -> Result<(bool, bool), AdapterError> {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").map_err(io_error)?;
+    Ok((
+        mountinfo_contains_path(&mountinfo, first),
+        mountinfo_contains_path(&mountinfo, second),
+    ))
+}
+
+#[cfg(any(target_os = "android", test))]
+fn mountinfo_contains_path(mountinfo: &str, path: &Path) -> bool {
+    let Some(expected) = path.to_str() else {
+        return false;
+    };
+    mountinfo.lines().any(|line| {
+        line.split_once(" - ").is_some() && line.split_whitespace().nth(4) == Some(expected)
+    })
+}
+
+#[cfg(any(target_os = "android", test))]
+fn paired_alias_mount_state(ce_mounted: bool, de_mounted: bool) -> Result<bool, AdapterError> {
+    if ce_mounted == de_mounted {
+        Ok(ce_mounted)
+    } else {
+        Err(AdapterError::state_conflict(
+            "Base maintenance alias mount pair is inconsistent",
+        ))
+    }
 }
 
 fn populate_domain(source: &Path, target: &Path, seed: SeedMode) -> Result<(), AdapterError> {
@@ -532,6 +1371,10 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), AdapterError> {
             copy_tree(&entry.path(), &destination)?;
         } else if file_type.is_file() {
             fs::copy(entry.path(), &destination).map_err(io_error)?;
+        } else if file_type.is_symlink() {
+            symlink(fs::read_link(entry.path()).map_err(io_error)?, &destination)
+                .map_err(io_error)?;
+            continue;
         } else {
             return Err(AdapterError::new("unsupported base artifact"));
         }
@@ -626,6 +1469,26 @@ mod tests {
             DirectoryOwner::new(metadata.uid(), metadata.gid()),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn base_alias_mount_detection_requires_an_exact_ce_de_pair() {
+        let mountinfo = concat!(
+            "41 30 0:35 / /data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
+            "42 30 0:35 / /data/misc_de/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
+        );
+        assert!(mountinfo_contains_path(
+            mountinfo,
+            Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg"),
+        ));
+        assert!(!mountinfo_contains_path(
+            mountinfo,
+            Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance-base/token"),
+        ));
+        assert!(paired_alias_mount_state(true, true).unwrap());
+        assert!(!paired_alias_mount_state(false, false).unwrap());
+        assert!(paired_alias_mount_state(true, false).is_err());
+        assert!(paired_alias_mount_state(false, true).is_err());
     }
 
     #[test]
@@ -929,6 +1792,163 @@ mod tests {
 
             assert!(result.is_err(), "kind: {kind}");
         }
+    }
+
+    #[test]
+    fn restore_staging_replaces_and_rolls_back_a_ce_de_slot_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        fs::create_dir_all(canonical_ce_root.join(package.as_str())).unwrap();
+        fs::create_dir_all(canonical_de_root.join(package.as_str())).unwrap();
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let ce_slots = root.path().join("ce/uclone-slices-v2/slots");
+        let de_slots = root.path().join("de/uclone-slices-v2/slots");
+        let mut storage =
+            open_slot_storage(&ce_slots, &de_slots, &canonical_ce_root, &canonical_de_root);
+        let mut aggregate = PackageAggregate::enrolled(package.clone(), identity());
+        let slot = aggregate
+            .reserve_slot(DisplayName::new("Work").unwrap())
+            .unwrap();
+        storage
+            .materialize(&package, &slot, SeedMode::Blank)
+            .unwrap();
+        let (target_ce, target_de) = storage.slot_paths(&package, slot.id());
+        fs::write(target_ce.join("old-ce-a"), b"old-a").unwrap();
+        fs::write(target_ce.join("old-ce-b"), b"old-b").unwrap();
+        fs::write(target_de.join("old-de-a"), b"old-a").unwrap();
+        fs::write(target_de.join("old-de-b"), b"old-b").unwrap();
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let transfer = TransferId::new("transfer-1").unwrap();
+        let account = ArchiveAccountId::new("account-1").unwrap();
+        let staging = storage
+            .prepare_restore_staging(&package, &token, &transfer, std::slice::from_ref(&account))
+            .unwrap();
+        fs::write(Path::new(&staging[0].ce_path).join("new-ce"), b"new").unwrap();
+        fs::write(Path::new(&staging[0].de_path).join("new-de"), b"new").unwrap();
+
+        storage
+            .replace_account(&package, &token, &transfer, &account, slot.id())
+            .unwrap();
+
+        assert_eq!(fs::read(target_ce.join("new-ce")).unwrap(), b"new");
+        assert_eq!(fs::read(target_de.join("new-de")).unwrap(), b"new");
+        assert!(!target_ce.join("old-ce-a").exists());
+        assert!(!target_de.join("old-de-a").exists());
+
+        let (rollback_ce, rollback_de) =
+            storage.rollback_paths(&package, &token, slot.id()).unwrap();
+        remove_tree_if_exists(&target_ce).unwrap();
+        remove_tree_if_exists(&target_de).unwrap();
+        fs::write(rollback_ce.join("restore-started"), b"").unwrap();
+        fs::write(rollback_de.join("restore-started"), b"").unwrap();
+        fs::rename(rollback_de.join("old"), &target_de).unwrap();
+
+        storage
+            .rollback_account(&package, &token, slot.id())
+            .unwrap();
+
+        assert_eq!(fs::read(target_ce.join("old-ce-a")).unwrap(), b"old-a");
+        assert_eq!(fs::read(target_ce.join("old-ce-b")).unwrap(), b"old-b");
+        assert_eq!(fs::read(target_de.join("old-de-a")).unwrap(), b"old-a");
+        assert_eq!(fs::read(target_de.join("old-de-b")).unwrap(), b"old-b");
+        assert!(!target_ce.join("new-ce").exists());
+        assert!(!target_de.join("new-de").exists());
+    }
+
+    #[test]
+    fn base_rollback_retries_from_a_complete_old_copy_after_partial_progress() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        let target_ce = canonical_ce_root.join(package.as_str());
+        let target_de = canonical_de_root.join(package.as_str());
+        fs::create_dir_all(&target_ce).unwrap();
+        fs::create_dir_all(&target_de).unwrap();
+        for name in ["old-ce-a", "old-ce-b"] {
+            fs::write(target_ce.join(name), name.as_bytes()).unwrap();
+        }
+        for name in ["old-de-a", "old-de-b"] {
+            fs::write(target_de.join(name), name.as_bytes()).unwrap();
+        }
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let mut storage = open_slot_storage(
+            &root.path().join("ce/uclone-slices-v2/slots"),
+            &root.path().join("de/uclone-slices-v2/slots"),
+            &canonical_ce_root,
+            &canonical_de_root,
+        );
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let transfer = TransferId::new("transfer-base").unwrap();
+        let account = ArchiveAccountId::new("account-base").unwrap();
+        let staging = storage
+            .prepare_restore_staging(&package, &token, &transfer, std::slice::from_ref(&account))
+            .unwrap();
+        fs::write(Path::new(&staging[0].ce_path).join("new-ce"), b"new").unwrap();
+        fs::write(Path::new(&staging[0].de_path).join("new-de"), b"new").unwrap();
+        storage
+            .replace_account(&package, &token, &transfer, &account, &SlotId::base())
+            .unwrap();
+
+        let (rollback_ce, rollback_de) = storage
+            .rollback_paths(&package, &token, &SlotId::base())
+            .unwrap();
+        remove_directory_contents(&target_ce).unwrap();
+        remove_directory_contents(&target_de).unwrap();
+        fs::write(rollback_ce.join("restore-started"), b"").unwrap();
+        fs::write(rollback_de.join("restore-started"), b"").unwrap();
+        fs::rename(rollback_ce.join("old/old-ce-a"), target_ce.join("old-ce-a")).unwrap();
+        fs::rename(rollback_de.join("old/old-de-a"), target_de.join("old-de-a")).unwrap();
+
+        storage
+            .rollback_account(&package, &token, &SlotId::base())
+            .unwrap();
+
+        assert_eq!(fs::read(target_ce.join("old-ce-a")).unwrap(), b"old-ce-a");
+        assert_eq!(fs::read(target_ce.join("old-ce-b")).unwrap(), b"old-ce-b");
+        assert_eq!(fs::read(target_de.join("old-de-a")).unwrap(), b"old-de-a");
+        assert_eq!(fs::read(target_de.join("old-de-b")).unwrap(), b"old-de-b");
+        assert!(!target_ce.join("new-ce").exists());
+        assert!(!target_de.join("new-de").exists());
+    }
+
+    #[test]
+    fn restore_staging_rejects_an_escaping_symlink_before_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        fs::create_dir_all(canonical_ce_root.join(package.as_str())).unwrap();
+        fs::create_dir_all(canonical_de_root.join(package.as_str())).unwrap();
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let mut storage = open_slot_storage(
+            &root.path().join("ce/uclone-slices-v2/slots"),
+            &root.path().join("de/uclone-slices-v2/slots"),
+            &canonical_ce_root,
+            &canonical_de_root,
+        );
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let transfer = TransferId::new("transfer-1").unwrap();
+        let account = ArchiveAccountId::new("account-1").unwrap();
+        let staging = storage
+            .prepare_restore_staging(&package, &token, &transfer, std::slice::from_ref(&account))
+            .unwrap();
+        symlink(
+            "../../../../outside",
+            Path::new(&staging[0].ce_path).join("escape"),
+        )
+        .unwrap();
+
+        assert!(
+            storage
+                .validate_staged_account(&package, &token, &transfer, &account)
+                .is_err()
+        );
     }
 
     #[test]

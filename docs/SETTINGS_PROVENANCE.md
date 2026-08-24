@@ -20,7 +20,7 @@
 
 | 设置 | 来源 | 运行验证 |
 |---|---|---|
-| 十一个协议操作、五个错误码 | 0.1.7 增加 `rebind_package` 与 `identity_mismatch`；每项由 Rust flow、共享 fixture、Kotlin 消费和 UI 入口覆盖 | `cargo test`、`:manager-app:testDebugUnitTest` |
+| 十八个协议操作、十一个错误码 | 0.2.0 在 0.1.9 基线上增加七个账号 I/O 操作，以及 `io_busy` 和五个归档/恢复错误；每项由 Rust flow、共享 fixture、Kotlin 消费和 UI 入口覆盖 | `cargo test`、`:manager-app:testDebugUnitTest` |
 | `enroll` 的可选 `reset:true` | 仅为识别旧 0.1.6 Manager 请求而保留解码兼容；0.1.7 Runtime 始终返回 `invalid_request`，防止身份冲突配置被旧恢复入口删除 | `enroll_reset` 拒绝 fixture 与零删除 Runtime 测试 |
 | `binding-v1.json` 签名 sidecar | Aggregate 格式必须与 0.1.6 双向兼容；单签名保存 Android 验证的轮换谱系，多签名保存排序后的完整 SHA-256 集合 | 谱系升降级、多签名顺序、非法摘要和旧 Aggregate 往返测试 |
 | `rebind-intent.json` 与 `pre-0.1.7` 备份 | 重绑必须可从停止、切 Base、刷新身份和恢复活动槽的中断点继续；首次迁移只备份 Aggregate 与 CE/DE 槽对清单，不复制账号数据 | Runtime 中断恢复与 filesystem adapter 测试 |
@@ -47,7 +47,15 @@
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.1.9`、versionCode `10` | 功能基线保持 0.1.7，只交付五项安全修复，不恢复桌面 Hook，不修改 Aggregate schema | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
+| 版本 `0.2.0`、versionCode `11` | 在 0.1.9 安全基线上增加账号备份/恢复；不恢复桌面 Hook，不修改 Aggregate schema | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
+| `.ucsbackup` magic `UCSBKP01`、format v1、manifest/control 4 MiB、256 账号、4096 字节路径、1,000,000 条目、1 TiB 逻辑数据 | 0.2.0 首个归档格式的固定兼容与资源安全边界；4 MiB manifest 是更紧的实际条目边界，其余限制用于在解析或恶意输入阶段提前拒绝 | Rust 归档往返、超限和恶意路径测试 |
+| zstd level 3 | zstd crate 的默认压缩级别，作为首版格式实现选择；不作为数据正确性或时限门槛 | 明文/加密归档往返测试 |
+| 默认开启 age passphrase 加密 | 账号归档可能包含凭据；默认保护、允许用户明确选择未加密。密码仅走内存和 helper stdin | Helper 协议测试、Manager UI/lint |
+| 顶层排除 `cache`、`code_cache` | 产品范围是账号状态而非可再生成缓存；APK、OBB、媒体和外部存储本来不位于被授予的 CE/DE 根 | 归档排除测试与恢复往返测试 |
+| 恢复空间预检为 manifest 逻辑大小加 64 MiB | manifest 逻辑大小覆盖暂存数据；64 MiB 是控制文件、目录和压缩/解压运行余量。Base 旧数据副本仍由 Runtime 在删除前完整写入并在 ENOSPC 时安全失败 | Manager service 测试边界、Runtime Base 回滚测试、真机大数据验收 |
+| Helper 路径 `/data/adb/uclone-slices-v2/manager-helper/<version>/uclone_archive`、`root:root 0700` | Manager APK 内嵌同构建 helper，运行前校验 SHA-256；固定版本目录避免混用旧 helper | Release assemble、APK 内容和 helper checksum 门禁 |
+| Helper 在 `/system/bin/nsenter -t 1 -m` 中执行 | Base/当前槽的稳定源视图由 Runtime 在 init mount namespace 建立；Manager 自身的挂载空间不能作为账号源真相 | 固定命令检查、真机 Base/活动槽备份验收 |
+| Base alias 成对挂载检测与 `restore-started` 回滚标记 | 正常事务通过 alias 修改未暴露的真实 Base；重启后 bind mount 消失，必须改用未挂载的真实 Base。旧副本逐项移回时用持久标记保证再次掉电可继续且不删除已恢复部分 | mountinfo 精确路径测试、Base/槽部分回滚重试测试、真机中断恢复 |
 | MIUIX `0.7.2` | 用户明确指定 MIUIX 设计语言；该版本使用 Kotlin 2.2.x，能够保持项目既有 Kotlin 2.2.0 工具链，避免为 UI 升级引入构建系统迁移 | Manager compile、unit、lint、assemble 与真机界面验收 |
 | Manager `windowSoftInputMode=adjustResize` | 真机 `dumpsys window` 证实默认 `adjustPan` 会与 MIUIX `SuperDialog` 自带的 `imePadding()` 叠加，导致删除确认弹窗在键盘出现时被双重上移 | 输入“删除”时的真机窗口属性与弹窗位置验收 |
 | Manager Release 证书 `3a98013499c588855ac936d884d9e55497f72827c91ca01e50cf9ca4fc290648` | 2026-08-23 从目标机当前可覆盖安装的 0.1.8 Manager 只读提取；CI 必须使用固定 Release keystore | `verify-release-signing.sh`、`apksigner verify --print-certs` 与 `adb install -r` |

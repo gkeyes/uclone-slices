@@ -25,6 +25,7 @@ enum class ManagerDestination {
     Spaces,
     AddApp,
     PackageDetails,
+    BackupRestore,
     RuntimeStatus,
 }
 
@@ -108,6 +109,7 @@ data class UnenrollAppUi(
 
 data class SlotsUiState(
     val destination: ManagerDestination = ManagerDestination.Spaces,
+    val backupReturnDestination: ManagerDestination = ManagerDestination.Spaces,
     val runtimeReady: Boolean = false,
     val runtimeCompatible: Boolean = false,
     val buildId: String = "",
@@ -136,6 +138,10 @@ sealed interface UiIntent {
     data object Refresh : UiIntent
     data object OpenAddApps : UiIntent
     data object OpenRuntimeStatus : UiIntent
+    data class OpenBackupRestore(
+        val packageName: String? = null,
+        val slotId: String? = null,
+    ) : UiIntent
     data class OpenPackage(val packageName: String) : UiIntent
     data class SetConfiguredAccountsExpanded(val expanded: Boolean) : UiIntent
     data class SetLaunchAfterReboot(
@@ -193,6 +199,17 @@ internal class SlotsViewModel(
             UiIntent.Refresh -> runOperation(OperationUiState.Refreshing) { refresh() }
             UiIntent.OpenAddApps -> navigateTo(ManagerDestination.AddApp)
             UiIntent.OpenRuntimeStatus -> navigateTo(ManagerDestination.RuntimeStatus)
+            is UiIntent.OpenBackupRestore -> {
+                if (!state.value.busy) {
+                    mutableState.update {
+                        it.copy(
+                            backupReturnDestination = it.destination,
+                            destination = ManagerDestination.BackupRestore,
+                            notice = null,
+                        )
+                    }
+                }
+            }
             is UiIntent.OpenPackage -> openPackage(intent.packageName)
             is UiIntent.SetConfiguredAccountsExpanded -> {
                 uiPreferences.configuredAccountsExpanded = intent.expanded
@@ -274,6 +291,10 @@ internal class SlotsViewModel(
                 ManagerDestination.AddApp,
                 ManagerDestination.RuntimeStatus,
                 -> current.copy(destination = ManagerDestination.Spaces, notice = null)
+                ManagerDestination.BackupRestore -> current.copy(
+                    destination = current.backupReturnDestination,
+                    notice = null,
+                )
                 ManagerDestination.PackageDetails -> current.copy(
                     destination = ManagerDestination.Spaces,
                     selected = null,
@@ -738,8 +759,12 @@ internal class SlotsViewModel(
             is RuntimeReply.Error -> showError(probe.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
             RuntimeReply.Ack,
+            is RuntimeReply.AccountIoLeaseReply,
+            is RuntimeReply.AccountIoStatuses,
             is RuntimeReply.Package,
             is RuntimeReply.Packages,
+            is RuntimeReply.RestoreBatch,
+            is RuntimeReply.RestoreItem,
             -> showError(ErrorCode.OperationFailed)
         }
     }
@@ -782,8 +807,12 @@ internal class SlotsViewModel(
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
             RuntimeReply.Ack,
+            is RuntimeReply.AccountIoLeaseReply,
+            is RuntimeReply.AccountIoStatuses,
             is RuntimeReply.Capabilities,
             is RuntimeReply.Package,
+            is RuntimeReply.RestoreBatch,
+            is RuntimeReply.RestoreItem,
             -> showError(ErrorCode.OperationFailed)
         }
     }
@@ -886,8 +915,12 @@ internal class SlotsViewModel(
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
             RuntimeReply.Ack,
+            is RuntimeReply.AccountIoLeaseReply,
+            is RuntimeReply.AccountIoStatuses,
             is RuntimeReply.Capabilities,
             is RuntimeReply.Packages,
+            is RuntimeReply.RestoreBatch,
+            is RuntimeReply.RestoreItem,
             -> showError(ErrorCode.OperationFailed)
         }
     }
@@ -919,8 +952,12 @@ internal class SlotsViewModel(
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
             RuntimeReply.Ack,
+            is RuntimeReply.AccountIoLeaseReply,
+            is RuntimeReply.AccountIoStatuses,
             is RuntimeReply.Capabilities,
             is RuntimeReply.Packages,
+            is RuntimeReply.RestoreBatch,
+            is RuntimeReply.RestoreItem,
             -> showError(ErrorCode.OperationFailed)
         }
     }
@@ -954,8 +991,12 @@ internal class SlotsViewModel(
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
             is RuntimeReply.Capabilities,
+            is RuntimeReply.AccountIoLeaseReply,
+            is RuntimeReply.AccountIoStatuses,
             is RuntimeReply.Package,
             is RuntimeReply.Packages,
+            is RuntimeReply.RestoreBatch,
+            is RuntimeReply.RestoreItem,
             -> showError(ErrorCode.OperationFailed)
         }
     }
@@ -967,6 +1008,13 @@ internal class SlotsViewModel(
             ErrorCode.StateConflict -> UiNotice.StateChanged
             ErrorCode.IdentityMismatch -> UiNotice.IdentityProtected
             ErrorCode.OperationFailed -> UiNotice.OperationFailed
+            ErrorCode.IoBusy -> UiNotice.StateChanged
+            ErrorCode.BackupInvalid,
+            ErrorCode.BackupPasswordRequired,
+            ErrorCode.BackupAuthFailed,
+            ErrorCode.InsufficientStorage,
+            ErrorCode.BackupIncompatible,
+            -> UiNotice.OperationFailed
         }
         mutableState.update { it.copy(notice = notice) }
     }

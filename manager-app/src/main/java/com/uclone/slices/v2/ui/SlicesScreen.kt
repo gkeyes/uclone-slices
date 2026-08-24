@@ -39,6 +39,9 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import com.uclone.slices.v2.R
+import com.uclone.slices.v2.backup.BackupRestoreScreen
+import com.uclone.slices.v2.backup.BackupRestoreUiState
+import com.uclone.slices.v2.backup.BackupUiIntent
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator as MiuixCircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.extra.SuperDialog
@@ -47,10 +50,15 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 internal fun SlicesScreen(
     state: SlotsUiState,
+    backupState: BackupRestoreUiState,
     onIntent: (UiIntent) -> Unit,
+    onBackupIntent: (BackupUiIntent) -> Unit,
+    suggestedBackupName: () -> String,
 ) {
     BackHandler(
-        enabled = state.destination != ManagerDestination.Spaces && !state.busy,
+        enabled = state.destination != ManagerDestination.Spaces &&
+            !state.busy &&
+            !backupState.running,
     ) {
         onIntent(UiIntent.NavigateBack)
     }
@@ -109,6 +117,14 @@ internal fun SlicesScreen(
                         onIntent = onIntent,
                     )
                 }
+                ManagerDestination.BackupRestore -> BackupRestoreScreen(
+                    state = backupState,
+                    slotsState = state,
+                    contentPadding = contentPadding,
+                    onBack = { onIntent(UiIntent.NavigateBack) },
+                    onIntent = onBackupIntent,
+                    suggestedBackupName = suggestedBackupName,
+                )
                 ManagerDestination.RuntimeStatus -> RuntimeStatusScreen(
                     state = state,
                     contentPadding = contentPadding,

@@ -89,6 +89,16 @@ internal fun AppListScreen(
                 icon = painterResource(R.drawable.ic_add),
             )
         }
+        item {
+            SlicesActionButton(
+                text = stringResource(R.string.backup_restore_action),
+                onClick = { onIntent(UiIntent.OpenBackupRestore()) },
+                enabled = !state.busy && state.operationsAllowed,
+                modifier = Modifier.fillMaxWidth(),
+                primary = false,
+                icon = painterResource(R.drawable.ic_backup),
+            )
+        }
 
         if (!state.initialLoadComplete) {
             item { LoadingAppsMessage() }
@@ -156,6 +166,9 @@ internal fun AppListScreen(
                         onSetLaunchAfterReboot = { packageName, enabled ->
                             onIntent(UiIntent.SetLaunchAfterReboot(packageName, enabled))
                         },
+                        onBackup = {
+                            onIntent(UiIntent.OpenBackupRestore(it, null))
+                        },
                         onUnenroll = { onIntent(UiIntent.RequestUnenrollApp(it)) },
                     )
                 }
@@ -214,6 +227,7 @@ private fun ManagedAppsCard(
     onOpen: (String) -> Unit,
     onActivate: (String, String) -> Unit,
     onSetLaunchAfterReboot: (String, Boolean) -> Unit,
+    onBackup: (String) -> Unit,
     onUnenroll: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -358,6 +372,21 @@ private fun ManagedAppsCard(
                                                     app.packageName,
                                                     !snapshot.launchAfterReboot,
                                                 )
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    stringResource(
+                                                        R.string.backup_all_accounts_action,
+                                                    ),
+                                                )
+                                            },
+                                            enabled = operationsEnabled &&
+                                                snapshot.bindingState == BindingState.Ready,
+                                            onClick = {
+                                                menuExpanded = false
+                                                onBackup(app.packageName)
                                             },
                                         )
                                         DropdownMenuItem(

@@ -15,19 +15,27 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 LINKER="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin/${TARGET}${API}-clang"
+CXX="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin/${TARGET}${API}-clang++"
+AR="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin/llvm-ar"
 STRIP="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin/llvm-strip"
 [ -x "$LINKER" ]
+[ -x "$CXX" ]
+[ -x "$AR" ]
 [ -x "$STRIP" ]
 
 TOOLCHAIN=$(rustup show active-toolchain | awk '{print $1}')
 rustup target add "$TARGET" --toolchain "$TOOLCHAIN"
-CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER" \
+CC_aarch64_linux_android="$LINKER" \
+    CXX_aarch64_linux_android="$CXX" \
+    AR_aarch64_linux_android="$AR" \
+    CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$LINKER" \
     rustup run "$TOOLCHAIN" cargo build \
     --manifest-path "$ROOT/runtime/Cargo.toml" \
     --release \
     --locked \
     --target "$TARGET" \
-    --bins
+    --bin ucloned \
+    --bin slotctl
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT

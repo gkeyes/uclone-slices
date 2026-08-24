@@ -1,9 +1,17 @@
+use std::collections::BTreeSet;
+use std::fs::File;
+use std::io::Read as _;
+
 use thiserror::Error;
 
 use crate::model::{
-    BindingState, Capabilities, DisplayName, ModelError, ObservedView, PackageAggregate,
-    PackageBinding, PackageInspection, PackageName, PackageSnapshot, RebindIntent, SeedMode,
-    SigningIdentity, SlotId,
+    AccountIoIntent, AccountIoKind, AccountIoLease, AccountIoPhase, AccountIoScope,
+    AccountIoSource, AccountIoStatus, AccountIoToken, ArchiveAccountId, ArchiveScope,
+    ArchivedAccountKind, ArchivedState, BindingState, Capabilities, DisplayName, ModelError,
+    ObservedView, PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection,
+    PackageName, PackageSnapshot, RebindIntent, ResolvedRestoreMapping, RestoreBatchResult,
+    RestoreItemResult, RestoreItemState, RestoreMapping, RestoreTarget, SeedMode, SigningIdentity,
+    SlotId, TransferId,
 };
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
@@ -19,6 +27,18 @@ pub enum RuntimeError {
     IdentityMismatch,
     #[error("runtime operation failed")]
     OperationFailed,
+    #[error("package account I/O is busy")]
+    IoBusy,
+    #[error("backup is invalid")]
+    BackupInvalid,
+    #[error("backup password is required")]
+    BackupPasswordRequired,
+    #[error("backup authentication failed")]
+    BackupAuthFailed,
+    #[error("insufficient storage")]
+    InsufficientStorage,
+    #[error("backup is incompatible")]
+    BackupIncompatible,
 }
 
 #[derive(Debug)]
@@ -114,6 +134,7 @@ where
     }
 
     pub fn reconcile_boot(&mut self) -> Result<(), RuntimeError> {
+        self.recover_account_io_intents()?;
         let names = self.packages.list().map_err(adapter_error)?;
         for package in names {
             if let Err(error) = self.package_snapshot_with_context(&package, ReadyLoadContext::Boot)
@@ -126,12 +147,489 @@ where
         Ok(())
     }
 
+    pub fn begin_backup_io(
+        &mut self,
+        package: &PackageName,
+        scope: AccountIoScope,
+    ) -> Result<AccountIoLease, RuntimeError> {
+        self.ensure_no_account_io(package)?;
+        let (aggregate, inspection) = self.load_ready(package)?;
+        let snapshot = aggregate.snapshot().map_err(model_error)?;
+        let requested_slots = match &scope {
+            AccountIoScope::Account { slot } => {
+                if !aggregate.has_slot(slot) {
+                    return Err(RuntimeError::NotFound);
+                }
+                vec![slot.clone()]
+            }
+            AccountIoScope::AllAccounts => {
+                snapshot.slots.iter().map(|slot| slot.id.clone()).collect()
+            }
+        };
+        for slot in &requested_slots {
+            if !slot.is_base() {
+                self.slots
+                    .require_complete_pair(package, slot)
+                    .map_err(|error| {
+                        logged_conflict("begin_backup_io", package, "verify_slot_pair", error)
+                    })?;
+            }
+        }
+        let maintenance_active = matches!(scope, AccountIoScope::AllAccounts)
+            || requested_slots
+                .iter()
+                .any(|slot| slot.is_base() || slot == aggregate.active_slot());
+        let previous_enabled_state = if maintenance_active {
+            Some(self.android.read_enabled_state(package).map_err(|error| {
+                logged_adapter("begin_backup_io", package, "read_enabled_state", error)
+            })?)
+        } else {
+            None
+        };
+        let token = generate_account_io_token()?;
+        let mut intent = AccountIoIntent {
+            schema_version: 1,
+            io_token: token.clone(),
+            package: package.clone(),
+            kind: AccountIoKind::Backup,
+            scope: Some(scope),
+            transfer_id: None,
+            mappings: Vec::new(),
+            archived_state: None,
+            previous_active_slot: aggregate.active_slot().clone(),
+            previous_launch_after_reboot: aggregate.launch_after_reboot(),
+            previous_was_running: inspection.was_running,
+            previous_enabled_state,
+            maintenance_active,
+            phase: AccountIoPhase::Preparing,
+            completed: Vec::new(),
+        };
+        self.packages
+            .save_account_io_intent(&intent)
+            .map_err(|error| logged_adapter("begin_backup_io", package, "save_intent", error))?;
+
+        if maintenance_active {
+            if let Err(error) = self
+                .android
+                .block_launch(package)
+                .map_err(|error| logged_adapter("begin_backup_io", package, "block_launch", error))
+            {
+                let _recovery = self.finish_backup_intent(&intent, true);
+                return Err(error);
+            }
+            if let Err(error) = self.stop_and_apply_view(package, &SlotId::base()) {
+                let _recovery = self.finish_backup_intent(&intent, true);
+                return Err(error);
+            }
+        }
+
+        let sources = (|| {
+            let mut sources = Vec::with_capacity(requested_slots.len());
+            for slot in requested_slots {
+                let (ce_path, de_path) =
+                    self.slots.account_paths(package, &slot).map_err(|error| {
+                        logged_adapter("begin_backup_io", package, "resolve_source", error)
+                    })?;
+                let name = if slot.is_base() {
+                    "系统原始空间".to_owned()
+                } else {
+                    snapshot
+                        .slots
+                        .iter()
+                        .find(|candidate| candidate.id == slot)
+                        .map(|candidate| candidate.name.clone())
+                        .ok_or(RuntimeError::StateConflict)?
+                };
+                sources.push(AccountIoSource {
+                    archive_account_id: ArchiveAccountId::new(slot.as_str().to_owned())
+                        .map_err(model_error)?,
+                    slot,
+                    name,
+                    ce_path,
+                    de_path,
+                });
+            }
+            Ok::<_, RuntimeError>(sources)
+        })();
+        let sources = match sources {
+            Ok(sources) => sources,
+            Err(error) => {
+                let _recovery = self.finish_backup_intent(&intent, true);
+                return Err(error);
+            }
+        };
+        intent.phase = AccountIoPhase::Ready;
+        if let Err(error) = self.packages.save_account_io_intent(&intent) {
+            let error = logged_adapter("begin_backup_io", package, "save_ready", error);
+            let _recovery = self.finish_backup_intent(&intent, true);
+            return Err(error);
+        }
+        Ok(AccountIoLease {
+            io_token: token,
+            package: package.clone(),
+            kind: AccountIoKind::Backup,
+            sources,
+            staging: Vec::new(),
+        })
+    }
+
+    pub fn finish_backup_io(&mut self, token: &AccountIoToken) -> Result<(), RuntimeError> {
+        let intent = self.account_io_intent_by_token(token)?;
+        if intent.kind != AccountIoKind::Backup {
+            return Err(RuntimeError::StateConflict);
+        }
+        self.finish_backup_intent(&intent, true)
+    }
+
+    pub fn begin_restore_io(
+        &mut self,
+        package: &PackageName,
+        transfer_id: TransferId,
+        mappings: Vec<RestoreMapping>,
+        archived_state: ArchivedState,
+    ) -> Result<AccountIoLease, RuntimeError> {
+        self.ensure_no_account_io(package)?;
+        if mappings.is_empty() || mappings.len() > 256 {
+            return Err(RuntimeError::InvalidRequest);
+        }
+        let (mut aggregate, inspection) = self.load_ready(package)?;
+        let snapshot = aggregate.snapshot().map_err(model_error)?;
+        validate_restore_mapping_rules(&mappings, &archived_state)?;
+        let mut resolved = Vec::with_capacity(mappings.len());
+        let mut aggregate_changed = false;
+        for mapping in mappings {
+            let (target_slot, create_slot, previous_name) = match &mapping.target {
+                RestoreTarget::Existing { slot } => {
+                    if !aggregate.has_slot(slot) {
+                        return Err(RuntimeError::NotFound);
+                    }
+                    let previous_name = snapshot
+                        .slots
+                        .iter()
+                        .find(|candidate| &candidate.id == slot)
+                        .and_then(|candidate| {
+                            (!slot.is_base())
+                                .then(|| DisplayName::new(candidate.name.clone()).ok())
+                                .flatten()
+                        });
+                    (slot.clone(), false, previous_name)
+                }
+                RestoreTarget::New => {
+                    let target = aggregate
+                        .reserve_restored_slot(mapping.name.clone())
+                        .map_err(model_error)?;
+                    aggregate_changed = true;
+                    (target, true, None)
+                }
+            };
+            resolved.push(ResolvedRestoreMapping {
+                archive_account_id: mapping.archive_account_id,
+                archive_kind: mapping.archive_kind,
+                name: mapping.name,
+                previous_name,
+                target_slot,
+                create_slot,
+            });
+        }
+        let token = generate_account_io_token()?;
+        let intent = AccountIoIntent {
+            schema_version: 1,
+            io_token: token.clone(),
+            package: package.clone(),
+            kind: AccountIoKind::Restore,
+            scope: None,
+            transfer_id: Some(transfer_id.clone()),
+            mappings: resolved,
+            archived_state: Some(archived_state),
+            previous_active_slot: aggregate.active_slot().clone(),
+            previous_launch_after_reboot: aggregate.launch_after_reboot(),
+            previous_was_running: inspection.was_running,
+            previous_enabled_state: None,
+            maintenance_active: false,
+            phase: AccountIoPhase::Ready,
+            completed: Vec::new(),
+        };
+        self.packages
+            .save_account_io_intent(&intent)
+            .map_err(|error| logged_adapter("begin_restore_io", package, "save_intent", error))?;
+        let account_ids = intent
+            .mappings
+            .iter()
+            .map(|mapping| mapping.archive_account_id.clone())
+            .collect::<Vec<_>>();
+        let staging =
+            match self
+                .slots
+                .prepare_restore_staging(package, &token, &transfer_id, &account_ids)
+            {
+                Ok(staging) => staging,
+                Err(error) => {
+                    let _cleanup = self.slots.cleanup_account_io(package, &token);
+                    let _clear = self.packages.clear_account_io_intent(package);
+                    return Err(logged_adapter(
+                        "begin_restore_io",
+                        package,
+                        "prepare_staging",
+                        error,
+                    ));
+                }
+            };
+        if aggregate_changed && let Err(error) = self.packages.save(&aggregate) {
+            let _cleanup = self.slots.cleanup_account_io(package, &token);
+            let _clear = self.packages.clear_account_io_intent(package);
+            return Err(logged_adapter(
+                "begin_restore_io",
+                package,
+                "reserve_target_slots",
+                error,
+            ));
+        }
+        Ok(AccountIoLease {
+            io_token: token,
+            package: package.clone(),
+            kind: AccountIoKind::Restore,
+            sources: Vec::new(),
+            staging,
+        })
+    }
+
+    pub fn commit_restore_account(
+        &mut self,
+        token: &AccountIoToken,
+        archive_account_id: &ArchiveAccountId,
+    ) -> Result<RestoreItemResult, RuntimeError> {
+        let mut intent = self.account_io_intent_by_token(token)?;
+        if intent.kind != AccountIoKind::Restore {
+            return Err(RuntimeError::StateConflict);
+        }
+        if let Some(result) = intent
+            .completed
+            .iter()
+            .find(|result| &result.archive_account_id == archive_account_id)
+        {
+            return Ok(result.clone());
+        }
+        let mapping = intent
+            .mappings
+            .iter()
+            .find(|mapping| &mapping.archive_account_id == archive_account_id)
+            .cloned()
+            .ok_or(RuntimeError::NotFound)?;
+        let package = intent.package.clone();
+        let transfer_id = intent
+            .transfer_id
+            .clone()
+            .ok_or(RuntimeError::StateConflict)?;
+        self.slots
+            .validate_staged_account(&package, token, &transfer_id, archive_account_id)
+            .map_err(|error| {
+                logged_adapter(
+                    "commit_restore_account",
+                    &package,
+                    "validate_staging",
+                    error,
+                )
+            })?;
+
+        if !intent.maintenance_active {
+            let enabled = self.android.read_enabled_state(&package).map_err(|error| {
+                logged_adapter(
+                    "commit_restore_account",
+                    &package,
+                    "read_enabled_state",
+                    error,
+                )
+            })?;
+            intent.previous_enabled_state = Some(enabled);
+            intent.maintenance_active = true;
+            intent.phase = AccountIoPhase::Replacing {
+                archive_account_id: archive_account_id.clone(),
+                target_slot: mapping.target_slot.clone(),
+            };
+            self.packages
+                .save_account_io_intent(&intent)
+                .map_err(|error| {
+                    logged_adapter(
+                        "commit_restore_account",
+                        &package,
+                        "save_maintenance_intent",
+                        error,
+                    )
+                })?;
+            self.android.block_launch(&package).map_err(|error| {
+                logged_adapter("commit_restore_account", &package, "block_launch", error)
+            })?;
+            self.stop_and_apply_view(&package, &SlotId::base())?;
+            self.slots
+                .prepare_maintenance(&package, token)
+                .map_err(|error| {
+                    logged_adapter(
+                        "commit_restore_account",
+                        &package,
+                        "prepare_maintenance",
+                        error,
+                    )
+                })?;
+            self.android
+                .apply_maintenance_view(&package, token)
+                .map_err(|error| {
+                    logged_adapter(
+                        "commit_restore_account",
+                        &package,
+                        "apply_maintenance",
+                        error,
+                    )
+                })?;
+        } else {
+            intent.phase = AccountIoPhase::Replacing {
+                archive_account_id: archive_account_id.clone(),
+                target_slot: mapping.target_slot.clone(),
+            };
+            self.packages
+                .save_account_io_intent(&intent)
+                .map_err(|error| {
+                    logged_adapter(
+                        "commit_restore_account",
+                        &package,
+                        "save_replace_intent",
+                        error,
+                    )
+                })?;
+        }
+
+        if let Err(error) = self.slots.replace_account(
+            &package,
+            token,
+            &transfer_id,
+            archive_account_id,
+            &mapping.target_slot,
+        ) {
+            log_adapter("commit_restore_account", &package, "replace_pair", &error);
+            if let Err(rollback) =
+                self.slots
+                    .rollback_account(&package, token, &mapping.target_slot)
+            {
+                return Err(logged_conflict(
+                    "commit_restore_account",
+                    &package,
+                    "rollback_pair",
+                    rollback,
+                ));
+            }
+            return self.record_restore_failure(intent, mapping);
+        }
+
+        let original = self
+            .packages
+            .load(&package)
+            .map_err(adapter_error)?
+            .ok_or(RuntimeError::NotFound)?;
+        let mut aggregate = original.clone();
+        let metadata_result = if mapping.create_slot {
+            aggregate.install_restored_slot(&mapping.target_slot, mapping.name.clone())
+        } else if mapping.target_slot.is_base() {
+            Ok(())
+        } else {
+            aggregate.rename_slot(&mapping.target_slot, mapping.name.clone())
+        };
+        if metadata_result.is_err() || self.packages.save(&aggregate).is_err() {
+            let _restore_metadata = self.packages.save(&original);
+            self.slots
+                .rollback_account(&package, token, &mapping.target_slot)
+                .map_err(|error| {
+                    logged_conflict(
+                        "commit_restore_account",
+                        &package,
+                        "rollback_after_metadata",
+                        error,
+                    )
+                })?;
+            return self.record_restore_failure(intent, mapping);
+        }
+
+        let result = RestoreItemResult {
+            archive_account_id: archive_account_id.clone(),
+            target_slot: Some(mapping.target_slot.clone()),
+            state: RestoreItemState::Restored,
+        };
+        intent.completed.push(result.clone());
+        intent.phase = AccountIoPhase::Ready;
+        if let Err(error) = self.packages.save_account_io_intent(&intent) {
+            let _restore_metadata = self.packages.save(&original);
+            self.slots
+                .rollback_account(&package, token, &mapping.target_slot)
+                .map_err(|rollback| {
+                    logged_conflict(
+                        "commit_restore_account",
+                        &package,
+                        "rollback_after_intent",
+                        rollback,
+                    )
+                })?;
+            return Err(logged_adapter(
+                "commit_restore_account",
+                &package,
+                "save_success",
+                error,
+            ));
+        }
+        self.slots
+            .finalize_account(&package, token, &mapping.target_slot)
+            .map_err(|error| {
+                logged_conflict(
+                    "commit_restore_account",
+                    &package,
+                    "finalize_old_pair",
+                    error,
+                )
+            })?;
+        Ok(result)
+    }
+
+    pub fn finish_restore_io(
+        &mut self,
+        token: &AccountIoToken,
+    ) -> Result<RestoreBatchResult, RuntimeError> {
+        let mut intent = self.account_io_intent_by_token(token)?;
+        if intent.kind != AccountIoKind::Restore {
+            return Err(RuntimeError::StateConflict);
+        }
+        let package = intent.package.clone();
+        add_skipped_restore_results(&mut intent);
+        intent.phase = AccountIoPhase::Finalizing;
+        self.packages
+            .save_account_io_intent(&intent)
+            .map_err(|error| {
+                logged_adapter("finish_restore_io", &package, "save_finalizing", error)
+            })?;
+        self.finalize_restore_intent(intent, true)
+    }
+
+    pub fn abort_account_io(&mut self, token: &AccountIoToken) -> Result<(), RuntimeError> {
+        let intent = self.account_io_intent_by_token(token)?;
+        match intent.kind {
+            AccountIoKind::Backup => self.finish_backup_intent(&intent, true),
+            AccountIoKind::Restore => {
+                self.abort_restore_intent(intent, true)?;
+                Ok(())
+            }
+        }
+    }
+
+    pub fn list_account_io_status(&self) -> Result<Vec<AccountIoStatus>, RuntimeError> {
+        self.packages
+            .list_account_io_intents()
+            .map(|intents| intents.into_iter().map(|intent| intent.status()).collect())
+            .map_err(adapter_error)
+    }
+
     pub fn enroll(
         &mut self,
         package: PackageName,
         reset: bool,
         signing: Option<SigningIdentity>,
     ) -> Result<PackageSnapshot, RuntimeError> {
+        self.ensure_no_account_io(&package)?;
         if reset {
             return Err(RuntimeError::InvalidRequest);
         }
@@ -181,6 +679,7 @@ where
         signing: SigningIdentity,
         trust_legacy: bool,
     ) -> Result<PackageSnapshot, RuntimeError> {
+        self.ensure_no_account_io(package)?;
         signing.validate().map_err(model_error)?;
         let aggregate = self
             .packages
@@ -276,6 +775,7 @@ where
     }
 
     pub fn unenroll(&mut self, package: &PackageName) -> Result<(), RuntimeError> {
+        self.ensure_no_account_io(package)?;
         if self
             .packages
             .load(package)
@@ -365,6 +865,7 @@ where
         target: &SlotId,
         display_name: DisplayName,
     ) -> Result<PackageSnapshot, RuntimeError> {
+        self.ensure_no_account_io(package)?;
         let (mut aggregate, _inspection) = self.load_validated(package)?;
         aggregate
             .rename_slot(target, display_name)
@@ -479,10 +980,392 @@ where
         (self.packages, self.slots, self.android)
     }
 
+    fn ensure_no_account_io(&self, package: &PackageName) -> Result<(), RuntimeError> {
+        if self
+            .packages
+            .load_account_io_intent(package)
+            .map_err(adapter_error)?
+            .is_some()
+        {
+            Err(RuntimeError::IoBusy)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn account_io_intent_by_token(
+        &self,
+        token: &AccountIoToken,
+    ) -> Result<AccountIoIntent, RuntimeError> {
+        self.packages
+            .list_account_io_intents()
+            .map_err(adapter_error)?
+            .into_iter()
+            .find(|intent| &intent.io_token == token)
+            .ok_or(RuntimeError::NotFound)
+    }
+
+    fn stop_and_apply_view(
+        &mut self,
+        package: &PackageName,
+        target: &SlotId,
+    ) -> Result<(), RuntimeError> {
+        self.android
+            .force_stop(package)
+            .map_err(|error| logged_adapter("account_io", package, "force_stop", error))?;
+        self.android
+            .apply_view(package, target)
+            .map_err(|error| logged_adapter("account_io", package, "apply_view", error))?;
+        let observed = self
+            .android
+            .observe_view(package)
+            .map_err(|error| logged_adapter("account_io", package, "verify_view", error))?;
+        if !observed.matches(target) {
+            return Err(RuntimeError::StateConflict);
+        }
+        Ok(())
+    }
+
+    fn finish_backup_intent(
+        &mut self,
+        intent: &AccountIoIntent,
+        relaunch: bool,
+    ) -> Result<(), RuntimeError> {
+        let package = &intent.package;
+        let mut launch_error = None;
+        if intent.maintenance_active {
+            self.stop_and_apply_view(package, &intent.previous_active_slot)?;
+            if let Some(enabled) = intent.previous_enabled_state {
+                self.android
+                    .restore_enabled_state(package, enabled)
+                    .map_err(|error| {
+                        logged_conflict("finish_backup_io", package, "restore_enabled_state", error)
+                    })?;
+            }
+            let enabled_allows_launch = !matches!(
+                intent.previous_enabled_state,
+                Some(
+                    PackageEnabledState::Disabled
+                        | PackageEnabledState::DisabledUser
+                        | PackageEnabledState::DisabledUntilUsed
+                )
+            );
+            if relaunch
+                && intent.previous_was_running
+                && enabled_allows_launch
+                && let Err(error) = self
+                    .android
+                    .launch_verified(package, &intent.previous_active_slot)
+            {
+                log_adapter("finish_backup_io", package, "restore_launch", &error);
+                launch_error = Some(RuntimeError::OperationFailed);
+            }
+        }
+        self.slots
+            .cleanup_account_io(package, &intent.io_token)
+            .map_err(|error| logged_conflict("finish_backup_io", package, "cleanup", error))?;
+        self.packages
+            .clear_account_io_intent(package)
+            .map_err(|error| logged_conflict("finish_backup_io", package, "clear_intent", error))?;
+        launch_error.map_or(Ok(()), Err)
+    }
+
+    fn record_restore_failure(
+        &mut self,
+        mut intent: AccountIoIntent,
+        mapping: ResolvedRestoreMapping,
+    ) -> Result<RestoreItemResult, RuntimeError> {
+        let result = RestoreItemResult {
+            archive_account_id: mapping.archive_account_id,
+            target_slot: Some(mapping.target_slot),
+            state: RestoreItemState::Failed,
+        };
+        intent.completed.push(result.clone());
+        intent.phase = AccountIoPhase::Ready;
+        self.packages
+            .save_account_io_intent(&intent)
+            .map_err(|error| {
+                logged_conflict(
+                    "commit_restore_account",
+                    &intent.package,
+                    "save_failure",
+                    error,
+                )
+            })?;
+        Ok(result)
+    }
+
+    fn rollback_restore_metadata(
+        &mut self,
+        intent: &AccountIoIntent,
+        mapping: &ResolvedRestoreMapping,
+    ) -> Result<(), RuntimeError> {
+        let Some(mut aggregate) = self.packages.load(&intent.package).map_err(adapter_error)?
+        else {
+            return Err(RuntimeError::NotFound);
+        };
+        if mapping.create_slot {
+            if aggregate.has_slot(&mapping.target_slot) {
+                aggregate
+                    .remove_restored_slot(&mapping.target_slot)
+                    .map_err(model_error)?;
+            }
+        } else if !mapping.target_slot.is_base()
+            && let Some(previous_name) = &mapping.previous_name
+        {
+            aggregate
+                .rename_slot(&mapping.target_slot, previous_name.clone())
+                .map_err(model_error)?;
+        }
+        self.packages.save(&aggregate).map_err(|error| {
+            logged_conflict(
+                "account_io_recovery",
+                &intent.package,
+                "rollback_metadata",
+                error,
+            )
+        })
+    }
+
+    fn finalize_restore_intent(
+        &mut self,
+        intent: AccountIoIntent,
+        allow_launch: bool,
+    ) -> Result<RestoreBatchResult, RuntimeError> {
+        let package = intent.package.clone();
+        let archived_state = intent
+            .archived_state
+            .clone()
+            .ok_or(RuntimeError::StateConflict)?;
+        let restored_active = archived_state
+            .active_account_id
+            .as_ref()
+            .and_then(|active| {
+                let restored = intent.completed.iter().any(|result| {
+                    &result.archive_account_id == active
+                        && result.state == RestoreItemState::Restored
+                });
+                restored.then(|| {
+                    intent
+                        .mappings
+                        .iter()
+                        .find(|mapping| &mapping.archive_account_id == active)
+                        .map(|mapping| mapping.target_slot.clone())
+                })?
+            });
+        let (target, launch_after_reboot, should_launch) = if let Some(target) = restored_active {
+            (target, archived_state.launch_after_reboot, true)
+        } else {
+            (
+                intent.previous_active_slot.clone(),
+                intent.previous_launch_after_reboot,
+                intent.previous_was_running,
+            )
+        };
+
+        self.stop_and_apply_view(&package, &target)?;
+        let mut aggregate = self
+            .packages
+            .load(&package)
+            .map_err(adapter_error)?
+            .ok_or(RuntimeError::NotFound)?;
+        aggregate
+            .set_restored_active_slot(&target)
+            .map_err(model_error)?;
+        aggregate
+            .set_launch_after_reboot(launch_after_reboot)
+            .map_err(model_error)?;
+        self.packages.save(&aggregate).map_err(|error| {
+            logged_conflict("finish_restore_io", &package, "save_active", error)
+        })?;
+
+        if let Some(enabled) = intent.previous_enabled_state {
+            self.android
+                .restore_enabled_state(&package, enabled)
+                .map_err(|error| {
+                    logged_conflict(
+                        "finish_restore_io",
+                        &package,
+                        "restore_enabled_state",
+                        error,
+                    )
+                })?;
+        }
+        let enabled_allows_launch = !matches!(
+            intent.previous_enabled_state,
+            Some(
+                crate::model::PackageEnabledState::Disabled
+                    | crate::model::PackageEnabledState::DisabledUser
+                    | crate::model::PackageEnabledState::DisabledUntilUsed
+            )
+        );
+        let mut app_started = false;
+        if allow_launch && should_launch && enabled_allows_launch {
+            match self.android.launch_verified(&package, &target) {
+                Ok(()) => app_started = true,
+                Err(error) => {
+                    log_adapter("finish_restore_io", &package, "launch_final", &error);
+                }
+            }
+        }
+        let result = RestoreBatchResult {
+            package: package.clone(),
+            items: intent.completed.clone(),
+            active_slot: target,
+            launch_after_reboot,
+            app_started,
+        };
+        self.packages
+            .save_account_io_result(&package, &result)
+            .map_err(|error| {
+                logged_conflict("finish_restore_io", &package, "save_result", error)
+            })?;
+        self.slots
+            .cleanup_account_io(&package, &intent.io_token)
+            .map_err(|error| logged_conflict("finish_restore_io", &package, "cleanup", error))?;
+        self.packages
+            .clear_account_io_intent(&package)
+            .map_err(|error| {
+                logged_conflict("finish_restore_io", &package, "clear_intent", error)
+            })?;
+        Ok(result)
+    }
+
+    fn abort_restore_intent(
+        &mut self,
+        mut intent: AccountIoIntent,
+        relaunch: bool,
+    ) -> Result<RestoreBatchResult, RuntimeError> {
+        let package = intent.package.clone();
+        if let AccountIoPhase::Replacing {
+            archive_account_id,
+            target_slot,
+        } = &intent.phase
+        {
+            let already_committed = intent.completed.iter().any(|result| {
+                &result.archive_account_id == archive_account_id
+                    && result.state == RestoreItemState::Restored
+            });
+            if !already_committed {
+                self.slots
+                    .rollback_account(&package, &intent.io_token, target_slot)
+                    .map_err(|error| {
+                        logged_conflict("abort_account_io", &package, "rollback_pair", error)
+                    })?;
+                if let Some(mapping) = intent
+                    .mappings
+                    .iter()
+                    .find(|mapping| &mapping.archive_account_id == archive_account_id)
+                    .cloned()
+                {
+                    self.rollback_restore_metadata(&intent, &mapping)?;
+                }
+            }
+        }
+        add_skipped_restore_results(&mut intent);
+        intent.phase = AccountIoPhase::Interrupted;
+        self.packages
+            .save_account_io_intent(&intent)
+            .map_err(|error| {
+                logged_conflict("abort_account_io", &package, "save_interrupted", error)
+            })?;
+
+        if intent.maintenance_active {
+            self.stop_and_apply_view(&package, &intent.previous_active_slot)?;
+        }
+        let mut aggregate = self
+            .packages
+            .load(&package)
+            .map_err(adapter_error)?
+            .ok_or(RuntimeError::NotFound)?;
+        aggregate
+            .set_restored_active_slot(&intent.previous_active_slot)
+            .map_err(model_error)?;
+        aggregate
+            .set_launch_after_reboot(intent.previous_launch_after_reboot)
+            .map_err(model_error)?;
+        self.packages.save(&aggregate).map_err(|error| {
+            logged_conflict("abort_account_io", &package, "save_previous", error)
+        })?;
+        if let Some(enabled) = intent.previous_enabled_state {
+            self.android
+                .restore_enabled_state(&package, enabled)
+                .map_err(|error| {
+                    logged_conflict("abort_account_io", &package, "restore_enabled_state", error)
+                })?;
+        }
+        let mut app_started = false;
+        let enabled_allows_launch = !matches!(
+            intent.previous_enabled_state,
+            Some(
+                PackageEnabledState::Disabled
+                    | PackageEnabledState::DisabledUser
+                    | PackageEnabledState::DisabledUntilUsed
+            )
+        );
+        if relaunch
+            && intent.maintenance_active
+            && intent.previous_was_running
+            && enabled_allows_launch
+        {
+            match self
+                .android
+                .launch_verified(&package, &intent.previous_active_slot)
+            {
+                Ok(()) => app_started = true,
+                Err(error) => {
+                    log_adapter("abort_account_io", &package, "restore_launch", &error);
+                }
+            }
+        }
+        let result = RestoreBatchResult {
+            package: package.clone(),
+            items: intent.completed.clone(),
+            active_slot: intent.previous_active_slot.clone(),
+            launch_after_reboot: intent.previous_launch_after_reboot,
+            app_started,
+        };
+        self.packages
+            .save_account_io_result(&package, &result)
+            .map_err(|error| logged_conflict("abort_account_io", &package, "save_result", error))?;
+        self.slots
+            .cleanup_account_io(&package, &intent.io_token)
+            .map_err(|error| logged_conflict("abort_account_io", &package, "cleanup", error))?;
+        self.packages
+            .clear_account_io_intent(&package)
+            .map_err(|error| {
+                logged_conflict("abort_account_io", &package, "clear_intent", error)
+            })?;
+        Ok(result)
+    }
+
+    fn recover_account_io_intents(&mut self) -> Result<(), RuntimeError> {
+        let intents = self
+            .packages
+            .list_account_io_intents()
+            .map_err(adapter_error)?;
+        for intent in intents {
+            let package = intent.package.clone();
+            let recovery = match intent.kind {
+                AccountIoKind::Backup => self.finish_backup_intent(&intent, false),
+                AccountIoKind::Restore => {
+                    self.abort_restore_intent(intent, false).map(|_result| ())
+                }
+            };
+            if let Err(error) = recovery {
+                eprintln!(
+                    "op=reconcile_boot package={package} step=recover_account_io error={error}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn load_ready(
         &mut self,
         package: &PackageName,
     ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
+        self.ensure_no_account_io(package)?;
         let (aggregate, inspection) = self.load_validated(package)?;
         self.finish_ready_load(aggregate, inspection, ReadyLoadContext::Interactive)
     }
@@ -545,6 +1428,14 @@ where
         } else {
             BindingState::LegacyUnbound
         };
+        if self
+            .packages
+            .load_account_io_intent(package)
+            .map_err(adapter_error)?
+            .is_some()
+        {
+            return aggregate.snapshot_with_binding(state).map_err(model_error);
+        }
         let (aggregate, _inspection) = self.finish_ready_load(aggregate, inspection, context)?;
         aggregate.snapshot_with_binding(state).map_err(model_error)
     }
@@ -923,6 +1814,91 @@ where
         self.packages
             .save(aggregate)
             .map_err(|error| logged_adapter("activate_slot", &package, "failed_stop_save", error))
+    }
+}
+
+fn generate_account_io_token() -> Result<AccountIoToken, RuntimeError> {
+    let mut bytes = [0_u8; 16];
+    File::open("/dev/urandom")
+        .and_then(|mut random| random.read_exact(&mut bytes))
+        .map_err(|error| {
+            eprintln!("op=account_io step=generate_token error={error}");
+            RuntimeError::OperationFailed
+        })?;
+    Ok(AccountIoToken::from_bytes(bytes))
+}
+
+fn validate_restore_mapping_rules(
+    mappings: &[RestoreMapping],
+    archived_state: &ArchivedState,
+) -> Result<(), RuntimeError> {
+    let source_ids = mappings
+        .iter()
+        .map(|mapping| &mapping.archive_account_id)
+        .collect::<BTreeSet<_>>();
+    if source_ids.len() != mappings.len() {
+        return Err(RuntimeError::InvalidRequest);
+    }
+    let existing_targets = mappings
+        .iter()
+        .filter_map(|mapping| match &mapping.target {
+            RestoreTarget::Existing { slot } => Some(slot),
+            RestoreTarget::New => None,
+        })
+        .collect::<BTreeSet<_>>();
+    let existing_count = mappings
+        .iter()
+        .filter(|mapping| matches!(mapping.target, RestoreTarget::Existing { .. }))
+        .count();
+    if existing_targets.len() != existing_count {
+        return Err(RuntimeError::InvalidRequest);
+    }
+    if let Some(active) = &archived_state.active_account_id
+        && !source_ids.contains(active)
+    {
+        return Err(RuntimeError::InvalidRequest);
+    }
+    if mappings.iter().any(|mapping| match &mapping.target {
+        RestoreTarget::Existing { slot } => {
+            (mapping.archive_kind == ArchivedAccountKind::Base) != slot.is_base()
+        }
+        RestoreTarget::New => mapping.archive_kind == ArchivedAccountKind::Base,
+    }) {
+        return Err(RuntimeError::InvalidRequest);
+    }
+    match archived_state.scope {
+        ArchiveScope::Account => {
+            if mappings.len() != 1 {
+                return Err(RuntimeError::InvalidRequest);
+            }
+        }
+        ArchiveScope::AllAccounts => {
+            let base_mappings = mappings
+                .iter()
+                .filter(|mapping| mapping.archive_kind == ArchivedAccountKind::Base)
+                .count();
+            if base_mappings != 1 {
+                return Err(RuntimeError::InvalidRequest);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn add_skipped_restore_results(intent: &mut AccountIoIntent) {
+    let completed = intent
+        .completed
+        .iter()
+        .map(|result| result.archive_account_id.clone())
+        .collect::<BTreeSet<_>>();
+    for mapping in &intent.mappings {
+        if !completed.contains(&mapping.archive_account_id) {
+            intent.completed.push(RestoreItemResult {
+                archive_account_id: mapping.archive_account_id.clone(),
+                target_slot: Some(mapping.target_slot.clone()),
+                state: RestoreItemState::Skipped,
+            });
+        }
     }
 }
 
@@ -2351,5 +3327,363 @@ mod tests {
         assert!(runtime.list_packages().unwrap().is_empty());
         let (packages, _slots, _android) = runtime.into_parts();
         assert!(packages.load(&package).unwrap().is_none());
+    }
+
+    #[test]
+    fn inactive_account_backup_holds_a_package_lease_without_stopping_the_app() {
+        let package = package();
+        let (mut runtime, inactive) = with_slot();
+        let starting_calls = runtime.android.calls().len();
+        let lease = runtime
+            .begin_backup_io(
+                &package,
+                AccountIoScope::Account {
+                    slot: inactive.clone(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime.rename_slot(&package, &inactive, DisplayName::new("Busy").unwrap()),
+            Err(RuntimeError::IoBusy),
+        );
+        runtime.finish_backup_io(&lease.io_token).unwrap();
+
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert!(android.is_running(&package));
+        assert!(
+            !android.calls()[starting_calls..]
+                .iter()
+                .any(|call| matches!(call, AndroidCall::ForceStop(_)))
+        );
+    }
+
+    #[test]
+    fn full_backup_uses_one_no_launch_base_window_then_restores_the_running_view() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+
+        let lease = runtime
+            .begin_backup_io(&package, AccountIoScope::AllAccounts)
+            .unwrap();
+        assert!(!runtime.android.is_running(&package));
+        assert_eq!(
+            runtime.android.enabled_state(&package),
+            Some(PackageEnabledState::DisabledUser),
+        );
+        let status = runtime.list_account_io_status().unwrap();
+        assert_eq!(status[0].phase, AccountIoPhase::Ready);
+
+        runtime.finish_backup_io(&lease.io_token).unwrap();
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert_eq!(android.view(&package), Some(&ObservedView::Slot(active)));
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+        assert!(android.is_running(&package));
+    }
+
+    #[test]
+    fn backup_restores_a_previously_disabled_package_without_launching_it() {
+        let package = package();
+        let (mut runtime, _active) = with_slot();
+        runtime
+            .android
+            .set_enabled_state(&package, PackageEnabledState::DisabledUser);
+
+        let lease = runtime
+            .begin_backup_io(&package, AccountIoScope::AllAccounts)
+            .unwrap();
+        runtime.finish_backup_io(&lease.io_token).unwrap();
+
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::DisabledUser),
+        );
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn partial_launch_block_failure_restores_the_pre_backup_state() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+        runtime.android.fail_next(AndroidFailure::BlockLaunch);
+
+        assert_eq!(
+            runtime.begin_backup_io(&package, AccountIoScope::AllAccounts),
+            Err(RuntimeError::OperationFailed),
+        );
+
+        let (packages, _slots, android) = runtime.into_parts();
+        assert!(packages.load_account_io_intent(&package).unwrap().is_none());
+        assert_eq!(android.view(&package), Some(&ObservedView::Slot(active)));
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+        assert!(android.is_running(&package));
+    }
+
+    #[test]
+    fn boot_recovers_an_interrupted_backup_before_normal_slot_convergence_without_launching() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+        runtime
+            .begin_backup_io(&package, AccountIoScope::AllAccounts)
+            .unwrap();
+        let (packages, slots, android) = runtime.into_parts();
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        runtime.reconcile_boot().unwrap();
+
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert_eq!(android.view(&package), Some(&ObservedView::Slot(active)));
+        assert_eq!(
+            android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+        assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn restore_blocks_launch_before_exposing_base_or_maintenance_views() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let archive_id = ArchiveAccountId::new("account-0").unwrap();
+        let lease = runtime
+            .begin_restore_io(
+                &package,
+                TransferId::new("transfer-order").unwrap(),
+                vec![RestoreMapping {
+                    archive_account_id: archive_id.clone(),
+                    archive_kind: ArchivedAccountKind::Base,
+                    name: DisplayName::new("Base").unwrap(),
+                    target: RestoreTarget::Existing {
+                        slot: SlotId::base(),
+                    },
+                }],
+                ArchivedState {
+                    scope: ArchiveScope::Account,
+                    active_account_id: Some(archive_id.clone()),
+                    launch_after_reboot: false,
+                },
+            )
+            .unwrap();
+        let first_commit_call = runtime.android.calls().len();
+
+        runtime
+            .commit_restore_account(&lease.io_token, &archive_id)
+            .unwrap();
+
+        let calls = &runtime.android.calls()[first_commit_call..];
+        assert!(
+            matches!(calls.first(), Some(AndroidCall::BlockLaunch(value)) if value == &package)
+        );
+        let base_view = calls
+            .iter()
+            .position(|call| matches!(call, AndroidCall::Apply(_, slot) if slot.is_base()))
+            .unwrap();
+        let maintenance = calls
+            .iter()
+            .position(|call| matches!(call, AndroidCall::Maintenance(_, _)))
+            .unwrap();
+        assert!(base_view > 0);
+        assert!(maintenance > base_view);
+    }
+
+    #[test]
+    fn single_account_restore_can_replace_base_and_reports_the_final_launch() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let archive_id = ArchiveAccountId::new("account-0").unwrap();
+        let lease = runtime
+            .begin_restore_io(
+                &package,
+                TransferId::new("transfer-0").unwrap(),
+                vec![RestoreMapping {
+                    archive_account_id: archive_id.clone(),
+                    archive_kind: ArchivedAccountKind::Base,
+                    name: DisplayName::new("Ignored Base name").unwrap(),
+                    target: RestoreTarget::Existing {
+                        slot: SlotId::base(),
+                    },
+                }],
+                ArchivedState {
+                    scope: ArchiveScope::Account,
+                    active_account_id: Some(archive_id.clone()),
+                    launch_after_reboot: true,
+                },
+            )
+            .unwrap();
+
+        let item = runtime
+            .commit_restore_account(&lease.io_token, &archive_id)
+            .unwrap();
+        let result = runtime.finish_restore_io(&lease.io_token).unwrap();
+
+        assert_eq!(item.state, RestoreItemState::Restored);
+        assert_eq!(result.active_slot, SlotId::base());
+        assert!(result.launch_after_reboot);
+        assert!(result.app_started);
+    }
+
+    #[test]
+    fn restored_new_account_is_committed_to_the_ordinary_aggregate_only_after_data_success() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let archive_id = ArchiveAccountId::new("account-1").unwrap();
+        let lease = runtime
+            .begin_restore_io(
+                &package,
+                TransferId::new("transfer-1").unwrap(),
+                vec![RestoreMapping {
+                    archive_account_id: archive_id.clone(),
+                    archive_kind: ArchivedAccountKind::Slot,
+                    name: DisplayName::new("Restored work").unwrap(),
+                    target: RestoreTarget::New,
+                }],
+                ArchivedState {
+                    scope: ArchiveScope::Account,
+                    active_account_id: Some(archive_id.clone()),
+                    launch_after_reboot: false,
+                },
+            )
+            .unwrap();
+
+        let item = runtime
+            .commit_restore_account(&lease.io_token, &archive_id)
+            .unwrap();
+        let result = runtime.finish_restore_io(&lease.io_token).unwrap();
+        let snapshot = runtime.get_package(&package).unwrap();
+
+        assert_eq!(item.state, RestoreItemState::Restored);
+        assert_eq!(result.active_slot, item.target_slot.clone().unwrap());
+        assert!(
+            snapshot
+                .slots
+                .iter()
+                .any(|slot| slot.id == result.active_slot && slot.name == "Restored work")
+        );
+    }
+
+    #[test]
+    fn abort_before_the_first_restore_commit_does_not_stop_or_relaunch_the_app() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let archive_id = ArchiveAccountId::new("account-0").unwrap();
+        let lease = runtime
+            .begin_restore_io(
+                &package,
+                TransferId::new("transfer-abort").unwrap(),
+                vec![RestoreMapping {
+                    archive_account_id: archive_id,
+                    archive_kind: ArchivedAccountKind::Base,
+                    name: DisplayName::new("Base").unwrap(),
+                    target: RestoreTarget::Existing {
+                        slot: SlotId::base(),
+                    },
+                }],
+                ArchivedState {
+                    scope: ArchiveScope::Account,
+                    active_account_id: None,
+                    launch_after_reboot: false,
+                },
+            )
+            .unwrap();
+        let starting_calls = runtime.android.calls().len();
+
+        runtime.abort_account_io(&lease.io_token).unwrap();
+
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert!(android.is_running(&package));
+        assert!(
+            !android.calls()[starting_calls..]
+                .iter()
+                .any(|call| matches!(call, AndroidCall::ForceStop(_) | AndroidCall::Launch(_, _)))
+        );
+    }
+
+    #[test]
+    fn abort_after_maintenance_never_relaunches_a_previously_disabled_package() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.set_enabled_state(&package, PackageEnabledState::DisabledUser);
+        let mut runtime = Runtime::new(packages, slots, android);
+        let archive_id = ArchiveAccountId::new("account-0").unwrap();
+        let lease = runtime
+            .begin_restore_io(
+                &package,
+                TransferId::new("transfer-disabled").unwrap(),
+                vec![RestoreMapping {
+                    archive_account_id: archive_id.clone(),
+                    archive_kind: ArchivedAccountKind::Base,
+                    name: DisplayName::new("Base").unwrap(),
+                    target: RestoreTarget::Existing {
+                        slot: SlotId::base(),
+                    },
+                }],
+                ArchivedState {
+                    scope: ArchiveScope::Account,
+                    active_account_id: None,
+                    launch_after_reboot: false,
+                },
+            )
+            .unwrap();
+        runtime
+            .commit_restore_account(&lease.io_token, &archive_id)
+            .unwrap();
+        let starting_calls = runtime.android.calls().len();
+
+        runtime.abort_account_io(&lease.io_token).unwrap();
+
+        let (_packages, _slots, android) = runtime.into_parts();
+        assert!(
+            !android.calls()[starting_calls..]
+                .iter()
+                .any(|call| matches!(call, AndroidCall::Launch(_, _)))
+        );
+    }
+
+    #[test]
+    fn single_account_restore_never_crosses_the_base_account_boundary() {
+        let slot_archive_to_base = vec![RestoreMapping {
+            archive_account_id: ArchiveAccountId::new("account-1").unwrap(),
+            archive_kind: ArchivedAccountKind::Slot,
+            name: DisplayName::new("Work").unwrap(),
+            target: RestoreTarget::Existing {
+                slot: SlotId::base(),
+            },
+        }];
+        let base_archive_to_new = vec![RestoreMapping {
+            archive_account_id: ArchiveAccountId::new("base").unwrap(),
+            archive_kind: ArchivedAccountKind::Base,
+            name: DisplayName::new("Base").unwrap(),
+            target: RestoreTarget::New,
+        }];
+        let state = ArchivedState {
+            scope: ArchiveScope::Account,
+            active_account_id: None,
+            launch_after_reboot: false,
+        };
+
+        assert_eq!(
+            validate_restore_mapping_rules(&slot_archive_to_base, &state),
+            Err(RuntimeError::InvalidRequest),
+        );
+        assert_eq!(
+            validate_restore_mapping_rules(&base_archive_to_new, &state),
+            Err(RuntimeError::InvalidRequest),
+        );
     }
 }

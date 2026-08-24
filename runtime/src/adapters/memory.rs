@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::model::{
-    Capabilities, ObservedView, PackageAggregate, PackageBinding, PackageIdentity,
-    PackageInspection, PackageName, RebindIntent, SeedMode, Slot, SlotId,
+    AccountIoIntent, AccountIoToken, ArchiveAccountId, Capabilities, ObservedView,
+    PackageAggregate, PackageBinding, PackageEnabledState, PackageIdentity, PackageInspection,
+    PackageName, RebindIntent, RestoreBatchResult, RestoreStaging, SeedMode, Slot, SlotId,
+    TransferId,
 };
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
@@ -11,6 +13,8 @@ pub(crate) struct MemoryPackageStore {
     packages: BTreeMap<PackageName, PackageAggregate>,
     bindings: BTreeMap<PackageName, PackageBinding>,
     rebind_intents: BTreeMap<PackageName, RebindIntent>,
+    account_io_intents: BTreeMap<PackageName, AccountIoIntent>,
+    account_io_results: BTreeMap<PackageName, RestoreBatchResult>,
     backups: BTreeMap<PackageName, (PackageAggregate, Vec<SlotId>)>,
     save_calls: usize,
     failed_save_calls: BTreeSet<usize>,
@@ -99,6 +103,41 @@ impl PackageStore for MemoryPackageStore {
         Ok(())
     }
 
+    fn list_account_io_intents(&self) -> Result<Vec<AccountIoIntent>, AdapterError> {
+        Ok(self.account_io_intents.values().cloned().collect())
+    }
+
+    fn load_account_io_intent(
+        &self,
+        package: &PackageName,
+    ) -> Result<Option<AccountIoIntent>, AdapterError> {
+        Ok(self.account_io_intents.get(package).cloned())
+    }
+
+    fn save_account_io_intent(&mut self, intent: &AccountIoIntent) -> Result<(), AdapterError> {
+        intent
+            .validate()
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        self.account_io_intents
+            .insert(intent.package.clone(), intent.clone());
+        Ok(())
+    }
+
+    fn clear_account_io_intent(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        self.account_io_intents.remove(package);
+        Ok(())
+    }
+
+    fn save_account_io_result(
+        &mut self,
+        package: &PackageName,
+        result: &RestoreBatchResult,
+    ) -> Result<(), AdapterError> {
+        self.account_io_results
+            .insert(package.clone(), result.clone());
+        Ok(())
+    }
+
     fn backup_before_v1_binding(
         &mut self,
         aggregate: &PackageAggregate,
@@ -118,6 +157,8 @@ impl PackageStore for MemoryPackageStore {
         self.packages.remove(package);
         self.bindings.remove(package);
         self.rebind_intents.remove(package);
+        self.account_io_intents.remove(package);
+        self.account_io_results.remove(package);
         Ok(())
     }
 }
@@ -136,6 +177,9 @@ pub(crate) enum SlotFailure {
 #[derive(Debug, Default)]
 pub(crate) struct MemorySlotStorage {
     domains: BTreeMap<(PackageName, SlotId), (bool, bool)>,
+    staging: BTreeSet<(PackageName, AccountIoToken, ArchiveAccountId)>,
+    maintenance: BTreeSet<(PackageName, AccountIoToken)>,
+    replacements: BTreeMap<(PackageName, AccountIoToken, SlotId), Option<(bool, bool)>>,
     failures: VecDeque<SlotFailure>,
 }
 
@@ -254,6 +298,142 @@ impl SlotStorage for MemorySlotStorage {
             .then_some(())
             .ok_or_else(|| AdapterError::new("slot CE/DE pair is incomplete"))
     }
+
+    fn account_paths(
+        &self,
+        package: &PackageName,
+        slot: &SlotId,
+    ) -> Result<(String, String), AdapterError> {
+        if !slot.is_base() {
+            self.require_complete_pair(package, slot)?;
+        }
+        Ok((
+            format!("/memory/ce/{package}/{slot}"),
+            format!("/memory/de/{package}/{slot}"),
+        ))
+    }
+
+    fn prepare_restore_staging(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        _transfer_id: &TransferId,
+        accounts: &[ArchiveAccountId],
+    ) -> Result<Vec<RestoreStaging>, AdapterError> {
+        Ok(accounts
+            .iter()
+            .map(|account| {
+                self.staging
+                    .insert((package.clone(), token.clone(), account.clone()));
+                RestoreStaging {
+                    archive_account_id: account.clone(),
+                    ce_path: format!(
+                        "/memory/transfers/{}/{}/ce",
+                        token.as_str(),
+                        account.as_str()
+                    ),
+                    de_path: format!(
+                        "/memory/transfers/{}/{}/de",
+                        token.as_str(),
+                        account.as_str()
+                    ),
+                }
+            })
+            .collect())
+    }
+
+    fn validate_staged_account(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        _transfer_id: &TransferId,
+        account: &ArchiveAccountId,
+    ) -> Result<(), AdapterError> {
+        self.staging
+            .contains(&(package.clone(), token.clone(), account.clone()))
+            .then_some(())
+            .ok_or_else(|| AdapterError::new("staged account is missing"))
+    }
+
+    fn prepare_maintenance(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(), AdapterError> {
+        self.maintenance.insert((package.clone(), token.clone()));
+        Ok(())
+    }
+
+    fn replace_account(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        transfer_id: &TransferId,
+        account: &ArchiveAccountId,
+        target: &SlotId,
+    ) -> Result<(), AdapterError> {
+        self.validate_staged_account(package, token, transfer_id, account)?;
+        let key = (package.clone(), token.clone(), target.clone());
+        self.replacements.entry(key).or_insert_with(|| {
+            if target.is_base() {
+                Some((true, true))
+            } else {
+                self.domains
+                    .get(&(package.clone(), target.clone()))
+                    .copied()
+            }
+        });
+        if !target.is_base() {
+            self.domains
+                .insert((package.clone(), target.clone()), (true, true));
+        }
+        Ok(())
+    }
+
+    fn rollback_account(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        target: &SlotId,
+    ) -> Result<(), AdapterError> {
+        let key = (package.clone(), token.clone(), target.clone());
+        if let Some(previous) = self.replacements.remove(&key)
+            && !target.is_base()
+        {
+            match previous {
+                Some(pair) => {
+                    self.domains.insert((package.clone(), target.clone()), pair);
+                }
+                None => {
+                    self.domains.remove(&(package.clone(), target.clone()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn finalize_account(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        target: &SlotId,
+    ) -> Result<(), AdapterError> {
+        self.replacements
+            .remove(&(package.clone(), token.clone(), target.clone()));
+        Ok(())
+    }
+
+    fn cleanup_account_io(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(), AdapterError> {
+        self.staging.retain(|(stored_package, stored_token, _)| {
+            stored_package != package || stored_token != token
+        });
+        self.maintenance.remove(&(package.clone(), token.clone()));
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,6 +443,9 @@ pub(crate) enum AndroidFailure {
     Observe,
     Apply,
     Launch,
+    Maintenance,
+    BlockLaunch,
+    RestoreEnabled,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +455,9 @@ pub(crate) enum AndroidCall {
     Observe(PackageName),
     Apply(PackageName, SlotId),
     Launch(PackageName, SlotId),
+    Maintenance(PackageName, AccountIoToken),
+    BlockLaunch(PackageName),
+    RestoreEnabled(PackageName, PackageEnabledState),
 }
 
 #[derive(Debug)]
@@ -280,6 +466,7 @@ pub(crate) struct MemoryAndroidOps {
     inspections: BTreeMap<PackageName, PackageInspection>,
     views: BTreeMap<PackageName, ObservedView>,
     running: BTreeSet<PackageName>,
+    enabled: BTreeMap<PackageName, PackageEnabledState>,
     failures: VecDeque<AndroidFailure>,
     calls: Vec<AndroidCall>,
 }
@@ -291,6 +478,7 @@ impl Default for MemoryAndroidOps {
             inspections: BTreeMap::new(),
             views: BTreeMap::new(),
             running: BTreeSet::new(),
+            enabled: BTreeMap::new(),
             failures: VecDeque::new(),
             calls: Vec::new(),
         }
@@ -312,7 +500,8 @@ impl MemoryAndroidOps {
             },
         );
         self.views.insert(package.clone(), ObservedView::Base);
-        self.running.insert(package);
+        self.running.insert(package.clone());
+        self.enabled.insert(package, PackageEnabledState::Default);
     }
 
     pub(crate) fn fail_next(&mut self, failure: AndroidFailure) {
@@ -359,6 +548,14 @@ impl MemoryAndroidOps {
 
     pub(crate) fn is_running(&self, package: &PackageName) -> bool {
         self.running.contains(package)
+    }
+
+    pub(crate) fn set_enabled_state(&mut self, package: &PackageName, state: PackageEnabledState) {
+        self.enabled.insert(package.clone(), state);
+    }
+
+    pub(crate) fn enabled_state(&self, package: &PackageName) -> Option<PackageEnabledState> {
+        self.enabled.get(package).copied()
     }
 
     fn take_failure(&mut self, expected: AndroidFailure) -> bool {
@@ -431,6 +628,64 @@ impl AndroidOps for MemoryAndroidOps {
         }
         self.views
             .insert(package.clone(), ObservedView::for_slot(slot));
+        Ok(())
+    }
+
+    fn apply_maintenance_view(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(), AdapterError> {
+        self.calls
+            .push(AndroidCall::Maintenance(package.clone(), token.clone()));
+        self.require_installed(package)?;
+        if self.take_failure(AndroidFailure::Maintenance) {
+            return Err(AdapterError::new("injected maintenance-view failure"));
+        }
+        self.views
+            .insert(package.clone(), ObservedView::Maintenance(token.clone()));
+        Ok(())
+    }
+
+    fn read_enabled_state(
+        &mut self,
+        package: &PackageName,
+    ) -> Result<PackageEnabledState, AdapterError> {
+        self.require_installed(package)?;
+        Ok(self
+            .enabled
+            .get(package)
+            .copied()
+            .unwrap_or(PackageEnabledState::Default))
+    }
+
+    fn block_launch(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        self.calls.push(AndroidCall::BlockLaunch(package.clone()));
+        self.require_installed(package)?;
+        if self.take_failure(AndroidFailure::BlockLaunch) {
+            self.enabled
+                .insert(package.clone(), PackageEnabledState::DisabledUser);
+            self.running.remove(package);
+            return Err(AdapterError::new("injected launch-block failure"));
+        }
+        self.enabled
+            .insert(package.clone(), PackageEnabledState::DisabledUser);
+        self.running.remove(package);
+        Ok(())
+    }
+
+    fn restore_enabled_state(
+        &mut self,
+        package: &PackageName,
+        state: PackageEnabledState,
+    ) -> Result<(), AdapterError> {
+        self.calls
+            .push(AndroidCall::RestoreEnabled(package.clone(), state));
+        self.require_installed(package)?;
+        if self.take_failure(AndroidFailure::RestoreEnabled) {
+            return Err(AdapterError::new("injected enabled-state failure"));
+        }
+        self.enabled.insert(package.clone(), state);
         Ok(())
     }
 

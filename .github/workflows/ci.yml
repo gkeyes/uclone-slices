@@ -60,7 +60,10 @@ jobs:
           cargo fmt --all -- --check
           cargo test --workspace --all-targets --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
-          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+
+      - name: Build Manager archive helper
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./tools/build-manager-helper.sh
 
       - name: Validate Android apps
         env:
@@ -77,6 +80,7 @@ jobs:
 
       - name: Verify fixed Manager signature
         run: |
+          test "$(unzip -p manager-app/build/outputs/apk/release/manager-app-release.apk lib/arm64-v8a/libuclone_archive.so | sha256sum | awk '{print $1}')" = "$(cat outputs/helpers/uclone_archive.sha256)"
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner" \
             ./tools/verify-release-signing.sh \
             manager-app/build/outputs/apk/release/manager-app-release.apk
@@ -85,14 +89,14 @@ jobs:
         run: |
           DELIVERY="$RUNNER_TEMP/uclone-slices-delivery"
           mkdir -p "$DELIVERY"
-          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.1.9-${GITHUB_SHA}.apk"
-          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.1.9-${GITHUB_SHA}.zip"
+          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.2.0-${GITHUB_SHA}.apk"
+          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.2.0-${GITHUB_SHA}.zip"
           (cd "$DELIVERY" && sha256sum ./*.apk ./*.zip > SHA256SUMS.txt)
 
-      - name: Upload 0.1.9 candidate delivery
+      - name: Upload 0.2.0 candidate delivery
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: uclone-slices-v2-0.1.9-${{ github.sha }}
+          name: uclone-slices-v2-0.2.0-${{ github.sha }}
           path: ${{ runner.temp }}/uclone-slices-delivery
           if-no-files-found: error
           retention-days: 7

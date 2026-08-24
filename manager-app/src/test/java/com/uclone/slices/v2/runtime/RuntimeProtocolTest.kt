@@ -37,6 +37,47 @@ class RuntimeProtocolTest {
                 "Personal",
             ),
             "delete_slot" to RuntimeCommand.DeleteSlot("com.example.app", "slot-1"),
+            "begin_backup_io" to RuntimeCommand.BeginBackupIo(
+                "com.example.app",
+                AccountIoScope.Account("base"),
+            ),
+            "finish_backup_io" to RuntimeCommand.FinishBackupIo(
+                "0123456789abcdef0123456789abcdef",
+            ),
+            "begin_restore_io" to RuntimeCommand.BeginRestoreIo(
+                packageName = "com.example.app",
+                transferId = "transfer-1",
+                mappings = listOf(
+                    RestoreMapping(
+                        archiveAccountId = "base",
+                        archiveKind = ArchivedAccountKind.Base,
+                        name = "系统原始空间",
+                        target = RestoreTarget.Existing("base"),
+                    ),
+                    RestoreMapping(
+                        archiveAccountId = "slot-1",
+                        archiveKind = ArchivedAccountKind.Slot,
+                        name = "Work",
+                        target = RestoreTarget.New,
+                    ),
+                ),
+                archivedState = ArchivedState(
+                    scope = ArchiveScope.AllAccounts,
+                    activeAccountId = "slot-1",
+                    launchAfterReboot = false,
+                ),
+            ),
+            "commit_restore_account" to RuntimeCommand.CommitRestoreAccount(
+                "0123456789abcdef0123456789abcdef",
+                "base",
+            ),
+            "finish_restore_io" to RuntimeCommand.FinishRestoreIo(
+                "0123456789abcdef0123456789abcdef",
+            ),
+            "abort_account_io" to RuntimeCommand.AbortAccountIo(
+                "0123456789abcdef0123456789abcdef",
+            ),
+            "list_account_io_status" to RuntimeCommand.ListAccountIoStatus,
         )
 
         commands.forEach { (name, command) ->
@@ -50,8 +91,17 @@ class RuntimeProtocolTest {
                     emptyList(),
                     (response as RuntimeReply.Packages).packages,
                 )
-                "unenroll" -> assertEquals(RuntimeReply.Ack, response)
-                else -> assertTrue(response is RuntimeReply.Package)
+                "unenroll", "finish_backup_io", "abort_account_io" ->
+                    assertEquals(RuntimeReply.Ack, response)
+                "begin_backup_io", "begin_restore_io" ->
+                    assertTrue(response is RuntimeReply.AccountIoLeaseReply)
+                "commit_restore_account" -> assertTrue(response is RuntimeReply.RestoreItem)
+                "finish_restore_io" -> assertTrue(response is RuntimeReply.RestoreBatch)
+                "list_account_io_status" -> {
+                    val statuses = (response as RuntimeReply.AccountIoStatuses).statuses
+                    assertEquals(RestoreItemState.Restored, statuses.single().completed.single().state)
+                }
+                else -> assertTrue(response is RuntimeReply.Package, name)
             }
         }
     }

@@ -12,7 +12,7 @@
 
 ## 2. 只扩展完整产品链路
 
-当前候选版 wire 固定为十一个操作和五个错误码。新增命令、字段、响应或错误码必须在同一个变更中具备：
+当前 0.2.0 wire 固定为十八个操作和十一个错误码。新增命令、字段、响应或错误码必须在同一个变更中具备：
 
 1. 明确的用户操作。
 2. Rust 端到端用例。
@@ -24,7 +24,7 @@
 
 ## 3. 保持依赖方向
 
-- `PackageAggregate` 是唯一业务状态。
+- `PackageAggregate` 是唯一稳定业务状态；短期事务 sidecar 必须可恢复、可清理，不能成为第二套账号模型。
 - Use Case 完整编排保存意图、停止 App、CE/DE 操作、验证、提交和恢复。
 - Manager 只发送用户意图并消费结果，不编排挂载步骤。
 - 协议层只做 wire 转换，不拥有业务判断。
@@ -40,6 +40,9 @@
 - 同包名、同 UID 且签名谱系兼容的 APK 身份变化可以无损接管；没有签名 sidecar 的 0.1.6 配置只有在 UID 相同且用户输入“绑定”确认后才能接管。
 - UID 或签名不一致使用 `identity_mismatch`，不完整槽对、非 Ready 聚合和真实视图异常使用 `state_conflict`；两类失败都必须零删除。
 - `enroll reset:true` 在 0.1.7 Runtime 中始终拒绝。唯一危险清理入口是用户明确选择“取消配置并删除分空间”。
+- 备份/恢复必须在 package account-I/O lease 内完成；Manager/helper 不得越过 Runtime 直接替换 Base 或正式槽。
+- 恢复的 CE/DE 是一个提交单元。每个账号替换前保存 intent，失败回滚该账号；已经提交的其他账号在批次失败或中断后保留。
+- 涉及 Base 或当前账号的备份必须保存 App 启用状态并阻止重新启动；非活动槽备份不得无故停止当前 App。
 
 ## 5. 保持 Manager 单向状态
 
@@ -48,7 +51,8 @@
 - 同一时刻只允许一个 Runtime 操作；busy 时丢弃新操作，不排队。
 - transport failure 与 Runtime wire error 分开处理，不能用业务失败表示断线。
 - ViewModel 不读取 Android 挂载或持久化细节。
-- Manager 与 Runtime 版本不一致时只允许读取已有快照，所有改变状态的 Intent 必须在 ViewModel 入口拦截。
+- Manager 与 Runtime 版本不一致时只允许发送 `probe`，包列表和选中状态必须清空，不能发送 `list/get` 或写操作。
+- SAF、归档和密码只属于 Manager；挂载、维护视图、CE/DE 正式替换和开机恢复只属于 Runtime。
 - 首页空间展开状态只属于 Manager 本地偏好，不进入聚合或 wire。
 
 ## 6. 不增加无依据设置

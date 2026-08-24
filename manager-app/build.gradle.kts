@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -14,6 +16,49 @@ val hasReleaseSigning = listOf(
     releaseKeyAlias,
     releaseKeyPassword,
 ).all { !it.isNullOrBlank() }
+val archiveHelperBinary = rootProject.layout.projectDirectory.file(
+    "outputs/helpers/uclone_archive",
+)
+val archiveHelperChecksumFile = rootProject.layout.projectDirectory.file(
+    "outputs/helpers/uclone_archive.sha256",
+)
+val archiveHelperChecksum = if (
+    archiveHelperBinary.asFile.isFile && archiveHelperChecksumFile.asFile.isFile
+) {
+    archiveHelperChecksumFile.asFile.readText().trim()
+} else {
+    ""
+}
+val generatedArchiveHelper = layout.buildDirectory.dir("generated/archive-helper-jni")
+
+val prepareArchiveHelper by tasks.registering(Copy::class) {
+    from(archiveHelperBinary)
+    into(generatedArchiveHelper.map { it.dir("arm64-v8a") })
+    rename { "libuclone_archive.so" }
+    doFirst {
+        check(archiveHelperBinary.asFile.isFile) {
+            "Missing archive helper; run tools/build-manager-helper.sh first"
+        }
+        check(archiveHelperChecksum.matches(Regex("[0-9a-f]{64}"))) {
+            "Missing or invalid archive helper checksum"
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+        archiveHelperBinary.asFile.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        val actual = digest.digest().joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
+        check(actual == archiveHelperChecksum) {
+            "Archive helper checksum does not match its checksum file"
+        }
+    }
+}
 
 android {
     namespace = "com.uclone.slices.v2"
@@ -23,8 +68,9 @@ android {
         applicationId = "com.uclone.slices.v2"
         minSdk = 29
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.1.9"
+        versionCode = 11
+        versionName = "0.2.0"
+        buildConfigField("String", "ARCHIVE_HELPER_SHA256", "\"$archiveHelperChecksum\"")
     }
 
     signingConfigs {
@@ -56,8 +102,18 @@ android {
     }
 
     sourceSets {
+        getByName("release") {
+            jniLibs.srcDir(generatedArchiveHelper)
+        }
         getByName("test") {
             resources.srcDir("../protocol/fixtures")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            keepDebugSymbols += "**/libuclone_archive.so"
         }
     }
 
@@ -69,6 +125,10 @@ android {
     kotlin {
         jvmToolchain(17)
     }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(prepareArchiveHelper)
 }
 
 dependencies {

@@ -6,7 +6,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::model::{
-    Capabilities, ObservedView, PackageIdentity, PackageInspection, PackageName, SlotId,
+    AccountIoToken, Capabilities, ObservedView, PackageEnabledState, PackageIdentity,
+    PackageInspection, PackageName, SlotId,
 };
 use crate::ports::{AdapterError, AndroidOps};
 
@@ -89,6 +90,40 @@ impl SystemAndroidOps {
                 .join(package.as_str())
                 .join(slot.as_str()),
         )
+    }
+
+    fn maintenance_paths(
+        &self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(PathBuf, PathBuf), AdapterError> {
+        let ce_root = self
+            .ce_slots_root
+            .parent()
+            .ok_or_else(|| AdapterError::new("CE slots root has no storage parent"))?;
+        let de_root = self
+            .de_slots_root
+            .parent()
+            .ok_or_else(|| AdapterError::new("DE slots root has no storage parent"))?;
+        Ok((
+            ce_root
+                .join("maintenance")
+                .join(token.as_str())
+                .join(package.as_str()),
+            de_root
+                .join("maintenance")
+                .join(token.as_str())
+                .join(package.as_str()),
+        ))
+    }
+
+    fn package_enabled_state(
+        &mut self,
+        package: &PackageName,
+    ) -> Result<PackageEnabledState, AdapterError> {
+        let output = self.required("/system/bin/dumpsys", &["package", package.as_str()])?;
+        parse_user0_enabled_state(&output.stdout)
+            .ok_or_else(|| AdapterError::new("package user0 enabled state is unavailable"))
     }
 
     fn run(&mut self, program: &str, arguments: &[&str]) -> Result<CommandOutput, AdapterError> {
@@ -387,6 +422,85 @@ impl AndroidOps for SystemAndroidOps {
         }
     }
 
+    fn apply_maintenance_view(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+    ) -> Result<(), AdapterError> {
+        let (canonical_ce, canonical_de) = self.canonical_paths(package);
+        let (maintenance_ce, maintenance_de) = self.maintenance_paths(package, token)?;
+        if !maintenance_ce.is_dir() || !maintenance_de.is_dir() {
+            return Err(AdapterError::new("maintenance CE/DE pair is incomplete"));
+        }
+        self.ensure_unmounted(&canonical_ce)?;
+        self.ensure_unmounted(&canonical_de)?;
+        let mount_ce = self.required(
+            "/system/bin/mount",
+            &[
+                "--bind",
+                path_text(&maintenance_ce)?,
+                path_text(&canonical_ce)?,
+            ],
+        );
+        if let Err(error) = mount_ce {
+            self.cleanup_mounts(&canonical_ce, &canonical_de);
+            return Err(error);
+        }
+        let mount_de = self.required(
+            "/system/bin/mount",
+            &[
+                "--bind",
+                path_text(&maintenance_de)?,
+                path_text(&canonical_de)?,
+            ],
+        );
+        if let Err(error) = mount_de {
+            self.cleanup_mounts(&canonical_ce, &canonical_de);
+            return Err(error);
+        }
+        let observed = self.read_self_view(package)?;
+        if observed == ObservedView::Maintenance(token.clone()) {
+            Ok(())
+        } else {
+            self.cleanup_mounts(&canonical_ce, &canonical_de);
+            Err(AdapterError::new(
+                "Runtime mountinfo did not show the maintenance CE/DE view",
+            ))
+        }
+    }
+
+    fn read_enabled_state(
+        &mut self,
+        package: &PackageName,
+    ) -> Result<PackageEnabledState, AdapterError> {
+        self.package_enabled_state(package)
+    }
+
+    fn block_launch(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        self.required(
+            "/system/bin/pm",
+            &["disable-user", "--user", "0", package.as_str()],
+        )?;
+        self.force_stop(package)?;
+        Ok(())
+    }
+
+    fn restore_enabled_state(
+        &mut self,
+        package: &PackageName,
+        state: PackageEnabledState,
+    ) -> Result<(), AdapterError> {
+        let action = match state {
+            PackageEnabledState::Default => "default-state",
+            PackageEnabledState::Enabled => "enable",
+            PackageEnabledState::Disabled => "disable",
+            PackageEnabledState::DisabledUser => "disable-user",
+            PackageEnabledState::DisabledUntilUsed => "disable-until-used",
+        };
+        self.required("/system/bin/pm", &[action, "--user", "0", package.as_str()])?;
+        Ok(())
+    }
+
     fn launch_verified(
         &mut self,
         package: &PackageName,
@@ -453,6 +567,25 @@ fn status_uid(content: &str) -> Option<u32> {
     })
 }
 
+fn parse_user0_enabled_state(content: &str) -> Option<PackageEnabledState> {
+    let line = content
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("User 0:") && line.contains("enabled="))?;
+    let value = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("enabled="))?
+        .trim_end_matches(',');
+    match value {
+        "0" => Some(PackageEnabledState::Default),
+        "1" => Some(PackageEnabledState::Enabled),
+        "2" => Some(PackageEnabledState::Disabled),
+        "3" => Some(PackageEnabledState::DisabledUser),
+        "4" => Some(PackageEnabledState::DisabledUntilUsed),
+        _ => None,
+    }
+}
+
 fn parse_launcher_component(content: &str, package: &PackageName) -> Option<String> {
     content.lines().rev().find_map(|line| {
         let line = line.trim();
@@ -467,21 +600,43 @@ fn runtime_view_from_mountinfo(
     canonical_ce_root: &Path,
     canonical_de_root: &Path,
 ) -> ObservedView {
-    let ce = domain_view(
+    let ce = runtime_domain_view(
         &mount_roots(content, &canonical_ce_root.join(package.as_str())),
         package,
     );
-    let de = domain_view(
+    let de = runtime_domain_view(
         &mount_roots(content, &canonical_de_root.join(package.as_str())),
         package,
     );
-    paired_view(ce, de)
+    match (ce, de) {
+        (Some(RuntimeDomainView::Base), Some(RuntimeDomainView::Base)) => ObservedView::Base,
+        (Some(RuntimeDomainView::Slot(ce)), Some(RuntimeDomainView::Slot(de))) if ce == de => {
+            ObservedView::Slot(ce)
+        }
+        (Some(RuntimeDomainView::Maintenance(ce)), Some(RuntimeDomainView::Maintenance(de)))
+            if ce == de =>
+        {
+            ObservedView::Maintenance(ce)
+        }
+        _ => ObservedView::Inconsistent,
+    }
 }
 
-fn domain_view(roots: &[String], package: &PackageName) -> Option<Option<SlotId>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeDomainView {
+    Base,
+    Slot(SlotId),
+    Maintenance(AccountIoToken),
+}
+
+fn runtime_domain_view(roots: &[String], package: &PackageName) -> Option<RuntimeDomainView> {
     match roots {
-        [] => Some(None),
-        [root] => slot_from_mount_root(root, package).map(Some),
+        [] => Some(RuntimeDomainView::Base),
+        [root] => slot_from_mount_root(root, package)
+            .map(RuntimeDomainView::Slot)
+            .or_else(|| {
+                maintenance_from_mount_root(root, package).map(RuntimeDomainView::Maintenance)
+            }),
         _ => None,
     }
 }
@@ -516,6 +671,12 @@ fn paired_view(ce: Option<Option<SlotId>>, de: Option<Option<SlotId>>) -> Observ
 }
 
 fn app_domain_view(roots: &[String], package: &PackageName) -> Option<Option<SlotId>> {
+    if roots
+        .iter()
+        .any(|root| root.contains("/uclone-slices-v2/maintenance/"))
+    {
+        return None;
+    }
     let v2_roots: Vec<_> = roots
         .iter()
         .filter(|root| root.contains("/uclone-slices-v2/slots/"))
@@ -550,6 +711,15 @@ fn slot_from_mount_root(root: &str, package: &PackageName) -> Option<SlotId> {
     let slot = root.split_once(&marker)?.1;
     (!slot.contains('/'))
         .then(|| SlotId::new(slot.to_owned()).ok())
+        .flatten()
+}
+
+fn maintenance_from_mount_root(root: &str, package: &PackageName) -> Option<AccountIoToken> {
+    let marker = "/uclone-slices-v2/maintenance/";
+    let tail = root.split_once(marker)?.1;
+    let (token, owner) = tail.split_once('/')?;
+    (owner == package.as_str() && !token.contains('/'))
+        .then(|| AccountIoToken::new(token.to_owned()).ok())
         .flatten()
 }
 
@@ -1207,6 +1377,101 @@ mod tests {
                     vec![canonical_de.join(package.as_str()).display().to_string()],
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn maintenance_view_mounts_the_private_empty_pair_and_is_observable() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let ce_slots = root.path().join("misc_ce/uclone-slices-v2/slots");
+        let de_slots = root.path().join("misc_de/uclone-slices-v2/slots");
+        let maintenance_ce = ce_slots
+            .parent()
+            .unwrap()
+            .join("maintenance")
+            .join(token.as_str())
+            .join(package.as_str());
+        let maintenance_de = de_slots
+            .parent()
+            .unwrap()
+            .join("maintenance")
+            .join(token.as_str())
+            .join(package.as_str());
+        let canonical_ce = root.path().join("data/user/0");
+        let canonical_de = root.path().join("data/user_de/0");
+        for path in [
+            &maintenance_ce,
+            &maintenance_de,
+            &canonical_ce.join(package.as_str()),
+            &canonical_de.join(package.as_str()),
+        ] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let mountinfo = root.path().join("mountinfo");
+        fs::write(&mountinfo, "").unwrap();
+        let runner = MountRunner {
+            commands: Rc::new(RefCell::new(Vec::new())),
+            mountinfo: mountinfo.clone(),
+            fail_mount_containing: None,
+            normal_unmount_error: None,
+            ignore_unmount: false,
+        };
+        let mut android = SystemAndroidOps {
+            build_id: "test".to_owned(),
+            ce_slots_root: ce_slots,
+            de_slots_root: de_slots,
+            canonical_ce_root: canonical_ce,
+            canonical_de_root: canonical_de,
+            mountinfo,
+            proc_root: root.path().join("proc"),
+            runner: Box::new(runner),
+        };
+
+        android.apply_maintenance_view(&package, &token).unwrap();
+
+        assert_eq!(
+            android.observe_view(&package).unwrap(),
+            ObservedView::Maintenance(token),
+        );
+    }
+
+    #[test]
+    fn enabled_state_round_trips_through_the_exact_user0_pm_action() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([
+                output("User 0: ceDataInode=1 installed=true hidden=false enabled=3\n"),
+                output(""),
+            ]),
+            commands: Rc::clone(&commands),
+        };
+        let (mut android, recorded) = system_with_runner(root.path(), runner);
+
+        let state = android.read_enabled_state(&package).unwrap();
+        android.restore_enabled_state(&package, state).unwrap();
+
+        assert_eq!(state, PackageEnabledState::DisabledUser);
+        assert_eq!(
+            *recorded.borrow(),
+            vec![
+                (
+                    "/system/bin/dumpsys".to_owned(),
+                    vec!["package".to_owned(), package.as_str().to_owned()],
+                ),
+                (
+                    "/system/bin/pm".to_owned(),
+                    vec![
+                        "disable-user".to_owned(),
+                        "--user".to_owned(),
+                        "0".to_owned(),
+                        package.as_str().to_owned(),
+                    ],
+                ),
+            ],
         );
     }
 
