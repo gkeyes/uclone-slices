@@ -3,28 +3,20 @@
 [![Validate V2](https://github.com/gkeyes/uclone-slices/actions/workflows/ci.yml/badge.svg)](https://github.com/gkeyes/uclone-slices/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空间管理器。它让同一个 App 在系统原始数据与多个独立 CE/DE 数据空间之间切换，并由 Runtime 完成停止、挂载、验证和启动。
+UClone Slices V2 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前开发版本为 **v0.2.1 候选版**，功能基线仍包含 0.1.9 的全部安全修复，不包含桌面 Hook。0.2.0 引入账号级备份与恢复；0.2.1 修复活动账号备份、后台多进程 App 停止、残留账号操作恢复、签名谱系判断、Base 恢复容量门禁及绑定挂载目标的跨挂载替换。`PackageAggregate`、`.ucsbackup` v1 和既有 CE/DE 账号目录格式均保持不变。
+当前版本为 **v0.2.1**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。
 
 ## 功能
 
-- 为普通第三方 Launcher App 登记唯一的系统原始空间。
-- 创建空白空间或系统原始空间副本。
-- 在首页或详情页快速切换空间，并启动目标 App。
-- 重命名普通空间，永久删除非活动普通空间。
-- 取消 App 配置：切回系统原始空间，删除全部独立空间和登记记录，保留 APK 与原始数据。
-- App 正常升级或降级后自动无损重新绑定，保留账号名称、CE/DE 数据、当前账号和重启启动开关。
-- 0.1.6 旧配置缺少签名 sidecar 且 APK 已变化时，显示账号清单并要求一次“绑定”确认，不删除空间。
-- Runtime 事务中断后，根据持久化上下文继续收敛。
-- daemon 在 user0 解锁后、开放 socket 前主动恢复非 Base 当前空间；每个 App 可独立选择恢复后是否自动启动，默认关闭，同一 boot 只执行一次。
-- 0.2.1 Manager 与 Runtime 必须成对使用；版本不匹配时只允许 `probe`，不查询或修改账号状态。
-- 首页账号展开状态保存在 Manager 本地，重启 Manager 后保持不变。
-- Manager 使用 MIUIX 组件、深浅色主题和原生过渡反馈，不改变 Runtime 操作语义。
-- 可将 Base、单个分账号或同一 App 的全部账号导出为 `.ucsbackup` 文件；默认使用密码加密。
-- 恢复前先校验文件、包名、签名类型和证书，再预览账号映射；Base 备份只能覆盖 Base，分账号不能覆盖 Base。
-- 完整恢复会覆盖备份内的 Base 和所选分账号，未选择的现有分账号保留。每个账号独立提交，已成功的账号不会因后续账号失败而丢失。
-- 备份只包含账号所需的 CE/DE 私有数据，排除顶层 `cache`、`code_cache`，不包含 APK、OBB、媒体、外部存储或不可导出的 Android Keystore 密钥。
+- 同一个 App 可保存系统原始空间和多个独立分账号。
+- 可创建空白分账号，也可复制系统原始空间。
+- 点击账号即可完成切换并打开 App。
+- 支持重命名、删除分账号，以及取消应用配置。
+- 支持备份或恢复 Base、单个分账号和全部账号，备份默认使用密码加密。
+- 切换、备份和恢复时会自动停止并校验 App，避免账号数据混用。
+- App 升降级和设备重启后保留账号配置，并可选择重启后自动打开 App。
+- 备份只保存账号所需的私有数据，不包含 APK、缓存、媒体和外部存储文件。
 
 ## 运行条件
 
@@ -40,7 +32,7 @@ UClone Slices V2 是为 Root Android / KernelSU 设备重建的应用数据空�
 
 ## 下载与安装
 
-候选产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
+Release 产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
 
 1. `uclone-slices-v2-manager-0.2.1-<sha>.apk`
 2. `uclone-slices-v2-kernelsu-0.2.1-<sha>.zip`
@@ -154,7 +146,7 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 
 Runtime 根目录、CE/DE 的 UClone 根、`slots` 和包名父目录均为 `root:root 0700`；socket 为 `root:root 0600`。slot 本身及其内容继续使用目标 App 的 UID、原 mode 和 MCS 标签。
 
-备份格式、安全边界和恢复事务详见 [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md)。本仓库不会自动创建 GitHub Release；候选包须由用户完成真机验收并明确确认后才能发布。
+备份格式、安全边界和恢复事务详见 [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md)。GitHub Release 仅在用户完成真机验收并明确确认后发布。
 
 ## 开发规则
 
