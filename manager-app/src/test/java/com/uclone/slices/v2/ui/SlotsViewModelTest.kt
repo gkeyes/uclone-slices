@@ -209,12 +209,10 @@ class SlotsViewModelTest {
         val client = FreezingRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
         configureApp(viewModel)
-        viewModel.onIntent(UiIntent.SlotNameChanged("Work"))
         viewModel.onIntent(UiIntent.SeedChanged(SeedMode.CloneBase))
 
-        viewModel.onIntent(UiIntent.CreateSlot)
+        viewModel.onIntent(UiIntent.CreateSlot("工作账号"))
         client.createStarted.await()
-        viewModel.onIntent(UiIntent.SlotNameChanged("Changed later"))
         viewModel.onIntent(UiIntent.SeedChanged(SeedMode.Blank))
         client.releaseCreate.complete(Unit)
 
@@ -222,7 +220,7 @@ class SlotsViewModelTest {
             client.commands.contains(
                 RuntimeCommand.CreateSlot(
                     packageName = "com.example.app",
-                    name = "Work",
+                    name = "工作账号",
                     seed = SeedMode.CloneBase,
                 ),
             ),
@@ -335,10 +333,9 @@ class SlotsViewModelTest {
         val client = FakeRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
         configureApp(viewModel)
-        viewModel.onIntent(UiIntent.SlotNameChanged("   "))
         val commandsBeforeCreate = client.commands.toList()
 
-        viewModel.onIntent(UiIntent.CreateSlot)
+        viewModel.onIntent(UiIntent.CreateSlot("   "))
 
         assertEquals(commandsBeforeCreate, client.commands)
         assertEquals(UiNotice.InvalidInput, viewModel.state.value.notice)
@@ -410,10 +407,9 @@ class SlotsViewModelTest {
             val client = FakeRuntimeClient()
             val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
             configureApp(viewModel)
-            viewModel.onIntent(UiIntent.SlotNameChanged("Work"))
             client.nextReply = RuntimeReply.Error(code)
 
-            viewModel.onIntent(UiIntent.CreateSlot)
+            viewModel.onIntent(UiIntent.CreateSlot("Work"))
 
             assertEquals(notice, viewModel.state.value.notice)
             assertNull(viewModel.state.value.registrationRecovery)
@@ -473,10 +469,9 @@ class SlotsViewModelTest {
         val client = FakeRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
         configureApp(viewModel)
-        viewModel.onIntent(UiIntent.SlotNameChanged("Work"))
         client.nextReply = RuntimeReply.TransportFailure
 
-        viewModel.onIntent(UiIntent.CreateSlot)
+        viewModel.onIntent(UiIntent.CreateSlot("Work"))
 
         assertEquals(UiNotice.RuntimeUnavailable, viewModel.state.value.notice)
         assertFalse(viewModel.state.value.runtimeReady)

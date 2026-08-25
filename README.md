@@ -150,7 +150,7 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 - CE 空间：`/data/misc_ce/0/uclone-slices-v2/slots/<package>/<slot>`
 - DE 空间：`/data/misc_de/0/uclone-slices-v2/slots/<package>/<slot>`
 - Runtime socket：`/data/adb/uclone-slices-v2/runtime.sock`
-- 恢复暂存和回滚：CE/DE UClone 根下的 `transfers`、`maintenance`、`maintenance-base`、`rollback`；事务完成或恢复后清理。
+- 恢复暂存和回滚：CE/DE UClone 根下的 `transfers`、`maintenance`、`rollback`；`maintenance-base` 仅用于清理旧版本遗留别名，事务完成或恢复后统一清理。
 
 Runtime 根目录、CE/DE 的 UClone 根、`slots` 和包名父目录均为 `root:root 0700`；socket 为 `root:root 0600`。slot 本身及其内容继续使用目标 App 的 UID、原 mode 和 MCS 标签。
 

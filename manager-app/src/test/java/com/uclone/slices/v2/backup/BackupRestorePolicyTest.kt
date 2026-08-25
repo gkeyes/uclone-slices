@@ -6,6 +6,9 @@ import com.uclone.slices.v2.runtime.AccountIoKind
 import com.uclone.slices.v2.runtime.AccountIoStatus
 import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.RuntimeClient
+import com.uclone.slices.v2.runtime.RestoreBatchResult
+import com.uclone.slices.v2.runtime.RestoreItemResult
+import com.uclone.slices.v2.runtime.RestoreItemState
 import com.uclone.slices.v2.runtime.SigningIdentity
 import com.uclone.slices.v2.runtime.SigningKind
 import com.uclone.slices.v2.runtime.RuntimeCommand
@@ -13,6 +16,7 @@ import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.RuntimeReply
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -76,6 +80,43 @@ class BackupRestorePolicyTest {
         )
         assertIs<RuntimeCommand.AbortAccountIo>(
             backupFinalizationCommand("token", documentComplete = false),
+        )
+    }
+
+    @Test
+    fun restoreFinalizationRetriesOnceWhenCleanupInitiallyFails() = runBlocking {
+        val result = RestoreBatchResult(
+            packageName = "com.example.app",
+            items = listOf(RestoreItemResult("base", "base", RestoreItemState.Restored)),
+            activeSlot = "base",
+            launchAfterReboot = false,
+            appStarted = false,
+        )
+        val client = SequencedRuntimeClient(
+            mutableListOf(
+                RuntimeReply.Error(ErrorCode.StateConflict),
+                RuntimeReply.RestoreBatch(result),
+            ),
+        )
+
+        val reply = finishRestoreWithRetry(client, "token")
+
+        assertEquals(RuntimeReply.RestoreBatch(result), reply)
+        assertEquals(
+            listOf<RuntimeCommand>(
+                RuntimeCommand.FinishRestoreIo("token"),
+                RuntimeCommand.FinishRestoreIo("token"),
+            ),
+            client.commands,
+        )
+    }
+
+    @Test
+    fun failedFinalizationIsLeftForExplicitRecoveryInsteadOfHiddenAbort() {
+        assertNull(restoreAbortCommand("token", finishAttempted = true))
+        assertEquals(
+            RuntimeCommand.AbortAccountIo("token"),
+            restoreAbortCommand("token", finishAttempted = false),
         )
     }
 
@@ -229,5 +270,16 @@ private class AccountIoRecoveryRuntimeClient(
             }
             else -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
+    }
+}
+
+private class SequencedRuntimeClient(
+    private val replies: MutableList<RuntimeReply>,
+) : RuntimeClient {
+    val commands = mutableListOf<RuntimeCommand>()
+
+    override suspend fun execute(command: RuntimeCommand): RuntimeReply {
+        commands += command
+        return replies.removeAt(0)
     }
 }

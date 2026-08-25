@@ -508,30 +508,24 @@ impl FileSlotStorage {
     fn replacement_target_paths(
         &self,
         package: &PackageName,
-        token: &AccountIoToken,
+        _token: &AccountIoToken,
         target: &SlotId,
     ) -> Result<(PathBuf, PathBuf), AdapterError> {
         if target.is_base() {
-            let (alias_ce, alias_de) = self.base_alias_paths(package, token)?;
-            let (ce_mounted, de_mounted) = base_alias_mount_presence(&alias_ce, &alias_de)?;
-            if paired_alias_mount_state(ce_mounted, de_mounted)? {
-                Ok((alias_ce, alias_de))
-            } else {
-                let canonical_ce = self.canonical_ce_root.join(package.as_str());
-                let canonical_de = self.canonical_de_root.join(package.as_str());
-                let (ce_mounted, de_mounted) = path_mount_presence(&canonical_ce, &canonical_de)?;
-                if ce_mounted || de_mounted {
-                    return Err(AdapterError::state_conflict(
-                        "base recovery target still has a managed view mounted",
-                    ));
-                }
-                if !real_directory(&canonical_ce)? || !real_directory(&canonical_de)? {
-                    return Err(AdapterError::state_conflict(
-                        "base recovery target is unavailable",
-                    ));
-                }
-                Ok((canonical_ce, canonical_de))
+            let canonical_ce = self.canonical_ce_root.join(package.as_str());
+            let canonical_de = self.canonical_de_root.join(package.as_str());
+            let (ce_mounted, de_mounted) = path_mount_presence(&canonical_ce, &canonical_de)?;
+            if ce_mounted || de_mounted {
+                return Err(AdapterError::state_conflict(
+                    "base recovery target still has a managed view mounted",
+                ));
             }
+            if !real_directory(&canonical_ce)? || !real_directory(&canonical_de)? {
+                return Err(AdapterError::state_conflict(
+                    "base recovery target is unavailable",
+                ));
+            }
+            Ok((canonical_ce, canonical_de))
         } else {
             Ok(self.slot_paths(package, target))
         }
@@ -795,27 +789,24 @@ impl SlotStorage for FileSlotStorage {
             return Err(AdapterError::new("base CE/DE pair is unavailable"));
         }
         let (maintenance_ce, maintenance_de) = self.maintenance_paths(package, token)?;
-        let (alias_ce, alias_de) = self.base_alias_paths(package, token)?;
-        for (source, maintenance, alias) in [
-            (&canonical_ce, &maintenance_ce, &alias_ce),
-            (&canonical_de, &maintenance_de, &alias_de),
+        for (source, maintenance) in [
+            (&canonical_ce, &maintenance_ce),
+            (&canonical_de, &maintenance_de),
         ] {
-            if maintenance.exists() || alias.exists() {
+            if maintenance.exists() {
                 return Err(AdapterError::state_conflict(
                     "maintenance path already exists",
                 ));
             }
-            for path in [maintenance, alias] {
-                let parent = path
-                    .parent()
-                    .ok_or_else(|| AdapterError::new("maintenance path has no parent"))?;
-                fs::create_dir_all(parent).map_err(io_error)?;
-                secure_private_directory(parent, self.owner)?;
-                fs::create_dir(path).map_err(io_error)?;
-                apply_root_profile(source, path)?;
-            }
+            let parent = maintenance
+                .parent()
+                .ok_or_else(|| AdapterError::new("maintenance path has no parent"))?;
+            fs::create_dir_all(parent).map_err(io_error)?;
+            secure_private_directory(parent, self.owner)?;
+            fs::create_dir(maintenance).map_err(io_error)?;
+            apply_root_profile(source, maintenance)?;
         }
-        bind_base_aliases(&canonical_ce, &canonical_de, &alias_ce, &alias_de)
+        Ok(())
     }
 
     fn replace_account(
@@ -1430,70 +1421,57 @@ fn remove_directory_contents(path: &Path) -> Result<(), AdapterError> {
 }
 
 #[cfg(target_os = "android")]
-fn bind_base_aliases(
-    canonical_ce: &Path,
-    canonical_de: &Path,
-    alias_ce: &Path,
-    alias_de: &Path,
-) -> Result<(), AdapterError> {
-    for (source, target) in [(canonical_ce, alias_ce), (canonical_de, alias_de)] {
-        let status = Command::new("/system/bin/mount")
-            .arg("--bind")
-            .arg(source)
-            .arg(target)
-            .status()
-            .map_err(io_error)?;
-        if !status.success() {
-            let _cleanup = unmount_base_aliases(alias_ce, alias_de);
-            return Err(AdapterError::new(
-                "could not bind the Base maintenance alias",
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "android"))]
-fn bind_base_aliases(
-    _canonical_ce: &Path,
-    _canonical_de: &Path,
-    _alias_ce: &Path,
-    _alias_de: &Path,
-) -> Result<(), AdapterError> {
-    Ok(())
-}
-
-#[cfg(target_os = "android")]
 fn unmount_base_aliases(alias_ce: &Path, alias_de: &Path) -> Result<(), AdapterError> {
-    let (ce_mounted, de_mounted) = base_alias_mount_presence(alias_ce, alias_de)?;
-    let mut command_error = None;
-    for (target, mounted) in [(alias_ce, ce_mounted), (alias_de, de_mounted)] {
-        if !mounted {
-            continue;
-        }
-        let status = match Command::new("/system/bin/umount").arg(target).status() {
-            Ok(status) => status,
-            Err(error) => {
-                if command_error.is_none() {
-                    command_error = Some(io_error(error));
-                }
-                continue;
-            }
-        };
-        if !status.success() && command_error.is_none() {
-            command_error = Some(AdapterError::new(
-                "could not unmount the Base maintenance alias",
-            ));
+    let mut first_error = None;
+    for target in [alias_ce, alias_de] {
+        if let Err(error) = unmount_all_path_layers(target)
+            && first_error.is_none()
+        {
+            first_error = Some(error);
         }
     }
-    let (ce_remaining, de_remaining) = base_alias_mount_presence(alias_ce, alias_de)?;
+    let (ce_remaining, de_remaining) = path_mount_presence(alias_ce, alias_de)?;
     if ce_remaining || de_remaining {
-        Err(command_error.unwrap_or_else(|| {
+        Err(first_error.unwrap_or_else(|| {
             AdapterError::state_conflict("Base maintenance alias remained mounted")
         }))
     } else {
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
+}
+
+#[cfg(target_os = "android")]
+fn unmount_all_path_layers(target: &Path) -> Result<(), AdapterError> {
+    drain_mount_layers(target, path_mount_layer_count, |path| {
+        let status = Command::new("/system/bin/umount")
+            .arg(path)
+            .status()
+            .map_err(io_error)?;
+        status
+            .success()
+            .then_some(())
+            .ok_or_else(|| AdapterError::new("could not unmount the Base maintenance alias"))
+    })
+}
+
+#[cfg(any(target_os = "android", test))]
+fn drain_mount_layers(
+    target: &Path,
+    mut layer_count: impl FnMut(&Path) -> Result<usize, AdapterError>,
+    mut unmount_once: impl FnMut(&Path) -> Result<(), AdapterError>,
+) -> Result<(), AdapterError> {
+    let mut remaining = layer_count(target)?;
+    while remaining > 0 {
+        unmount_once(target)?;
+        let next = layer_count(target)?;
+        if next >= remaining {
+            return Err(AdapterError::state_conflict(
+                "Base maintenance alias unmount made no progress",
+            ));
+        }
+        remaining = next;
+    }
+    Ok(())
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1502,41 +1480,31 @@ fn unmount_base_aliases(_alias_ce: &Path, _alias_de: &Path) -> Result<(), Adapte
 }
 
 #[cfg(target_os = "android")]
-fn base_alias_mount_presence(
-    alias_ce: &Path,
-    alias_de: &Path,
-) -> Result<(bool, bool), AdapterError> {
-    path_mount_presence(alias_ce, alias_de)
-}
-
-#[cfg(target_os = "android")]
 fn path_mount_presence(first: &Path, second: &Path) -> Result<(bool, bool), AdapterError> {
     let mountinfo = fs::read_to_string("/proc/self/mountinfo").map_err(io_error)?;
     Ok((
-        mountinfo_contains_path(&mountinfo, first),
-        mountinfo_contains_path(&mountinfo, second),
+        mountinfo_path_layer_count(&mountinfo, first) > 0,
+        mountinfo_path_layer_count(&mountinfo, second) > 0,
     ))
 }
 
 #[cfg(any(target_os = "android", test))]
-fn mountinfo_contains_path(mountinfo: &str, path: &Path) -> bool {
+fn mountinfo_path_layer_count(mountinfo: &str, path: &Path) -> usize {
     let Some(expected) = path.to_str() else {
-        return false;
+        return 0;
     };
-    mountinfo.lines().any(|line| {
-        line.split_once(" - ").is_some() && line.split_whitespace().nth(4) == Some(expected)
-    })
+    mountinfo
+        .lines()
+        .filter(|line| {
+            line.split_once(" - ").is_some() && line.split_whitespace().nth(4) == Some(expected)
+        })
+        .count()
 }
 
-#[cfg(any(target_os = "android", test))]
-fn paired_alias_mount_state(ce_mounted: bool, de_mounted: bool) -> Result<bool, AdapterError> {
-    if ce_mounted == de_mounted {
-        Ok(ce_mounted)
-    } else {
-        Err(AdapterError::state_conflict(
-            "Base maintenance alias mount pair is inconsistent",
-        ))
-    }
+#[cfg(target_os = "android")]
+fn path_mount_layer_count(path: &Path) -> Result<usize, AdapterError> {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").map_err(io_error)?;
+    Ok(mountinfo_path_layer_count(&mountinfo, path))
 }
 
 fn populate_domain(source: &Path, target: &Path, seed: SeedMode) -> Result<(), AdapterError> {
@@ -1764,23 +1732,81 @@ mod tests {
     }
 
     #[test]
-    fn base_alias_mount_detection_requires_an_exact_ce_de_pair() {
+    fn legacy_base_alias_mount_detection_counts_every_stacked_layer() {
         let mountinfo = concat!(
             "41 30 0:35 / /data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
-            "42 30 0:35 / /data/misc_de/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
+            "42 41 0:35 /maintenance/token/pkg /data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
+            "43 30 0:35 / /data/misc_de/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
         );
-        assert!(mountinfo_contains_path(
-            mountinfo,
-            Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg"),
-        ));
-        assert!(!mountinfo_contains_path(
-            mountinfo,
-            Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance-base/token"),
-        ));
-        assert!(paired_alias_mount_state(true, true).unwrap());
-        assert!(!paired_alias_mount_state(false, false).unwrap());
-        assert!(paired_alias_mount_state(true, false).is_err());
-        assert!(paired_alias_mount_state(false, true).is_err());
+        assert_eq!(
+            mountinfo_path_layer_count(
+                mountinfo,
+                Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg"),
+            ),
+            2
+        );
+        assert_eq!(
+            mountinfo_path_layer_count(
+                mountinfo,
+                Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance-base/token"),
+            ),
+            0
+        );
+        assert_eq!(
+            mountinfo_path_layer_count(
+                mountinfo,
+                Path::new("/data/misc_de/0/uclone-slices-v2/maintenance-base/token/pkg"),
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn legacy_base_alias_cleanup_unmounts_every_stacked_layer() {
+        let target = Path::new("/legacy-alias");
+        let mut layers = std::collections::VecDeque::from([3, 2, 1, 0]);
+        let mut unmounts = 0;
+
+        drain_mount_layers(
+            target,
+            |_path| Ok(layers.pop_front().unwrap()),
+            |_path| {
+                unmounts += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(unmounts, 3);
+        assert!(layers.is_empty());
+    }
+
+    #[test]
+    fn restore_maintenance_does_not_create_a_base_alias() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        fs::create_dir_all(canonical_ce_root.join(package.as_str())).unwrap();
+        fs::create_dir_all(canonical_de_root.join(package.as_str())).unwrap();
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let mut storage = open_slot_storage(
+            &root.path().join("ce/uclone-slices-v2/slots"),
+            &root.path().join("de/uclone-slices-v2/slots"),
+            &canonical_ce_root,
+            &canonical_de_root,
+        );
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+
+        storage.prepare_maintenance(&package, &token).unwrap();
+
+        let (maintenance_ce, maintenance_de) = storage.maintenance_paths(&package, &token).unwrap();
+        let (alias_ce, alias_de) = storage.base_alias_paths(&package, &token).unwrap();
+        assert!(maintenance_ce.is_dir());
+        assert!(maintenance_de.is_dir());
+        assert!(!alias_ce.exists());
+        assert!(!alias_de.exists());
     }
 
     #[test]

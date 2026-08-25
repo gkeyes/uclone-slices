@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.uclone.slices.v2.R
@@ -167,9 +168,9 @@ internal fun PackageDetailScreen(
             canCloneBase = packageSnapshot.activeSlot == BASE_SLOT_ID,
             onDismiss = { createSheetVisible = false },
             onIntent = onIntent,
-            onCreate = {
+            onCreate = { name ->
                 createSheetVisible = false
-                onIntent(UiIntent.CreateSlot)
+                onIntent(UiIntent.CreateSlot(name))
             },
         )
     }
@@ -464,9 +465,12 @@ private fun CreateSpaceSheet(
     canCloneBase: Boolean,
     onDismiss: () -> Unit,
     onIntent: (UiIntent) -> Unit,
-    onCreate: () -> Unit,
+    onCreate: (String) -> Unit,
 ) {
     val show = remember { mutableStateOf(true) }
+    var slotName by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue())
+    }
     SuperBottomSheet(
         show = show,
         title = stringResource(R.string.create_space),
@@ -485,8 +489,8 @@ private fun CreateSpaceSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             SlicesInputField(
-                value = state.slotName,
-                onValueChange = { onIntent(UiIntent.SlotNameChanged(it)) },
+                value = slotName,
+                onValueChange = { slotName = it },
                 label = stringResource(R.string.space_name),
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -525,9 +529,9 @@ private fun CreateSpaceSheet(
                 text = stringResource(R.string.create),
                 onClick = {
                     show.value = false
-                    onCreate()
+                    onCreate(slotName.text)
                 },
-                enabled = state.slotName.isNotBlank(),
+                enabled = slotName.text.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
             )
         }

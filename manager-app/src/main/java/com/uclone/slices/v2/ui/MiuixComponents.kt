@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -229,6 +230,24 @@ internal fun SlicesSearchField(
 internal fun SlicesInputField(
     value: String,
     onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+) {
+    MiuixTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = label,
+        useLabelAsPlaceholder = true,
+        singleLine = true,
+        insideMargin = DpSize(15.dp, 14.dp),
+        modifier = modifier,
+    )
+}
+
+@Composable
+internal fun SlicesInputField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     label: String,
     modifier: Modifier = Modifier,
 ) {

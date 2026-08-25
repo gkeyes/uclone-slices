@@ -172,6 +172,7 @@ pub(crate) enum SlotFailure {
     DiscardDe,
     DiscardPackageCe,
     DiscardPackageDe,
+    Cleanup,
 }
 
 #[derive(Debug, Default)]
@@ -428,6 +429,9 @@ impl SlotStorage for MemorySlotStorage {
         package: &PackageName,
         token: &AccountIoToken,
     ) -> Result<(), AdapterError> {
+        if self.take_failure(SlotFailure::Cleanup) {
+            return Err(AdapterError::new("injected account-I/O cleanup failure"));
+        }
         self.staging.retain(|(stored_package, stored_token, _)| {
             stored_package != package || stored_token != token
         });

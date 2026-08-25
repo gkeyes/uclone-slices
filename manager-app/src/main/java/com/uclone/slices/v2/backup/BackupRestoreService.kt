@@ -14,6 +14,7 @@ import androidx.core.app.ServiceCompat
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.runtime.AccountIoKind
 import com.uclone.slices.v2.runtime.ArchiveScope
+import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.RootRuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeCommand
@@ -265,6 +266,7 @@ internal class BackupRestoreEngine(
         var anyRestored = false
         var temporaryEnrollmentCreated = false
         var commitAttempted = false
+        var finishAttempted = false
         try {
             if (!hasRestoreSpace(session.manifest.logicalSize)) {
                 BackupRestoreJobRegistry.publish(BackupJobState.Failure("insufficient_storage"))
@@ -367,7 +369,8 @@ internal class BackupRestoreEngine(
                     }
                 }
             }
-            when (val finished = runtime.execute(RuntimeCommand.FinishRestoreIo(lease.ioToken))) {
+            finishAttempted = true
+            when (val finished = finishRestoreWithRetry(runtime, lease.ioToken)) {
                 is RuntimeReply.RestoreBatch -> {
                     token = null
                     anyRestored = finished.result.items.any {
@@ -383,7 +386,7 @@ internal class BackupRestoreEngine(
             BackupRestoreJobRegistry.publish(BackupJobState.Failure(ioCode(error)))
         } finally {
             withContext(NonCancellable) {
-                if (token != null) abort(token)
+                restoreAbortCommand(token, finishAttempted)?.let { runtime.execute(it) }
                 cleanupTemporaryEnrollment(
                     job,
                     temporaryEnrollmentCreated,
@@ -485,4 +488,24 @@ internal fun backupFinalizationCommand(
     RuntimeCommand.FinishBackupIo(ioToken)
 } else {
     RuntimeCommand.AbortAccountIo(ioToken)
+}
+
+internal suspend fun finishRestoreWithRetry(
+    runtime: RuntimeClient,
+    ioToken: String,
+): RuntimeReply {
+    val command = RuntimeCommand.FinishRestoreIo(ioToken)
+    val first = runtime.execute(command)
+    val retryable = first is RuntimeReply.Error &&
+        first.code in setOf(ErrorCode.StateConflict, ErrorCode.OperationFailed)
+    return if (retryable) runtime.execute(command) else first
+}
+
+internal fun restoreAbortCommand(
+    ioToken: String?,
+    finishAttempted: Boolean,
+): RuntimeCommand? = if (ioToken != null && !finishAttempted) {
+    RuntimeCommand.AbortAccountIo(ioToken)
+} else {
+    null
 }

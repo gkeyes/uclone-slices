@@ -118,7 +118,6 @@ data class SlotsUiState(
     val installedApps: List<InstalledApp> = emptyList(),
     val packages: List<PackageSnapshot> = emptyList(),
     val selected: PackageSnapshot? = null,
-    val slotName: String = "",
     val seed: SeedMode = SeedMode.Blank,
     val operation: OperationUiState = OperationUiState.Idle,
     val notice: UiNotice? = null,
@@ -153,9 +152,8 @@ sealed interface UiIntent {
     data class RequestConfigureApp(val packageName: String) : UiIntent
     data object ConfirmConfigureApp : UiIntent
     data object DismissConfigureApp : UiIntent
-    data class SlotNameChanged(val value: String) : UiIntent
     data class SeedChanged(val value: SeedMode) : UiIntent
-    data object CreateSlot : UiIntent
+    data class CreateSlot(val name: String) : UiIntent
     data class ActivateSlot(val slotId: String) : UiIntent
     data class RequestRenameSlot(val slotId: String) : UiIntent
     data class RenameSlotNameChanged(val value: String) : UiIntent
@@ -235,10 +233,8 @@ internal class SlotsViewModel(
             UiIntent.DismissConfigureApp -> mutableState.update {
                 it.copy(pendingConfigurationPackage = null)
             }
-            is UiIntent.SlotNameChanged ->
-                mutableState.update { it.copy(slotName = intent.value) }
             is UiIntent.SeedChanged -> mutableState.update { it.copy(seed = intent.value) }
-            UiIntent.CreateSlot -> createSlot()
+            is UiIntent.CreateSlot -> createSlot(intent.name)
             is UiIntent.ActivateSlot -> activateSlot(intent.slotId)
             is UiIntent.RequestRenameSlot -> requestRenameSlot(intent.slotId)
             is UiIntent.RenameSlotNameChanged -> mutableState.update {
@@ -298,7 +294,6 @@ internal class SlotsViewModel(
                 ManagerDestination.PackageDetails -> current.copy(
                     destination = ManagerDestination.Spaces,
                     selected = null,
-                    slotName = "",
                     seed = SeedMode.Blank,
                     notice = null,
                     registrationRecovery = null,
@@ -371,7 +366,7 @@ internal class SlotsViewModel(
         }
     }
 
-    private fun createSlot() {
+    private fun createSlot(rawName: String) {
         val snapshot = state.value
         if (!snapshot.operationsAllowed) {
             showUnavailableOrMismatch()
@@ -383,7 +378,7 @@ internal class SlotsViewModel(
             mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
             return
         }
-        val name = snapshot.slotName.trim()
+        val name = rawName.trim()
         if (name.isEmpty()) {
             mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
             return
@@ -900,7 +895,6 @@ internal class SlotsViewModel(
                     packages = packages.sortedBy(PackageSnapshot::packageName),
                     selected = reply.packageSnapshot,
                     destination = ManagerDestination.PackageDetails,
-                    slotName = "",
                     seed = if (reply.packageSnapshot.activeSlot == BASE_SLOT_ID) {
                         current.seed
                     } else {

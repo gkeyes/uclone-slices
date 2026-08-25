@@ -121,7 +121,7 @@
     <string name="backup_complete_summary">已保存 %1$d 个账号，共 %2$s。</string>
     <string name="restore_complete">恢复完成</string>
     <string name="restore_complete_summary">成功 %1$d 个，失败 %2$d 个，未处理 %3$d 个。成功账号已经保留。</string>
-    <string name="restore_app_not_started">账号数据已处理，但 App 未自动打开。它可能原先已停用，或启动后的账号视图验证未通过；请先核对结果再手动打开。</string>
+    <string name="restore_app_not_started">恢复完成后不会自动打开 App。请手动打开并检查账号状态。</string>
     <string name="restore_item_restored">已恢复</string>
     <string name="restore_item_failed">恢复失败</string>
     <string name="restore_item_skipped">未处理</string>
