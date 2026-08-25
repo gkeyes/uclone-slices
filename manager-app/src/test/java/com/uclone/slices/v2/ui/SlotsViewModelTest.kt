@@ -616,7 +616,7 @@ class SlotsViewModelTest {
     }
 
     @Test
-    fun unenrollRequiresFrozenConfirmationAndMovesTheAppBackToAvailable() {
+    fun unenrollRequiresConfirmationAndMovesTheAppBackToAvailable() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
@@ -636,7 +636,7 @@ class SlotsViewModelTest {
         assertEquals(commandsBeforeConfirmation, client.commands)
         assertEquals(UiNotice.InvalidInput, viewModel.state.value.notice)
 
-        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged("删除"))
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged(true))
         viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
 
         assertEquals(
@@ -658,7 +658,7 @@ class SlotsViewModelTest {
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
-        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged("删除"))
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged(true))
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
 
         viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
@@ -668,7 +668,7 @@ class SlotsViewModelTest {
         assertTrue(viewModel.state.value.runtimeReady)
 
         viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
-        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged("删除"))
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged(true))
         client.nextReply = RuntimeReply.TransportFailure
         viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
 

@@ -42,7 +42,7 @@ import com.uclone.slices.v2.runtime.RestoreItemState
 import com.uclone.slices.v2.runtime.RestoreTarget
 import com.uclone.slices.v2.ui.BASE_SLOT_ID
 import com.uclone.slices.v2.ui.SlicesActionButton
-import com.uclone.slices.v2.ui.SlicesInputField
+import com.uclone.slices.v2.ui.SlicesConfirmationToggle
 import com.uclone.slices.v2.ui.SlicesPanel
 import com.uclone.slices.v2.ui.SlicesTextAction
 import com.uclone.slices.v2.ui.SlotsUiState
@@ -496,15 +496,19 @@ private fun RestorePreviewContent(
                         text = stringResource(R.string.restore_overwrite_warning),
                         color = MaterialTheme.colorScheme.onErrorContainer,
                     )
-                    SlicesInputField(
-                        value = state.destructiveConfirmation,
-                        onValueChange = {
+                    SlicesConfirmationToggle(
+                        checked = state.destructiveConfirmed,
+                        onCheckedChange = {
                             onIntent(BackupUiIntent.DestructiveConfirmationChanged(it))
                         },
-                        label = stringResource(
-                            R.string.restore_confirmation_label,
-                            state.expectedConfirmation,
+                        text = stringResource(
+                            if (state.signatureMatches) {
+                                R.string.restore_confirmation_toggle
+                            } else {
+                                R.string.restore_signature_mismatch_confirmation_toggle
+                            },
                         ),
+                        textColor = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
                     )
                 }
@@ -515,7 +519,7 @@ private fun RestorePreviewContent(
             SlicesActionButton(
                 text = stringResource(R.string.start_restore),
                 onClick = { onIntent(BackupUiIntent.StartRestore) },
-                enabled = state.destructiveConfirmation == state.expectedConfirmation,
+                enabled = state.destructiveConfirmed,
                 danger = true,
                 icon = painterResource(R.drawable.ic_restore),
                 modifier = Modifier.fillMaxWidth(),

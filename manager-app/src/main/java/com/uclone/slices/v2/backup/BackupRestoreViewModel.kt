@@ -63,7 +63,7 @@ internal data class BackupRestoreUiState(
     val targetPackage: PackageSnapshot? = null,
     val signatureMatches: Boolean = true,
     val mappings: List<RestoreMappingUi> = emptyList(),
-    val destructiveConfirmation: String = "",
+    val destructiveConfirmed: Boolean = false,
     val jobState: BackupJobState = BackupJobState.Idle,
     val errorCode: String? = null,
     val accountIoStatuses: List<AccountIoStatus> = emptyList(),
@@ -73,8 +73,6 @@ internal data class BackupRestoreUiState(
 ) {
     val running: Boolean
         get() = jobState is BackupJobState.Running
-    val expectedConfirmation: String
-        get() = if (signatureMatches) "覆盖" else manifest?.packageName.orEmpty()
 }
 
 internal sealed interface BackupUiIntent {
@@ -91,7 +89,7 @@ internal sealed interface BackupUiIntent {
         val archiveAccountId: String,
         val target: RestoreTarget,
     ) : BackupUiIntent
-    data class DestructiveConfirmationChanged(val value: String) : BackupUiIntent
+    data class DestructiveConfirmationChanged(val confirmed: Boolean) : BackupUiIntent
     data object StartRestore : BackupUiIntent
     data object RefreshAccountIoStatus : BackupUiIntent
     data class RequestAccountIoRecovery(val ioToken: String) : BackupUiIntent
@@ -146,7 +144,7 @@ internal class BackupRestoreViewModel(
                 intent.target,
             )
             is BackupUiIntent.DestructiveConfirmationChanged -> mutableState.update {
-                it.copy(destructiveConfirmation = intent.value, errorCode = null)
+                it.copy(destructiveConfirmed = intent.confirmed, errorCode = null)
             }
             BackupUiIntent.StartRestore -> startRestore()
             BackupUiIntent.RefreshAccountIoStatus -> refreshAccountIoStatus()
@@ -418,7 +416,7 @@ internal class BackupRestoreViewModel(
                     app.signingIdentity,
                 ),
                 mappings = mappings,
-                destructiveConfirmation = "",
+                destructiveConfirmed = false,
                 jobState = preview,
                 errorCode = null,
             )
@@ -445,6 +443,7 @@ internal class BackupRestoreViewModel(
                 mappings = state.mappings.map {
                     if (it.archiveAccountId == archiveAccountId) it.copy(target = target) else it
                 },
+                destructiveConfirmed = false,
                 errorCode = null,
             )
         }
@@ -456,7 +455,7 @@ internal class BackupRestoreViewModel(
         val sessionId = current.restoreSessionId ?: return fail("backup_invalid")
         val app = current.targetApp ?: return fail("backup_incompatible")
         val signing = app.signingIdentity ?: return fail("backup_incompatible")
-        if (current.destructiveConfirmation != current.expectedConfirmation) {
+        if (!current.destructiveConfirmed) {
             return fail("invalid_request")
         }
         val targets = current.mappings.mapNotNull { (it.target as? RestoreTarget.Existing)?.slotId }

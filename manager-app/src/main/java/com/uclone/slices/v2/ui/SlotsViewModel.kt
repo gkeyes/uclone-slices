@@ -104,7 +104,7 @@ data class UnenrollAppUi(
     val packageName: String,
     val appLabel: String,
     val affectedSpaces: List<String>,
-    val confirmation: String = "",
+    val confirmed: Boolean = false,
 )
 
 data class SlotsUiState(
@@ -163,7 +163,7 @@ sealed interface UiIntent {
     data object ConfirmDeleteSlot : UiIntent
     data object DismissDeleteSlot : UiIntent
     data class RequestUnenrollApp(val packageName: String) : UiIntent
-    data class UnenrollConfirmationChanged(val value: String) : UiIntent
+    data class UnenrollConfirmationChanged(val confirmed: Boolean) : UiIntent
     data object ConfirmUnenrollApp : UiIntent
     data object DismissUnenrollApp : UiIntent
     data object DismissNotice : UiIntent
@@ -248,7 +248,8 @@ internal class SlotsViewModel(
             is UiIntent.RequestUnenrollApp -> requestUnenrollApp(intent.packageName)
             is UiIntent.UnenrollConfirmationChanged -> mutableState.update {
                 it.copy(
-                    pendingUnenroll = it.pendingUnenroll?.copy(confirmation = intent.value),
+                    pendingUnenroll = it.pendingUnenroll?.copy(confirmed = intent.confirmed),
+                    notice = null,
                 )
             }
             UiIntent.ConfirmUnenrollApp -> confirmUnenrollApp()
@@ -618,7 +619,7 @@ internal class SlotsViewModel(
             return
         }
         val pending = snapshot.pendingUnenroll ?: return
-        if (pending.confirmation != DELETION_CONFIRMATION) {
+        if (!pending.confirmed) {
             mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
             return
         }
@@ -1028,5 +1029,4 @@ internal class SlotsViewModel(
 }
 
 internal const val BASE_SLOT_ID = "base"
-internal const val DELETION_CONFIRMATION = "删除"
 internal const val BINDING_CONFIRMATION = "绑定"

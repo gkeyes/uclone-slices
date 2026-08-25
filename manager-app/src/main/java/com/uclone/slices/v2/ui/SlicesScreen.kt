@@ -308,7 +308,7 @@ private fun DeleteSpaceDialog(
 @Composable
 private fun UnenrollAppDialog(
     unenrollment: UnenrollAppUi,
-    onConfirmationChanged: (String) -> Unit,
+    onConfirmationChanged: (Boolean) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -352,11 +352,17 @@ private fun UnenrollAppDialog(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            SlicesInputField(
-                value = unenrollment.confirmation,
-                onValueChange = onConfirmationChanged,
-                label = stringResource(R.string.unenroll_confirmation_label),
-                modifier = Modifier.fillMaxWidth(),
+            SlicesConfirmationToggle(
+                checked = unenrollment.confirmed,
+                onCheckedChange = onConfirmationChanged,
+                text = stringResource(
+                    if (unenrollment.affectedSpaces.isEmpty()) {
+                        R.string.unenroll_confirmation_toggle_no_spaces
+                    } else {
+                        R.string.unenroll_confirmation_toggle
+                    },
+                ),
+                textColor = MaterialTheme.colorScheme.error,
             )
         }
         Row(
@@ -379,7 +385,7 @@ private fun UnenrollAppDialog(
                     show.value = false
                     onConfirm()
                 },
-                enabled = unenrollment.confirmation == DELETION_CONFIRMATION,
+                enabled = unenrollment.confirmed,
                 danger = true,
                 modifier = Modifier.weight(1f),
             )

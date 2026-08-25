@@ -110,7 +110,8 @@
     <string name="restore_target">恢复到：%1$s</string>
     <string name="change_restore_target">更改恢复位置</string>
     <string name="restore_overwrite_warning">目标账号会被备份内容完整覆盖。未选择的现有分账号会保留。</string>
-    <string name="restore_confirmation_label">输入“%1$s”以确认</string>
+    <string name="restore_confirmation_toggle">我已了解并确认覆盖上述目标账号</string>
+    <string name="restore_signature_mismatch_confirmation_toggle">我确认这是可信兼容版本，并接受签名不一致的覆盖风险</string>
     <string name="start_restore">开始覆盖并恢复</string>
     <string name="backup_running">正在创建账号备份</string>
     <string name="inspect_running">正在校验备份文件</string>
@@ -159,8 +160,8 @@
     <string name="unenroll_affected_spaces">将永久删除：%1$s</string>
     <string name="unenroll_no_spaces">该应用没有独立空间，将只删除配置记录。</string>
     <string name="unenroll_base_preserved">应用本身及系统原始空间中的数据会保留。</string>
-    <string name="unenroll_confirmation_label">输入“删除”以确认</string>
-    <string name="unenroll_confirmation_hint">所有独立空间数据都会永久删除</string>
+    <string name="unenroll_confirmation_toggle">我已了解并确认永久删除上述分空间</string>
+    <string name="unenroll_confirmation_toggle_no_spaces">我确认取消该应用配置</string>
     <string name="unenroll_confirm">取消配置并删除</string>
 
     <string name="runtime_status_title">运行环境</string>

@@ -29,6 +29,17 @@ class BackupRestorePolicyTest {
     private val second = "b".repeat(64)
 
     @Test
+    fun destructiveConfirmationDefaultsOffAndUsesBooleanIntent() {
+        val viewModel = recoveryViewModel(AccountIoRecoveryRuntimeClient())
+
+        assertFalse(viewModel.state.value.destructiveConfirmed)
+
+        viewModel.onIntent(BackupUiIntent.DestructiveConfirmationChanged(true))
+
+        assertTrue(viewModel.state.value.destructiveConfirmed)
+    }
+
+    @Test
     fun signingLineageAcceptsASharedCertificateButNeverCrossesSignerKinds() {
         val installed = SigningIdentity(SigningKind.Lineage, listOf(first, second))
 
