@@ -52,10 +52,10 @@
 | zstd level 3 | zstd crate 的默认压缩级别，作为首版格式实现选择；不作为数据正确性或时限门槛 | 明文/加密归档往返测试 |
 | 默认开启 age passphrase 加密 | 账号归档可能包含凭据；默认保护、允许用户明确选择未加密。密码仅走内存和 helper stdin | Helper 协议测试、Manager UI/lint |
 | 顶层排除 `cache`、`code_cache` | 产品范围是账号状态而非可再生成缓存；APK、OBB、媒体和外部存储本来不位于被授予的 CE/DE 根 | 归档排除测试与恢复往返测试 |
-| Manager 恢复暂存预检为 manifest 逻辑大小加 64 MiB；Runtime 另按目标树实际占用预检 Base 回滚副本 | manifest 逻辑大小覆盖暂存数据；64 MiB 是控制文件、目录和压缩/解压运行余量。Base 覆盖还会复制旧 CE/DE，Runtime 按文件系统分别汇总其 `st_blocks`、长度和块大小估算，在停止 App 或修改目标前用 `statvfs` 检查；不足统一返回 `insufficient_storage` | Manager service 测试边界、Runtime 同/异文件系统容量与零改动测试、真机大数据验收 |
+| Manager 恢复暂存预检为 manifest 逻辑大小加 64 MiB；Runtime 另按目标树和暂存树实际占用预检 Base 回滚与替换副本 | manifest 逻辑大小覆盖暂存数据；64 MiB 是控制文件、目录和压缩/解压运行余量。Base 覆盖还会同时保留旧数据回滚源和暂存替换源，Runtime 按文件系统汇总其 `st_blocks`、长度和块大小估算，在停止 App 或修改目标前用 `statvfs` 保守检查；不足统一返回 `insufficient_storage` | Manager service 测试边界、Runtime 同/异文件系统容量与零改动测试、真机大数据验收 |
 | Helper 路径 `/data/adb/uclone-slices-v2/manager-helper/<version>/uclone_archive`、`root:root 0700` | Manager APK 内嵌同构建 helper，运行前校验 SHA-256；固定版本目录避免混用旧 helper | Release assemble、APK 内容和 helper checksum 门禁 |
 | Helper 在 `/system/bin/nsenter -t 1 -m` 中执行 | Base/当前槽的稳定源视图由 Runtime 在 init mount namespace 建立；Manager 自身的挂载空间不能作为账号源真相 | 固定命令检查、真机 Base/活动槽备份验收 |
-| Base alias 成对挂载检测与 `restore-started` 回滚标记 | 正常事务通过 alias 修改未暴露的真实 Base；重启后 bind mount 消失，必须改用未挂载的真实 Base。旧副本逐项移回时用持久标记保证再次掉电可继续且不删除已恢复部分 | mountinfo 精确路径测试、Base/槽部分回滚重试测试、真机中断恢复 |
+| Base alias 成对挂载检测、固定根复制与 `restore-started` 回滚标记 | 正常事务通过 alias 修改未暴露的真实 Base；bind alias 不能接收来自 Runtime 暂存根的子项重命名，因此正向替换和回滚都保留源树并复制到固定根。重启后 bind mount 消失时改用未挂载的真实 Base；部分复制可重试，完整回滚先原子退役再清理 | mountinfo 精确路径、rename 禁入、CE/DE 补偿、部分复制重试与真机临时 bind-alias `cp -a` 测试 |
 | MIUIX `0.7.2` | 用户明确指定 MIUIX 设计语言；该版本使用 Kotlin 2.2.x，能够保持项目既有 Kotlin 2.2.0 工具链，避免为 UI 升级引入构建系统迁移 | Manager compile、unit、lint、assemble 与真机界面验收 |
 | Manager `windowSoftInputMode=adjustResize` | 真机 `dumpsys window` 证实默认 `adjustPan` 会与 MIUIX `SuperDialog` 自带的 `imePadding()` 叠加，导致删除确认弹窗在键盘出现时被双重上移 | 输入“删除”时的真机窗口属性与弹窗位置验收 |
 | Manager Release 证书 `3a98013499c588855ac936d884d9e55497f72827c91ca01e50cf9ca4fc290648` | 2026-08-23 从目标机当前可覆盖安装的 0.1.8 Manager 只读提取；CI 必须使用固定 Release keystore | `verify-release-signing.sh`、`apksigner verify --print-certs` 与 `adb install -r` |

@@ -1096,15 +1096,14 @@ mod tests {
             commands,
         };
         let (mut android, _recorded) = system_with_runner(root.path(), runner);
-        let remover = std::thread::spawn(move || {
+        let process_exit = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(30));
-            fs::remove_dir_all(&proc_root).unwrap();
-            fs::create_dir(&proc_root).unwrap();
+            fs::remove_dir_all(&process).unwrap();
         });
 
         android.force_stop(&package).unwrap();
 
-        remover.join().unwrap();
+        process_exit.join().unwrap();
     }
 
     #[test]

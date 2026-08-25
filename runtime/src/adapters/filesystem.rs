@@ -590,7 +590,13 @@ impl FileSlotStorage {
                     "Base restore staging and target are on different filesystems",
                 ));
             }
-            let required = copied_tree_bytes(target)?;
+            // This gate runs before any Base mutation. Do not assume that deleting an
+            // App tree immediately returns all of its blocks: existing hard links or
+            // open kernel references can delay reclamation. Reserve both copies on the
+            // backing filesystem so a later rollback never depends on optimistic reuse.
+            let required = copied_tree_bytes(target)?
+                .checked_add(copied_tree_bytes(staged)?)
+                .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
             requirements.push((staging_device, required, available));
         }
         ensure_filesystem_capacity(requirements)
@@ -1115,7 +1121,8 @@ fn replace_domain(
         fs::write(rollback.join("backup-complete"), b"").map_err(io_error)?;
         sync_directory(rollback)?;
         remove_directory_contents(target)?;
-        move_directory_contents(staged, target)?;
+        copy_tree(staged, target)?;
+        sync_tree(target)?;
         remove_tree_if_exists(staged)?;
         sync_directory(target)?;
     } else {
@@ -1124,11 +1131,11 @@ fn replace_domain(
             .ok_or_else(|| AdapterError::new("replacement target has no parent"))?;
         fs::create_dir_all(target_parent).map_err(io_error)?;
         if target.exists() {
-            fs::rename(target, &old).map_err(io_error)?;
+            rename_path(target, &old).map_err(io_error)?;
         } else {
             fs::write(&missing, b"").map_err(io_error)?;
         }
-        fs::rename(staged, target).map_err(io_error)?;
+        rename_path(staged, target).map_err(io_error)?;
         sync_directory(target_parent)?;
     }
     sync_directory(rollback)?;
@@ -1171,7 +1178,7 @@ fn ensure_filesystem_capacity(
         .any(|(required, available)| required > available)
     {
         return Err(AdapterError::insufficient_storage(
-            "insufficient storage for Base rollback copy",
+            "insufficient storage for Base rollback and replacement copies",
         ));
     }
     Ok(())
@@ -1209,9 +1216,11 @@ fn rollback_domain(
             sync_directory(rollback)?;
         }
         if old_available {
-            move_directory_contents(&old, target)?;
+            copy_tree(&old, target)?;
+            sync_tree(target)?;
         }
         sync_directory(target)?;
+        return retire_completed_rollback(rollback);
     } else {
         if old_available {
             if !restore_started.is_file() {
@@ -1222,7 +1231,7 @@ fn rollback_domain(
                 fs::write(&restore_started, b"").map_err(io_error)?;
                 sync_directory(rollback)?;
             }
-            fs::rename(&old, target).map_err(io_error)?;
+            rename_path(&old, target).map_err(io_error)?;
         } else if old_missing {
             remove_tree_if_exists(target)?;
         } else if restore_started.is_file() && real_directory(target)? {
@@ -1243,14 +1252,145 @@ fn rollback_domain(
     sync_directory(parent)
 }
 
-fn move_directory_contents(source: &Path, target: &Path) -> Result<(), AdapterError> {
-    for entry in fs::read_dir(source).map_err(io_error)? {
-        let entry = entry.map_err(io_error)?;
-        fs::rename(entry.path(), target.join(entry.file_name())).map_err(io_error)?;
-        sync_directory(source)?;
-        sync_directory(target)?;
+fn retire_completed_rollback(rollback: &Path) -> Result<(), AdapterError> {
+    let parent = rollback
+        .parent()
+        .ok_or_else(|| AdapterError::new("rollback path has no parent"))?;
+    let name = rollback
+        .file_name()
+        .ok_or_else(|| AdapterError::new("rollback path has no file name"))?;
+    let retired = parent.join(format!(".{}.restored", name.to_string_lossy()));
+    if retired.exists() {
+        return Err(AdapterError::state_conflict(
+            "retired rollback directory already exists",
+        ));
     }
-    Ok(())
+    fs::rename(rollback, &retired).map_err(io_error)?;
+    sync_directory(parent)?;
+    remove_tree_if_exists(&retired)?;
+    sync_directory(parent)
+}
+
+#[cfg(not(test))]
+fn rename_path(source: &Path, target: &Path) -> std::io::Result<()> {
+    fs::rename(source, target)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_RENAME_FAILURE: std::cell::RefCell<Option<TestRenameFailure>> =
+        const { std::cell::RefCell::new(None) };
+    static TEST_COPY_FAILURE_PATHS: std::cell::RefCell<Option<(PathBuf, PathBuf)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct TestRenameFailure {
+    target_prefixes: Vec<PathBuf>,
+    triggered: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+#[cfg(test)]
+struct TestRenameFailureGuard {
+    previous: Option<TestRenameFailure>,
+    triggered: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+#[cfg(test)]
+impl TestRenameFailureGuard {
+    fn was_triggered(&self) -> bool {
+        self.triggered.get()
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestRenameFailureGuard {
+    fn drop(&mut self) {
+        TEST_RENAME_FAILURE.with(|failure| {
+            *failure.borrow_mut() = self.previous.take();
+        });
+    }
+}
+
+#[cfg(test)]
+fn fail_next_rename_into(target_prefixes: &[&Path]) -> TestRenameFailureGuard {
+    let triggered = std::rc::Rc::new(std::cell::Cell::new(false));
+    let failure = TestRenameFailure {
+        target_prefixes: target_prefixes
+            .iter()
+            .map(|path| path.to_path_buf())
+            .collect(),
+        triggered: triggered.clone(),
+    };
+    let previous = TEST_RENAME_FAILURE.with(|configured| configured.borrow_mut().replace(failure));
+    TestRenameFailureGuard {
+        previous,
+        triggered,
+    }
+}
+
+#[cfg(test)]
+struct TestCopyFailureGuard {
+    previous: Option<(PathBuf, PathBuf)>,
+}
+
+#[cfg(test)]
+impl Drop for TestCopyFailureGuard {
+    fn drop(&mut self) {
+        TEST_COPY_FAILURE_PATHS.with(|paths| {
+            *paths.borrow_mut() = self.previous.take();
+        });
+    }
+}
+
+#[cfg(test)]
+fn fail_next_copy(source: &Path, target: &Path) -> TestCopyFailureGuard {
+    let previous = TEST_COPY_FAILURE_PATHS.with(|configured| {
+        configured
+            .borrow_mut()
+            .replace((source.to_path_buf(), target.to_path_buf()))
+    });
+    TestCopyFailureGuard { previous }
+}
+
+#[cfg(test)]
+fn take_injected_copy_failure(source: &Path, target: &Path) -> bool {
+    TEST_COPY_FAILURE_PATHS.with(|configured| {
+        let mut configured = configured.borrow_mut();
+        configured
+            .as_ref()
+            .is_some_and(|(expected_source, expected_target)| {
+                expected_source == source && expected_target == target
+            })
+            .then(|| configured.take())
+            .flatten()
+            .is_some()
+    })
+}
+
+#[cfg(test)]
+fn rename_path(source: &Path, target: &Path) -> std::io::Result<()> {
+    let should_fail = TEST_RENAME_FAILURE.with(|configured| {
+        let mut configured = configured.borrow_mut();
+        let matches = configured.as_ref().is_some_and(|failure| {
+            failure
+                .target_prefixes
+                .iter()
+                .any(|prefix| target.starts_with(prefix))
+        });
+        if matches && let Some(failure) = configured.take() {
+            failure.triggered.set(true);
+        }
+        matches
+    });
+    if should_fail {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::CrossesDevices,
+            "Cross-device link (os error 18)",
+        ));
+    }
+    fs::rename(source, target)
 }
 
 fn sync_tree(root: &Path) -> Result<(), AdapterError> {
@@ -1478,18 +1618,54 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), AdapterError> {
 
 #[cfg(not(target_os = "android"))]
 fn copy_tree(source: &Path, target: &Path) -> Result<(), AdapterError> {
+    #[cfg(test)]
+    if take_injected_copy_failure(source, target) {
+        return Err(AdapterError::new("injected copy failure"));
+    }
     for entry in fs::read_dir(source).map_err(io_error)? {
         let entry = entry.map_err(io_error)?;
         let file_type = entry.file_type().map_err(io_error)?;
         let destination = target.join(entry.file_name());
         if file_type.is_dir() {
-            fs::create_dir(&destination).map_err(io_error)?;
+            match fs::symlink_metadata(&destination) {
+                Ok(metadata)
+                    if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(AdapterError::state_conflict(
+                        "copy destination type does not match source directory",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::create_dir(&destination).map_err(io_error)?;
+                }
+                Err(error) => return Err(io_error(error)),
+            }
             copy_tree(&entry.path(), &destination)?;
         } else if file_type.is_file() {
+            if let Ok(metadata) = fs::symlink_metadata(&destination)
+                && !metadata.file_type().is_file()
+            {
+                return Err(AdapterError::state_conflict(
+                    "copy destination type does not match source file",
+                ));
+            }
             fs::copy(entry.path(), &destination).map_err(io_error)?;
         } else if file_type.is_symlink() {
-            symlink(fs::read_link(entry.path()).map_err(io_error)?, &destination)
-                .map_err(io_error)?;
+            let link_target = fs::read_link(entry.path()).map_err(io_error)?;
+            match fs::symlink_metadata(&destination) {
+                Ok(metadata)
+                    if metadata.file_type().is_symlink()
+                        && fs::read_link(&destination).map_err(io_error)? == link_target => {}
+                Ok(_) => {
+                    return Err(AdapterError::state_conflict(
+                        "copy destination type does not match source symbolic link",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    symlink(link_target, &destination).map_err(io_error)?;
+                }
+                Err(error) => return Err(io_error(error)),
+            }
             continue;
         } else {
             return Err(AdapterError::new("unsupported base artifact"));
@@ -1948,6 +2124,17 @@ mod tests {
             .set_available_bytes(Path::new(&staging[0].ce_path), 0)
             .unwrap();
 
+        let non_base_exdev = fail_next_rename_into(&[&target_ce]);
+        let first_attempt =
+            storage.replace_account(&package, &token, &transfer, &account, slot.id());
+        assert!(
+            first_attempt
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("Cross-device link"))
+        );
+        assert!(non_base_exdev.was_triggered());
+        drop(non_base_exdev);
+
         storage
             .replace_account(&package, &token, &transfer, &account, slot.id())
             .unwrap();
@@ -1990,6 +2177,9 @@ mod tests {
         for name in ["old-ce-a", "old-ce-b"] {
             fs::write(target_ce.join(name), name.as_bytes()).unwrap();
         }
+        fs::create_dir(target_ce.join("nested")).unwrap();
+        fs::write(target_ce.join("nested/old-ce-c"), b"old-ce-c").unwrap();
+        fs::write(target_ce.join("nested/old-ce-d"), b"old-ce-d").unwrap();
         for name in ["old-de-a", "old-de-b"] {
             fs::write(target_de.join(name), name.as_bytes()).unwrap();
         }
@@ -2009,9 +2199,13 @@ mod tests {
             .unwrap();
         fs::write(Path::new(&staging[0].ce_path).join("new-ce"), b"new").unwrap();
         fs::write(Path::new(&staging[0].de_path).join("new-de"), b"new").unwrap();
+        let base_rename_guard = fail_next_rename_into(&[&target_ce, &target_de]);
         storage
             .replace_account(&package, &token, &transfer, &account, &SlotId::base())
             .unwrap();
+        assert!(!base_rename_guard.was_triggered());
+        assert_eq!(fs::read(target_ce.join("new-ce")).unwrap(), b"new");
+        assert_eq!(fs::read(target_de.join("new-de")).unwrap(), b"new");
 
         let (rollback_ce, rollback_de) = storage
             .rollback_paths(&package, &token, &SlotId::base())
@@ -2020,15 +2214,30 @@ mod tests {
         remove_directory_contents(&target_de).unwrap();
         fs::write(rollback_ce.join("restore-started"), b"").unwrap();
         fs::write(rollback_de.join("restore-started"), b"").unwrap();
-        fs::rename(rollback_ce.join("old/old-ce-a"), target_ce.join("old-ce-a")).unwrap();
-        fs::rename(rollback_de.join("old/old-de-a"), target_de.join("old-de-a")).unwrap();
+        fs::copy(rollback_ce.join("old/old-ce-a"), target_ce.join("old-ce-a")).unwrap();
+        fs::create_dir(target_ce.join("nested")).unwrap();
+        fs::copy(
+            rollback_ce.join("old/nested/old-ce-c"),
+            target_ce.join("nested/old-ce-c"),
+        )
+        .unwrap();
+        fs::copy(rollback_de.join("old/old-de-a"), target_de.join("old-de-a")).unwrap();
 
         storage
             .rollback_account(&package, &token, &SlotId::base())
             .unwrap();
+        assert!(!base_rename_guard.was_triggered());
 
         assert_eq!(fs::read(target_ce.join("old-ce-a")).unwrap(), b"old-ce-a");
         assert_eq!(fs::read(target_ce.join("old-ce-b")).unwrap(), b"old-ce-b");
+        assert_eq!(
+            fs::read(target_ce.join("nested/old-ce-c")).unwrap(),
+            b"old-ce-c"
+        );
+        assert_eq!(
+            fs::read(target_ce.join("nested/old-ce-d")).unwrap(),
+            b"old-ce-d"
+        );
         assert_eq!(fs::read(target_de.join("old-de-a")).unwrap(), b"old-de-a");
         assert_eq!(fs::read(target_de.join("old-de-b")).unwrap(), b"old-de-b");
         assert!(!target_ce.join("new-ce").exists());
@@ -2036,7 +2245,54 @@ mod tests {
     }
 
     #[test]
-    fn base_restore_rejects_combined_ce_de_rollback_that_exceeds_shared_filesystem_space() {
+    fn base_de_copy_failure_rolls_back_the_successful_ce_and_de_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        let target_ce = canonical_ce_root.join(package.as_str());
+        let target_de = canonical_de_root.join(package.as_str());
+        fs::create_dir_all(&target_ce).unwrap();
+        fs::create_dir_all(&target_de).unwrap();
+        fs::write(target_ce.join("old-ce"), b"old-ce").unwrap();
+        fs::write(target_de.join("old-de"), b"old-de").unwrap();
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let mut storage = open_slot_storage(
+            &root.path().join("ce/uclone-slices-v2/slots"),
+            &root.path().join("de/uclone-slices-v2/slots"),
+            &canonical_ce_root,
+            &canonical_de_root,
+        );
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let transfer = TransferId::new("transfer-base-de-failure").unwrap();
+        let account = ArchiveAccountId::new("account-base-de-failure").unwrap();
+        let staging = storage
+            .prepare_restore_staging(&package, &token, &transfer, std::slice::from_ref(&account))
+            .unwrap();
+        let staged_ce = Path::new(&staging[0].ce_path);
+        let staged_de = Path::new(&staging[0].de_path);
+        fs::write(staged_ce.join("new-ce"), b"new-ce").unwrap();
+        fs::write(staged_de.join("new-de"), b"new-de").unwrap();
+
+        let _copy_failure = fail_next_copy(staged_de, &target_de);
+        let result =
+            storage.replace_account(&package, &token, &transfer, &account, &SlotId::base());
+
+        assert!(result.is_err_and(|error| error.to_string().contains("injected copy failure")));
+        assert_eq!(fs::read(target_ce.join("old-ce")).unwrap(), b"old-ce");
+        assert_eq!(fs::read(target_de.join("old-de")).unwrap(), b"old-de");
+        assert!(!target_ce.join("new-ce").exists());
+        assert!(!target_de.join("new-de").exists());
+        let (rollback_ce, rollback_de) = storage
+            .rollback_paths(&package, &token, &SlotId::base())
+            .unwrap();
+        assert!(!rollback_ce.exists());
+        assert!(!rollback_de.exists());
+    }
+
+    #[test]
+    fn base_restore_rejects_space_that_covers_rollback_but_not_replacement_copy() {
         let root = tempfile::tempdir().unwrap();
         let package = PackageName::new("com.example.app").unwrap();
         let canonical_ce_root = root.path().join("canonical-ce");
@@ -2067,14 +2323,17 @@ mod tests {
         fs::write(staged_de.join("new-de"), b"new-de").unwrap();
         let ce_required = copied_tree_bytes(&target_ce).unwrap();
         let de_required = copied_tree_bytes(&target_de).unwrap();
+        let staged_ce_required = copied_tree_bytes(staged_ce).unwrap();
+        let staged_de_required = copied_tree_bytes(staged_de).unwrap();
         assert_eq!(
             fs::metadata(staged_ce).unwrap().dev(),
             fs::metadata(staged_de).unwrap().dev()
         );
-        let individually_sufficient = ce_required.max(de_required);
-        assert!(individually_sufficient < ce_required + de_required);
+        let rollback_only = ce_required + de_required;
+        let full_copy_requirement = rollback_only + staged_ce_required + staged_de_required;
+        assert!(rollback_only < full_copy_requirement);
         storage
-            .set_available_bytes(staged_ce, individually_sufficient)
+            .set_available_bytes(staged_ce, rollback_only)
             .unwrap();
 
         let result =
