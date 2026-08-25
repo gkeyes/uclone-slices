@@ -8,7 +8,7 @@ CE_STORAGE_ROOT=/data/misc_ce/0/uclone-slices-v2
 DE_STORAGE_ROOT=/data/misc_de/0/uclone-slices-v2
 SOCKET=$RUNTIME_ROOT/runtime.sock
 PID_FILE=$RUNTIME_ROOT/ucloned.pid
-BUILD_ID=$(sed -n 's/^version=//p' "$MODDIR/module.prop")
+BUILD_ID=$(sed -n 's/^runtimeBuildId=//p' "$MODDIR/module.prop")
 PID=
 PID_EXE=
 EXPECTED_PROBE_RESPONSE=

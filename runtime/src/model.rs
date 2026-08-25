@@ -483,6 +483,99 @@ pub enum ArchivedAccountKind {
     Slot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RestoreDomain {
+    Ce,
+    De,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestorePath {
+    pub domain: RestoreDomain,
+    pub path: String,
+}
+
+impl RestorePath {
+    pub(crate) fn validate(&self) -> Result<(), ModelError> {
+        if self.path.is_empty() || self.path.len() > 4096 || self.path.starts_with('/') {
+            return Err(ModelError::InvalidState);
+        }
+        let segments = self.path.split('/').collect::<Vec<_>>();
+        if segments.is_empty()
+            || segments.iter().any(|segment| {
+                segment.is_empty()
+                    || matches!(*segment, "." | ".." | "**")
+                    || (*segment != "*"
+                        && !segment.bytes().all(|byte| {
+                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                        }))
+            })
+        {
+            return Err(ModelError::InvalidState);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RestorePolicy {
+    #[default]
+    Replace,
+    PreservePaths {
+        paths: Vec<RestorePath>,
+    },
+}
+
+impl RestorePolicy {
+    pub(crate) fn validate(&self) -> Result<(), ModelError> {
+        let Self::PreservePaths { paths } = self else {
+            return Ok(());
+        };
+        if paths.is_empty() || paths.len() > 64 {
+            return Err(ModelError::InvalidState);
+        }
+        for path in paths {
+            path.validate()?;
+        }
+        if paths.iter().collect::<BTreeSet<_>>().len() != paths.len() {
+            return Err(ModelError::InvalidState);
+        }
+        for (index, left) in paths.iter().enumerate() {
+            for right in paths.iter().skip(index + 1) {
+                if left.domain == right.domain && restore_patterns_overlap(&left.path, &right.path)
+                {
+                    return Err(ModelError::InvalidState);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn paths_for(&self, domain: RestoreDomain) -> Vec<&str> {
+        match self {
+            Self::Replace => Vec::new(),
+            Self::PreservePaths { paths } => paths
+                .iter()
+                .filter(|path| path.domain == domain)
+                .map(|path| path.path.as_str())
+                .collect(),
+        }
+    }
+}
+
+fn restore_patterns_overlap(left: &str, right: &str) -> bool {
+    let left = left.split('/').collect::<Vec<_>>();
+    let right = right.split('/').collect::<Vec<_>>();
+    let shared = left.len().min(right.len());
+    left.iter()
+        .take(shared)
+        .zip(right.iter().take(shared))
+        .all(|(left, right)| left == right || *left == "*" || *right == "*")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RestoreTarget {
@@ -497,6 +590,8 @@ pub struct RestoreMapping {
     pub archive_kind: ArchivedAccountKind,
     pub name: DisplayName,
     pub target: RestoreTarget,
+    #[serde(default)]
+    pub restore_policy: RestorePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -607,6 +702,8 @@ pub(crate) struct ResolvedRestoreMapping {
     pub previous_name: Option<DisplayName>,
     pub target_slot: SlotId,
     pub create_slot: bool,
+    #[serde(default)]
+    pub restore_policy: RestorePolicy,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -634,7 +731,7 @@ pub(crate) struct AccountIoIntent {
 
 impl AccountIoIntent {
     pub(crate) fn validate(&self) -> Result<(), ModelError> {
-        if self.schema_version != 1 {
+        if !matches!(self.schema_version, 1 | 2) {
             return Err(ModelError::InvalidState);
         }
         match self.kind {
@@ -667,6 +764,13 @@ impl AccountIoIntent {
                     .collect::<BTreeSet<_>>();
                 if source_ids.len() != self.mappings.len() || targets.len() != self.mappings.len() {
                     return Err(ModelError::InvalidState);
+                }
+                for mapping in &self.mappings {
+                    mapping.restore_policy.validate()?;
+                    if self.schema_version == 1 && mapping.restore_policy != RestorePolicy::Replace
+                    {
+                        return Err(ModelError::InvalidState);
+                    }
                 }
             }
         }
@@ -1154,6 +1258,43 @@ mod tests {
         assert!(PackageName::new("../app").is_err());
         assert!(DisplayName::new("Work profile").is_ok());
         assert!(DisplayName::new("\n").is_err());
+    }
+
+    #[test]
+    fn restore_policy_accepts_single_wildcards_and_rejects_unsafe_or_overlapping_paths() {
+        let valid = RestorePolicy::PreservePaths {
+            paths: vec![RestorePath {
+                domain: RestoreDomain::Ce,
+                path: "files/Dolphin/*/Paks".to_owned(),
+            }],
+        };
+        assert!(valid.validate().is_ok());
+
+        for path in ["/data/user/0/app", "../files", "files/**/Paks"] {
+            assert_eq!(
+                RestorePolicy::PreservePaths {
+                    paths: vec![RestorePath {
+                        domain: RestoreDomain::Ce,
+                        path: path.to_owned(),
+                    }],
+                }
+                .validate(),
+                Err(ModelError::InvalidState),
+            );
+        }
+        let overlapping = RestorePolicy::PreservePaths {
+            paths: vec![
+                RestorePath {
+                    domain: RestoreDomain::Ce,
+                    path: "files/game".to_owned(),
+                },
+                RestorePath {
+                    domain: RestoreDomain::Ce,
+                    path: "files/game/Paks".to_owned(),
+                },
+            ],
+        };
+        assert_eq!(overlapping.validate(), Err(ModelError::InvalidState));
     }
 
     #[test]

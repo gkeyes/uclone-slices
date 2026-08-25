@@ -1,4 +1,4 @@
-# v0.2.1 账号备份与恢复
+# v0.2.2 账号备份与恢复
 
 ## 产品范围
 
@@ -11,11 +11,13 @@
 - 不导出 Android Keystore 中不可导出的密钥；跨设备或卸载重装后，依赖这类密钥的 App 可能需要重新登录。
 - 完整恢复包含并覆盖 Base；备份内未出现、用户未选择的现有分账号保持不变。
 - Base 归档只能恢复到 Base；分账号只能恢复到现有分账号或新分账号。
+- 内置 Profile 只按包名和官方签名启用，不限制 App 版本；无匹配 Profile 时自动使用完整账号备份。
 
 ## Manager 界面流程
 
 1. 在首页或 App/账号菜单进入“备份与恢复”。
 2. 备份页明确显示 App、账号范围、排除项和密码保护。密码保护默认开启，也允许用户明确关闭。
+   三角洲行动匹配内置 Profile 后自动精简，不增加模式选择。
 3. 恢复页先校验文件并显示来源 App 版本、Android 版本、设备、创建时间、账号数量和逻辑大小。
 4. Base 的目标固定为系统原始空间；每个分账号可独立选择现有分账号或“恢复为新分账号”，且目标必须一对一。
 5. 证书类型和证书匹配时输入“覆盖”；不匹配时显示显著警告并要求输入完整包名。
@@ -23,7 +25,7 @@
 
 备份和恢复由不可导出的 `dataSync` 前台 Service 执行，不依赖页面或 ViewModel 的生命周期。密码只保留在当前进程内存中，通过标准输入传给辅助程序，不写入参数、环境变量、日志、通知或偏好设置。
 
-## `.ucsbackup` v1 格式
+## `.ucsbackup` v1/v2 格式
 
 文件布局固定为：
 
@@ -33,6 +35,10 @@
 4. zstd 内容为 tar；第一项必须是 `manifest.json`，后续数据项位于 `accounts/<archive-account-id>/<ce|de>/<relative-path>`。
 
 Manifest 记录格式版本、包名、签名类型、证书 SHA-256、来源版本/系统/设备、创建时间、备份范围、活动账号、重启启动设置，以及每个账号 CE/DE 条目的类型、相对路径、mode、mtime、大小和文件 SHA-256。
+
+未适配 App 继续生成 v1。Profile 精简备份生成 v2，magic、压缩和加密方式不变；Manifest 额外记录 Profile ID、revision、规则摘要、来源 versionCode，以及排除条目数和逻辑大小。Helper 同时读取 v1/v2；v1 仍按完整覆盖恢复。
+
+三角洲首版 Profile 排除 `Puffer`、`Dolphin/*/Paks`、`GVoiceASR`、`Gamelet` 和 `GVoiceLog`。登录文件、`shared_prefs`、`databases`、其他 CE 数据和全部 DE 数据仍进入归档。前四类资源恢复到已有空间时通过同文件系统移动保留；日志和缓存不保留。Profile revision 不存在时仍恢复账号数据，但不保留目标资源，并提示重新下载。
 
 安全校验包括：
 
@@ -45,7 +51,7 @@ Manifest 记录格式版本、包名、签名类型、证书 SHA-256、来源版
 
 ## Runtime 事务
 
-Manager 负责 SAF 导入导出、归档、压缩、加密、预览和结果展示。Runtime/KernelSU 必须同步升级到 0.2.1，因为只有 Runtime 能在同一事务锁和 init mount namespace 内安全控制 App、Base 和 CE/DE 槽对。
+Manager 负责 SAF 导入导出、归档、压缩、加密、预览和结果展示。Runtime/KernelSU 必须同步升级到 0.2.2，因为只有 Runtime 能在同一事务锁和 init mount namespace 内安全控制 App、Base 和 CE/DE 槽对。
 
 ### 备份
 
@@ -59,8 +65,8 @@ Manager 负责 SAF 导入导出、归档、压缩、加密、预览和结果展�
 - Runtime 先验证目标映射并创建 CE/DE 成对暂存目录，随后返回 lease。
 - 辅助程序只将已验证内容解包到暂存目录，不直接替换 Base 或正式槽。
 - 第一次提交前 Runtime 保存 App 启用状态，先禁止再次启动并确认进程停止，再切换 Base 和私有空维护视图。
-- 每个账号先记录 replacing intent，再执行 CE/DE 成对替换。Base 当前可直接观察时会在进入维护前预检容量；若当前活动账号是分账号，则先阻止 App 启动并回到真实 Base，再按真实文件系统可用空间预检完整旧数据回滚副本和暂存数据替换副本。容量不足时不开始覆盖，暂存数据仍可安全中止清理。
-- Base 覆盖前 Runtime 必须退出私有空维护视图，并确认 canonical CE/DE 没有任何受管挂载，然后直接覆盖真实 Base 根。Runtime 保留根目录，使用保留属性的树复制写入新数据；Base 回滚同样从完整旧副本复制回固定根。目标树同步完成前不删除源副本，部分复制可重复合并，完成的回滚目录先在同一父目录原子退役再清理。非 Base 槽继续使用同一 slots 根内的目录原子重命名。
+- 每个账号先记录 replacing intent，再执行 CE/DE 成对替换。Base 当前可直接观察时会在进入维护前预检容量；若当前活动账号是分账号，则先阻止 App 启动并回到真实 Base，再按真实文件系统可用空间预检旧账号回滚数据和暂存账号数据。保留资源不复制、不计入容量需求。容量不足时不开始覆盖，暂存数据仍可安全中止清理。
+- Base 覆盖前 Runtime 必须退出私有空维护视图，并确认 canonical CE/DE 没有任何受管挂载，然后直接覆盖真实 Base 根。需要保留的资源先移动到事务回滚区，只复制其余旧账号数据；完成或回滚时再原子移回。非 Base 槽先原子移动旧槽，再将保留资源移入新槽。schema v2 intent、资源计划和回滚目录共同记录恢复进度，CE/DE 任一失败均成对回滚；旧 schema v1 intent 默认按无资源保留处理。
 - 成功账号立即提交并保留；失败账号记录失败后可继续处理其他账号。
 - 完整恢复优先恢复归档中的活动账号和重启启动设置；单账号恢复将该账号作为恢复后的当前账号。若目标活动账号未成功，则保持恢复前的活动账号和重启设置。
 - 恢复完成后不自动启动 App；结果固定记录 `app_started=false`，由用户手动打开并核对账号状态。
@@ -73,7 +79,7 @@ Manager 在最终清理首次失败时会显式重试一次 `finish_restore_io` 
 
 若 Manager 进程被系统终止但设备未重启，备份页会只读显示 Runtime 中残留操作的 App、类型和阶段；只有用户二次确认当前精确 token 后才执行 `abort_account_io`。Manager 不会自动中止来自其他客户端或仍在运行的本地任务。
 
-0.2.1 Manager 与 Runtime 必须精确配对；0.2.0 Manager/Runtime 的 build ID 与 0.2.1 不匹配时，只允许无副作用 `probe`。0.2.1 继续读写 0.2.0 的 `.ucsbackup` v1，且未改变 Aggregate 或 CE/DE 账号目录。降回 0.1.9 不需要转换账号数据，但 0.1.9 无法处理正在进行的 account-I/O intent，因此只能在没有活动备份/恢复事务时回退。
+0.2.2 Manager、Runtime 和 KernelSU 本次必须成对升级，稳定协议 ID 为 `0.2.2`；协议不变时，后续仅增加 Profile 的 Manager 版本仍可连接该 Runtime。旧 build ID 只能执行无副作用 `probe`。0.2.2 继续读取 `.ucsbackup` v1，且未改变 Aggregate 或 CE/DE 账号目录。只能在没有活动备份/恢复事务时回退旧版本。
 
 ## 验证边界
 

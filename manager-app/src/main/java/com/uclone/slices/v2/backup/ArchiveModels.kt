@@ -30,12 +30,21 @@ internal data class ArchiveAccount(
     val de: ArchiveDomainSummary,
 )
 
+internal data class ArchiveProfileManifest(
+    val id: String,
+    val revision: Int,
+    val rulesDigest: String,
+    val excludedEntries: Long,
+    val excludedLogicalSize: Long,
+)
+
 internal data class ArchiveManifest(
     val formatVersion: Int,
     val packageName: String,
     val signingKind: SigningKind,
     val signingSha256: List<String>,
     val appVersion: String,
+    val appVersionCode: Long?,
     val androidVersion: String,
     val device: String,
     val createdAtMillis: Long,
@@ -44,6 +53,8 @@ internal data class ArchiveManifest(
     val launchAfterReboot: Boolean,
     val logicalSize: Long,
     val accounts: List<ArchiveAccount>,
+    val backupType: String?,
+    val profile: ArchiveProfileManifest?,
 )
 
 internal sealed interface ArchiveHelperResult {
@@ -59,6 +70,7 @@ internal data class BackupArchiveRequest(
     val signingKind: SigningKind,
     val signingSha256: List<String>,
     val appVersion: String,
+    val appVersionCode: Long,
     val androidVersion: String,
     val device: String,
     val createdAtMillis: Long,
@@ -66,6 +78,7 @@ internal data class BackupArchiveRequest(
     val activeAccountId: String?,
     val launchAfterReboot: Boolean,
     val sources: List<AccountIoSource>,
+    val profile: BackupProfile?,
 )
 
 internal data class RestoreArchiveRequest(
@@ -83,6 +96,12 @@ internal object ArchiveHelperProtocol {
         .put("signing_kind", request.signingKind.wire)
         .put("signing_sha256", JSONArray(request.signingSha256))
         .put("app_version", request.appVersion)
+        .apply {
+            request.profile?.let { profile ->
+                put("app_version_code", request.appVersionCode)
+                put("profile", encodeProfile(profile))
+            }
+        }
         .put("android_version", request.androidVersion)
         .put("device", request.device)
         .put("created_at_millis", request.createdAtMillis)
@@ -112,6 +131,23 @@ internal object ArchiveHelperProtocol {
         )
         .toString()
         .toByteArray(Charsets.UTF_8)
+
+    private fun encodeProfile(profile: BackupProfile): JSONObject = JSONObject()
+        .put("id", profile.id)
+        .put("revision", profile.revision)
+        .put("rules_digest", profile.rulesDigest)
+        .put(
+            "rules",
+            JSONArray(
+                profile.rules.map { rule ->
+                    JSONObject()
+                        .put("domain", rule.domain.wire)
+                        .put("path", rule.path)
+                        .put("backup", "exclude")
+                        .put("restore", rule.restore.wire)
+                },
+            ),
+        )
 
     fun encodeInspect(inputPath: String, password: CharArray?): ByteArray = JSONObject()
         .put("op", "inspect")
@@ -157,6 +193,7 @@ internal object ArchiveHelperProtocol {
         },
         signingSha256 = json.getJSONArray("signing_sha256").strings(),
         appVersion = json.getString("app_version"),
+        appVersionCode = json.optLongOrNull("app_version_code"),
         androidVersion = json.getString("android_version"),
         device = json.getString("device"),
         createdAtMillis = json.getLong("created_at_millis"),
@@ -178,6 +215,16 @@ internal object ArchiveHelperProtocol {
                 de = parseDomain(account.getJSONObject("de")),
             )
         },
+        backupType = json.optStringOrNull("backup_type"),
+        profile = json.optJSONObject("profile")?.let { profile ->
+            ArchiveProfileManifest(
+                id = profile.getString("id"),
+                revision = profile.getInt("revision"),
+                rulesDigest = profile.getString("rules_digest"),
+                excludedEntries = profile.getLong("excluded_entries"),
+                excludedLogicalSize = profile.getLong("excluded_logical_size"),
+            )
+        },
     )
 
     private fun parseDomain(json: JSONObject): ArchiveDomainSummary = ArchiveDomainSummary(
@@ -190,4 +237,10 @@ internal object ArchiveHelperProtocol {
 
     private fun JSONArray.objects(): List<JSONObject> =
         List(length()) { index -> getJSONObject(index) }
+
+    private fun JSONObject.optLongOrNull(name: String): Long? =
+        if (has(name) && !isNull(name)) getLong(name) else null
+
+    private fun JSONObject.optStringOrNull(name: String): String? =
+        if (has(name) && !isNull(name)) getString(name) else null
 }

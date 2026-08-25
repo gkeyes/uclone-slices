@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, Capabilities, ObservedView,
     PackageAggregate, PackageBinding, PackageEnabledState, PackageIdentity, PackageInspection,
-    PackageName, RebindIntent, RestoreBatchResult, RestoreStaging, SeedMode, Slot, SlotId,
-    TransferId,
+    PackageName, RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging, SeedMode, Slot,
+    SlotId, TransferId,
 };
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
@@ -349,6 +349,7 @@ impl SlotStorage for MemorySlotStorage {
         token: &AccountIoToken,
         _transfer_id: &TransferId,
         account: &ArchiveAccountId,
+        _policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
         self.staging
             .contains(&(package.clone(), token.clone(), account.clone()))
@@ -372,8 +373,9 @@ impl SlotStorage for MemorySlotStorage {
         transfer_id: &TransferId,
         account: &ArchiveAccountId,
         target: &SlotId,
+        policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
-        self.validate_staged_account(package, token, transfer_id, account)?;
+        self.validate_staged_account(package, token, transfer_id, account, policy)?;
         let key = (package.clone(), token.clone(), target.clone());
         self.replacements.entry(key).or_insert_with(|| {
             if target.is_base() {
@@ -396,6 +398,7 @@ impl SlotStorage for MemorySlotStorage {
         package: &PackageName,
         token: &AccountIoToken,
         target: &SlotId,
+        _policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
         let key = (package.clone(), token.clone(), target.clone());
         if let Some(previous) = self.replacements.remove(&key)

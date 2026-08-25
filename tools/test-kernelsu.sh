@@ -11,6 +11,7 @@ grep -F -x 'umask 077' "$SERVICE" >/dev/null
 grep -F -x 'RUNTIME_ROOT=/data/adb/uclone-slices-v2' "$SERVICE" >/dev/null
 grep -F 'CE_STORAGE_ROOT=/data/misc_ce/0/uclone-slices-v2' "$SERVICE" >/dev/null
 grep -F 'DE_STORAGE_ROOT=/data/misc_de/0/uclone-slices-v2' "$SERVICE" >/dev/null
+grep -F 'BUILD_ID=$(sed -n '\''s/^runtimeBuildId=//p'\'' "$MODDIR/module.prop")' "$SERVICE" >/dev/null
 grep -F '[ ! -L "$DIRECTORY" ]' "$SERVICE" >/dev/null
 grep -F 'chown 0:0 "$DIRECTORY"' "$SERVICE" >/dev/null
 grep -F 'chmod 0700 "$DIRECTORY"' "$SERVICE" >/dev/null
@@ -29,3 +30,4 @@ if grep -E 'package|mount|disable|enable|reconcile|rescue' "$SERVICE" >/dev/null
     exit 1
 fi
 grep -F -x 'id=uclone-slices-v2' "$ROOT/kernelsu/module.prop" >/dev/null
+grep -E -x 'runtimeBuildId=[0-9]+\.[0-9]+\.[0-9]+' "$ROOT/kernelsu/module.prop" >/dev/null

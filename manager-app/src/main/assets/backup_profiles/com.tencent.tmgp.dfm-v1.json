@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "id": "delta-force-cn-account-v1",
+  "revision": 1,
+  "package": "com.tencent.tmgp.dfm",
+  "signer_sha256": [
+    "1985a9bd670ad5d1251ee34d1fa1eb3a5f393dd91a8968048b46d4a0241de49b"
+  ],
+  "rules": [
+    {
+      "domain": "ce",
+      "path": "files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer",
+      "backup": "exclude",
+      "restore": "preserve"
+    },
+    {
+      "domain": "ce",
+      "path": "files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/*/Paks",
+      "backup": "exclude",
+      "restore": "preserve"
+    },
+    {
+      "domain": "ce",
+      "path": "files/UE4Game/DeltaForce/DeltaForce/Saved/GVoiceASR",
+      "backup": "exclude",
+      "restore": "preserve"
+    },
+    {
+      "domain": "ce",
+      "path": "files/UE4Game/DeltaForce/DeltaForce/Saved/Gamelet",
+      "backup": "exclude",
+      "restore": "preserve"
+    },
+    {
+      "domain": "ce",
+      "path": "files/com.gcloudsdk.gcloud.gvoice/GVoiceLog",
+      "backup": "exclude",
+      "restore": "discard"
+    }
+  ]
+}

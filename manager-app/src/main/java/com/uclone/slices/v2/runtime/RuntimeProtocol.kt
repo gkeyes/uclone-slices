@@ -83,11 +83,27 @@ sealed interface RestoreTarget {
     data object New : RestoreTarget
 }
 
+enum class RestoreDomain(val wire: String) {
+    Ce("ce"),
+    De("de"),
+}
+
+data class RestorePath(
+    val domain: RestoreDomain,
+    val path: String,
+)
+
+sealed interface RestorePolicy {
+    data object Replace : RestorePolicy
+    data class PreservePaths(val paths: List<RestorePath>) : RestorePolicy
+}
+
 data class RestoreMapping(
     val archiveAccountId: String,
     val archiveKind: ArchivedAccountKind,
     val name: String,
     val target: RestoreTarget,
+    val restorePolicy: RestorePolicy = RestorePolicy.Replace,
 )
 
 data class ArchivedState(
@@ -301,7 +317,7 @@ object RuntimeProtocol {
                 .put("op", "list_account_io_status")
         }
         if (command != RuntimeCommand.Probe) {
-            json.put("client_build_id", BuildConfig.VERSION_NAME)
+            json.put("client_build_id", BuildConfig.RUNTIME_PROTOCOL_BUILD_ID)
         }
         return json.toString()
     }
@@ -330,6 +346,23 @@ object RuntimeProtocol {
                 RestoreTarget.New -> JSONObject().put("kind", "new")
             },
         )
+        .put("restore_policy", encodeRestorePolicy(mapping.restorePolicy))
+
+    private fun encodeRestorePolicy(policy: RestorePolicy): JSONObject = when (policy) {
+        RestorePolicy.Replace -> JSONObject().put("mode", "replace")
+        is RestorePolicy.PreservePaths -> JSONObject()
+            .put("mode", "preserve_paths")
+            .put(
+                "paths",
+                JSONArray(
+                    policy.paths.map { path ->
+                        JSONObject()
+                            .put("domain", path.domain.wire)
+                            .put("path", path.path)
+                    },
+                ),
+            )
+    }
 
     private fun encodeArchivedState(state: ArchivedState): JSONObject = JSONObject()
         .put("scope", state.scope.wire)

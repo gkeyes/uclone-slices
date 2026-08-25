@@ -1,6 +1,7 @@
 id=uclone-slices-v2
 name=UClone Slices V2
-version=0.2.1
-versionCode=12
+version=0.2.2
+versionCode=13
+runtimeBuildId=0.2.2
 author=gkeyes
 description=Minimal UClone Slices V2 runtime

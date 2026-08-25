@@ -47,8 +47,8 @@
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.2.1`、versionCode `12` | 在 0.2.0 账号备份/恢复基线上做安全修复；不恢复桌面 Hook，不修改 Aggregate 或 `.ucsbackup` v1 格式 | `check-decision-alignment.sh` 保证 Rust、Manager、Fixture、KernelSU 一致 |
-| `.ucsbackup` magic `UCSBKP01`、format v1、manifest/control 4 MiB、256 账号、4096 字节路径、1,000,000 条目、1 TiB 逻辑数据 | 0.2.0 首个归档格式的固定兼容与资源安全边界；4 MiB manifest 是更紧的实际条目边界，其余限制用于在解析或恶意输入阶段提前拒绝 | Rust 归档往返、超限和恶意路径测试 |
+| 版本 `0.2.2`、versionCode `13`、Runtime 协议 ID `0.2.2` | 首次加入通用备份 Profile 和资源保留恢复；Manager 展示版本与协议 ID 解耦，不恢复桌面 Hook，不修改 Aggregate | `check-decision-alignment.sh` 保证 Runtime/模块协议一致，并独立校验 Manager/Fixture 交付版本 |
+| `.ucsbackup` magic `UCSBKP01`、format v1/v2、manifest/control 4 MiB、256 账号、4096 字节路径、1,000,000 条目、1 TiB 逻辑数据 | v1 保持完整备份兼容；v2 只增加签名 Profile、来源 versionCode 和排除统计，magic、压缩与加密不变 | Rust v1/v2 往返、Profile 剪枝、超限和恶意路径测试 |
 | zstd level 3 | zstd crate 的默认压缩级别，作为首版格式实现选择；不作为数据正确性或时限门槛 | 明文/加密归档往返测试 |
 | 默认开启 age passphrase 加密 | 账号归档可能包含凭据；默认保护、允许用户明确选择未加密。密码仅走内存和 helper stdin | Helper 协议测试、Manager UI/lint |
 | 顶层排除 `cache`、`code_cache` | 产品范围是账号状态而非可再生成缓存；APK、OBB、媒体和外部存储本来不位于被授予的 CE/DE 根 | 归档排除测试与恢复往返测试 |

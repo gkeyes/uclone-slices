@@ -728,7 +728,7 @@ internal class SlotsViewModel(
         mutableState.update { it.copy(installedApps = localApps) }
         when (val probe = client.execute(RuntimeCommand.Probe)) {
             is RuntimeReply.Capabilities -> {
-                val compatible = probe.buildId == BuildConfig.VERSION_NAME
+                val compatible = probe.buildId == BuildConfig.RUNTIME_PROTOCOL_BUILD_ID
                 mutableState.update {
                     it.copy(
                         runtimeReady = true,

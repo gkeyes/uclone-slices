@@ -89,14 +89,14 @@ jobs:
         run: |
           DELIVERY="$RUNNER_TEMP/uclone-slices-delivery"
           mkdir -p "$DELIVERY"
-          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.2.1-${GITHUB_SHA}.apk"
-          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.2.1-${GITHUB_SHA}.zip"
+          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.2.2-${GITHUB_SHA}.apk"
+          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.2.2-${GITHUB_SHA}.zip"
           (cd "$DELIVERY" && sha256sum ./*.apk ./*.zip > SHA256SUMS.txt)
 
-      - name: Upload 0.2.1 candidate delivery
+      - name: Upload 0.2.2 candidate delivery
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: uclone-slices-v2-0.2.1-${{ github.sha }}
+          name: uclone-slices-v2-0.2.2-${{ github.sha }}
           path: ${{ runner.temp }}/uclone-slices-delivery
           if-no-files-found: error
           retention-days: 7

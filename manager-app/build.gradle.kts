@@ -68,8 +68,9 @@ android {
         applicationId = "com.uclone.slices.v2"
         minSdk = 29
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.2.1"
+        versionCode = 13
+        versionName = "0.2.2"
+        buildConfigField("String", "RUNTIME_PROTOCOL_BUILD_ID", "\"0.2.2\"")
         buildConfigField("String", "ARCHIVE_HELPER_SHA256", "\"$archiveHelperChecksum\"")
     }
 
@@ -107,6 +108,7 @@ android {
         }
         getByName("test") {
             resources.srcDir("../protocol/fixtures")
+            resources.srcDir("src/main/assets")
         }
     }
 

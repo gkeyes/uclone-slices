@@ -340,6 +340,20 @@ private fun BackupSetupContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        if (state.backupProfile != null) {
+            item {
+                SlicesPanel(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                ) {
+                    Text(
+                        text = stringResource(R.string.profile_backup_automatic),
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+            }
+        }
         state.errorCode?.let { code -> item { BackupErrorText(code) } }
         item {
             SlicesActionButton(
@@ -439,7 +453,7 @@ private fun RestorePreviewContent(
                     Text(
                         stringResource(
                             R.string.archive_origin,
-                            manifest.appVersion,
+                            formatAppVersion(manifest.appVersion, manifest.appVersionCode),
                             manifest.androidVersion,
                             manifest.device,
                         ),
@@ -449,16 +463,12 @@ private fun RestorePreviewContent(
                     Text(
                         stringResource(
                             R.string.archive_target_version,
-                            state.targetApp?.versionName.orEmpty(),
+                            state.targetApp?.let {
+                                formatAppVersion(it.versionName, it.versionCode)
+                            }.orEmpty(),
                         ),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (
-                            state.targetApp?.versionName.orEmpty() == manifest.appVersion
-                        ) {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        } else {
-                            MaterialTheme.colorScheme.error
-                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -478,6 +488,39 @@ private fun RestorePreviewContent(
             }
         }
         item {
+            SlicesPanel(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.secondaryContainer,
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    when {
+                        state.restoreProfile != null -> {
+                            if (state.mappings.any { it.target is RestoreTarget.Existing }) {
+                                Text(
+                                    text = stringResource(R.string.profile_restore_preserve_existing),
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                            }
+                            if (state.mappings.any { it.target is RestoreTarget.New }) {
+                                Text(
+                                    text = stringResource(R.string.profile_restore_new_account),
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                            }
+                        }
+                        state.profileUnavailable -> Text(
+                            text = stringResource(R.string.profile_restore_unavailable),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                        else -> Text(
+                            text = stringResource(R.string.full_archive_restore_resources),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        )
+                    }
+                }
+            }
+        }
+        item {
             Text(
                 stringResource(R.string.restore_account_mapping),
                 style = MaterialTheme.typography.titleMedium,
@@ -493,7 +536,13 @@ private fun RestorePreviewContent(
             ) {
                 Column(Modifier.padding(16.dp)) {
                     Text(
-                        text = stringResource(R.string.restore_overwrite_warning),
+                        text = stringResource(
+                            if (state.restoreProfile != null) {
+                                R.string.restore_profile_overwrite_warning
+                            } else {
+                                R.string.restore_overwrite_warning
+                            },
+                        ),
                         color = MaterialTheme.colorScheme.onErrorContainer,
                     )
                     SlicesConfirmationToggle(
@@ -648,11 +697,20 @@ private fun ResultContent(
     when (val result = state.jobState) {
         is BackupJobState.BackupComplete -> {
             title = stringResource(R.string.backup_complete)
-            summary = stringResource(
-                R.string.backup_complete_summary,
-                result.manifest.accounts.size,
-                formatBytes(result.manifest.logicalSize),
-            )
+            summary = if (result.manifest.profile != null) {
+                stringResource(
+                    R.string.profile_backup_complete_summary,
+                    result.manifest.accounts.size,
+                    formatBytes(result.archiveSize),
+                    formatBytes(result.manifest.profile.excludedLogicalSize),
+                )
+            } else {
+                stringResource(
+                    R.string.backup_complete_summary,
+                    result.manifest.accounts.size,
+                    formatBytes(result.archiveSize),
+                )
+            }
             success = true
         }
         is BackupJobState.RestoreComplete -> {
@@ -924,3 +982,6 @@ private fun formatBytes(bytes: Long): String {
     }
     return String.format(java.util.Locale.ROOT, "%.1f %s", value, units[unit])
 }
+
+private fun formatAppVersion(versionName: String, versionCode: Long?): String =
+    versionCode?.let { "$versionName ($it)" } ?: versionName

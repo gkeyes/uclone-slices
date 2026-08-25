@@ -165,6 +165,7 @@ internal class BackupRestoreEngine(
                     signingKind = job.signingKind,
                     signingSha256 = job.signingSha256,
                     appVersion = job.appVersion,
+                    appVersionCode = job.appVersionCode,
                     androidVersion = Build.VERSION.RELEASE,
                     device = "${Build.MANUFACTURER} ${Build.MODEL}",
                     createdAtMillis = System.currentTimeMillis(),
@@ -176,13 +177,17 @@ internal class BackupRestoreEngine(
                     activeAccountId = job.activeAccountId,
                     launchAfterReboot = job.launchAfterReboot,
                     sources = lease.sources,
+                    profile = job.profile,
                 ),
             )
             result = when (helperResult) {
                 is ArchiveHelperResult.Success -> {
                     copyToDocument(outputFile, destination)
                     documentComplete = true
-                    BackupJobState.BackupComplete(helperResult.manifest)
+                    BackupJobState.BackupComplete(
+                        manifest = helperResult.manifest,
+                        archiveSize = outputFile.length(),
+                    )
                 }
                 is ArchiveHelperResult.Failure -> BackupJobState.Failure(helperResult.code)
                 ArchiveHelperResult.TransportFailure -> BackupJobState.Failure("operation_failed")

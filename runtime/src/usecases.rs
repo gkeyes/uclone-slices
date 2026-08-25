@@ -13,6 +13,8 @@ use crate::model::{
     RestoreItemResult, RestoreItemState, RestoreMapping, RestoreTarget, SeedMode, SigningIdentity,
     SlotId, TransferId,
 };
+#[cfg(test)]
+use crate::model::{RestoreDomain, RestorePath, RestorePolicy};
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -188,7 +190,7 @@ where
         };
         let token = generate_account_io_token()?;
         let mut intent = AccountIoIntent {
-            schema_version: 1,
+            schema_version: 2,
             io_token: token.clone(),
             package: package.clone(),
             kind: AccountIoKind::Backup,
@@ -329,11 +331,12 @@ where
                 previous_name,
                 target_slot,
                 create_slot,
+                restore_policy: mapping.restore_policy,
             });
         }
         let token = generate_account_io_token()?;
         let intent = AccountIoIntent {
-            schema_version: 1,
+            schema_version: 2,
             io_token: token.clone(),
             package: package.clone(),
             kind: AccountIoKind::Restore,
@@ -421,7 +424,13 @@ where
             .clone()
             .ok_or(RuntimeError::StateConflict)?;
         self.slots
-            .validate_staged_account(&package, token, &transfer_id, archive_account_id)
+            .validate_staged_account(
+                &package,
+                token,
+                &transfer_id,
+                archive_account_id,
+                &mapping.restore_policy,
+            )
             .map_err(|error| {
                 logged_adapter(
                     "commit_restore_account",
@@ -440,6 +449,7 @@ where
                     &transfer_id,
                     archive_account_id,
                     &mapping.target_slot,
+                    &mapping.restore_policy,
                 )
                 .map_err(|error| {
                     logged_adapter("commit_restore_account", &package, "check_capacity", error)
@@ -521,6 +531,7 @@ where
                         &transfer_id,
                         archive_account_id,
                         &mapping.target_slot,
+                        &mapping.restore_policy,
                     )
                     .map_err(|error| {
                         logged_adapter("commit_restore_account", &package, "check_capacity", error)
@@ -534,6 +545,7 @@ where
             &transfer_id,
             archive_account_id,
             &mapping.target_slot,
+            &mapping.restore_policy,
         ) {
             if error.is_insufficient_storage() {
                 return Err(logged_adapter(
@@ -544,10 +556,12 @@ where
                 ));
             }
             log_adapter("commit_restore_account", &package, "replace_pair", &error);
-            if let Err(rollback) =
-                self.slots
-                    .rollback_account(&package, token, &mapping.target_slot)
-            {
+            if let Err(rollback) = self.slots.rollback_account(
+                &package,
+                token,
+                &mapping.target_slot,
+                &mapping.restore_policy,
+            ) {
                 return Err(logged_conflict(
                     "commit_restore_account",
                     &package,
@@ -574,7 +588,12 @@ where
         if metadata_result.is_err() || self.packages.save(&aggregate).is_err() {
             let _restore_metadata = self.packages.save(&original);
             self.slots
-                .rollback_account(&package, token, &mapping.target_slot)
+                .rollback_account(
+                    &package,
+                    token,
+                    &mapping.target_slot,
+                    &mapping.restore_policy,
+                )
                 .map_err(|error| {
                     logged_conflict(
                         "commit_restore_account",
@@ -596,7 +615,12 @@ where
         if let Err(error) = self.packages.save_account_io_intent(&intent) {
             let _restore_metadata = self.packages.save(&original);
             self.slots
-                .rollback_account(&package, token, &mapping.target_slot)
+                .rollback_account(
+                    &package,
+                    token,
+                    &mapping.target_slot,
+                    &mapping.restore_policy,
+                )
                 .map_err(|rollback| {
                     logged_conflict(
                         "commit_restore_account",
@@ -1319,22 +1343,26 @@ where
                     && result.state == RestoreItemState::Restored
             });
             if !already_committed {
-                if target_slot.is_base() && intent.maintenance_active {
-                    self.stop_and_apply_view(&package, &SlotId::base())?;
-                }
-                self.slots
-                    .rollback_account(&package, &intent.io_token, target_slot)
-                    .map_err(|error| {
-                        logged_conflict("abort_account_io", &package, "rollback_pair", error)
-                    })?;
-                if let Some(mapping) = intent
+                let mapping = intent
                     .mappings
                     .iter()
                     .find(|mapping| &mapping.archive_account_id == archive_account_id)
                     .cloned()
-                {
-                    self.rollback_restore_metadata(&intent, &mapping)?;
+                    .ok_or(RuntimeError::StateConflict)?;
+                if target_slot.is_base() && intent.maintenance_active {
+                    self.stop_and_apply_view(&package, &SlotId::base())?;
                 }
+                self.slots
+                    .rollback_account(
+                        &package,
+                        &intent.io_token,
+                        target_slot,
+                        &mapping.restore_policy,
+                    )
+                    .map_err(|error| {
+                        logged_conflict("abort_account_io", &package, "rollback_pair", error)
+                    })?;
+                self.rollback_restore_metadata(&intent, &mapping)?;
             }
         }
         add_skipped_restore_results(&mut intent);
@@ -1914,6 +1942,12 @@ fn validate_restore_mapping_rules(
     if source_ids.len() != mappings.len() {
         return Err(RuntimeError::InvalidRequest);
     }
+    if mappings
+        .iter()
+        .any(|mapping| mapping.restore_policy.validate().is_err())
+    {
+        return Err(RuntimeError::InvalidRequest);
+    }
     let existing_targets = mappings
         .iter()
         .filter_map(|mapping| match &mapping.target {
@@ -2088,9 +2122,10 @@ mod tests {
             token: &AccountIoToken,
             transfer_id: &TransferId,
             account: &ArchiveAccountId,
+            policy: &RestorePolicy,
         ) -> Result<(), AdapterError> {
             self.0
-                .validate_staged_account(package, token, transfer_id, account)
+                .validate_staged_account(package, token, transfer_id, account, policy)
         }
 
         fn ensure_restore_capacity(
@@ -2100,6 +2135,7 @@ mod tests {
             _transfer_id: &TransferId,
             _account: &ArchiveAccountId,
             target: &SlotId,
+            _policy: &RestorePolicy,
         ) -> Result<(), AdapterError> {
             if target.is_base() {
                 Err(AdapterError::insufficient_storage(
@@ -2125,9 +2161,10 @@ mod tests {
             transfer_id: &TransferId,
             account: &ArchiveAccountId,
             target: &SlotId,
+            policy: &RestorePolicy,
         ) -> Result<(), AdapterError> {
             self.0
-                .replace_account(package, token, transfer_id, account, target)
+                .replace_account(package, token, transfer_id, account, target, policy)
         }
 
         fn rollback_account(
@@ -2135,8 +2172,9 @@ mod tests {
             package: &PackageName,
             token: &AccountIoToken,
             target: &SlotId,
+            policy: &RestorePolicy,
         ) -> Result<(), AdapterError> {
-            self.0.rollback_account(package, token, target)
+            self.0.rollback_account(package, token, target, policy)
         }
 
         fn finalize_account(
@@ -3831,6 +3869,7 @@ mod tests {
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
                     },
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -3862,6 +3901,59 @@ mod tests {
     }
 
     #[test]
+    fn restore_policy_is_persisted_in_schema_two_while_schema_one_defaults_to_replace() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let archive_id = ArchiveAccountId::new("account-policy").unwrap();
+        let policy = RestorePolicy::PreservePaths {
+            paths: vec![RestorePath {
+                domain: RestoreDomain::Ce,
+                path: "files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer".to_owned(),
+            }],
+        };
+
+        runtime
+            .begin_restore_io(
+                &package,
+                TransferId::new("transfer-policy").unwrap(),
+                vec![RestoreMapping {
+                    archive_account_id: archive_id.clone(),
+                    archive_kind: ArchivedAccountKind::Base,
+                    name: DisplayName::new("Base").unwrap(),
+                    target: RestoreTarget::Existing {
+                        slot: SlotId::base(),
+                    },
+                    restore_policy: policy.clone(),
+                }],
+                ArchivedState {
+                    scope: ArchiveScope::Account,
+                    active_account_id: Some(archive_id),
+                    launch_after_reboot: false,
+                },
+            )
+            .unwrap();
+
+        let intent = runtime
+            .packages
+            .load_account_io_intent(&package)
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.schema_version, 2);
+        assert_eq!(intent.mappings[0].restore_policy, policy);
+
+        let mut legacy = serde_json::to_value(intent).unwrap();
+        legacy["schema_version"] = serde_json::json!(1);
+        legacy["mappings"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("restore_policy");
+        let legacy: AccountIoIntent = serde_json::from_value(legacy).unwrap();
+        assert_eq!(legacy.mappings[0].restore_policy, RestorePolicy::Replace);
+        assert!(legacy.validate().is_ok());
+    }
+
+    #[test]
     fn insufficient_base_rollback_capacity_preserves_ready_intent_and_staging() {
         let package = package();
         let mut android = MemoryAndroidOps::default();
@@ -3885,6 +3977,7 @@ mod tests {
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
                     },
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -3916,7 +4009,13 @@ mod tests {
         assert_eq!(runtime.android.calls(), calls_before);
         runtime
             .slots
-            .validate_staged_account(&package, &lease.io_token, &transfer_id, &archive_id)
+            .validate_staged_account(
+                &package,
+                &lease.io_token,
+                &transfer_id,
+                &archive_id,
+                &RestorePolicy::Replace,
+            )
             .unwrap();
         assert_eq!(
             runtime.commit_restore_account(&lease.io_token, &archive_id),
@@ -3959,6 +4058,7 @@ mod tests {
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
                     },
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -3982,7 +4082,13 @@ mod tests {
         assert_eq!(runtime.android.view(&package), Some(&ObservedView::Base));
         runtime
             .slots
-            .validate_staged_account(&package, &lease.io_token, &transfer_id, &archive_id)
+            .validate_staged_account(
+                &package,
+                &lease.io_token,
+                &transfer_id,
+                &archive_id,
+                &RestorePolicy::Replace,
+            )
             .unwrap();
 
         runtime.abort_account_io(&lease.io_token).unwrap();
@@ -4017,6 +4123,7 @@ mod tests {
                         archive_kind: ArchivedAccountKind::Slot,
                         name: DisplayName::new("Work").unwrap(),
                         target: RestoreTarget::New,
+                        restore_policy: RestorePolicy::Replace,
                     },
                     RestoreMapping {
                         archive_account_id: base_archive.clone(),
@@ -4025,6 +4132,7 @@ mod tests {
                         target: RestoreTarget::Existing {
                             slot: SlotId::base(),
                         },
+                        restore_policy: RestorePolicy::Replace,
                     },
                 ],
                 ArchivedState {
@@ -4067,6 +4175,7 @@ mod tests {
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
                     },
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -4109,6 +4218,7 @@ mod tests {
                     archive_kind: ArchivedAccountKind::Slot,
                     name: DisplayName::new("Restored work").unwrap(),
                     target: RestoreTarget::New,
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -4163,6 +4273,7 @@ mod tests {
                     archive_kind: ArchivedAccountKind::Slot,
                     name: DisplayName::new("Restored work").unwrap(),
                     target: RestoreTarget::New,
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -4218,6 +4329,7 @@ mod tests {
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
                     },
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -4263,6 +4375,7 @@ mod tests {
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
                     },
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -4303,6 +4416,7 @@ mod tests {
                 &transfer_id,
                 &archive_id,
                 &SlotId::base(),
+                &RestorePolicy::Replace,
             )
             .unwrap();
         let (packages, slots, android) = runtime.into_parts();
@@ -4340,6 +4454,7 @@ mod tests {
                     archive_kind: ArchivedAccountKind::Slot,
                     name: DisplayName::new("Restored work").unwrap(),
                     target: RestoreTarget::New,
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -4382,6 +4497,7 @@ mod tests {
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
                     },
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -4423,6 +4539,7 @@ mod tests {
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
                     },
+                    restore_policy: RestorePolicy::Replace,
                 }],
                 ArchivedState {
                     scope: ArchiveScope::Account,
@@ -4455,12 +4572,14 @@ mod tests {
             target: RestoreTarget::Existing {
                 slot: SlotId::base(),
             },
+            restore_policy: RestorePolicy::Replace,
         }];
         let base_archive_to_new = vec![RestoreMapping {
             archive_account_id: ArchiveAccountId::new("base").unwrap(),
             archive_kind: ArchivedAccountKind::Base,
             name: DisplayName::new("Base").unwrap(),
             target: RestoreTarget::New,
+            restore_policy: RestorePolicy::Replace,
         }];
         let state = ArchivedState {
             scope: ArchiveScope::Account,

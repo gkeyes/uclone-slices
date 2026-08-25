@@ -701,7 +701,7 @@ private fun testSigning() = SigningIdentity(
     sha256 = listOf("a".repeat(64)),
 )
 
-private val TEST_RUNTIME_VERSION = BuildConfig.VERSION_NAME
+private val TEST_RUNTIME_VERSION = BuildConfig.RUNTIME_PROTOCOL_BUILD_ID
 
 private open class FakeRuntimeClient(
     initialPackages: List<PackageSnapshot> = emptyList(),

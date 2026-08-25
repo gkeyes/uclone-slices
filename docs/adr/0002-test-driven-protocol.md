@@ -22,4 +22,4 @@
 
 `set_launch_after_reboot` 对应每个已配置 App 菜单中的重启启动开关。它只更新 `PackageAggregate` 中默认关闭的策略并返回最新包快照；开机主动收敛读取该策略，手动 `activate_slot` 仍始终启动 App。
 
-0.2.0 增加 `begin_backup_io`、`finish_backup_io`、`begin_restore_io`、`commit_restore_account`、`finish_restore_io`、`abort_account_io` 和 `list_account_io_status`。这些命令只提供 package lease、可信源/暂存路径、维护视图以及 CE/DE 成对提交；归档、SAF、压缩和加密不进入 Runtime wire。0.2.1 保持相同十八个操作和十一个错误码，只更新严格配对的 build ID 并修复既有事务实现。
+0.2.0 增加 `begin_backup_io`、`finish_backup_io`、`begin_restore_io`、`commit_restore_account`、`finish_restore_io`、`abort_account_io` 和 `list_account_io_status`。这些命令只提供 package lease、可信源/暂存路径、维护视图以及 CE/DE 成对提交；归档、SAF、压缩和加密不进入 Runtime wire。0.2.1 保持相同十八个操作和十一个错误码，只更新严格配对的 build ID并修复既有事务实现。0.2.2 不增加操作或错误码，仅在 `begin_restore_io` 的账号映射中增加通用 `RestorePolicy`，并将 Manager 展示版本与稳定协议 ID 解耦。

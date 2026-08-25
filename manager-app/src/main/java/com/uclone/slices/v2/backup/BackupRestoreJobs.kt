@@ -27,8 +27,10 @@ internal sealed interface BackupRestoreJob {
         val signingKind: com.uclone.slices.v2.runtime.SigningKind,
         val signingSha256: List<String>,
         val appVersion: String,
+        val appVersionCode: Long,
         val activeAccountId: String?,
         val launchAfterReboot: Boolean,
+        val profile: BackupProfile?,
     ) : BackupRestoreJob
 
     data class Inspect(
@@ -63,7 +65,10 @@ internal sealed interface BackupJobState {
         val sessionId: String,
         val manifest: ArchiveManifest,
     ) : BackupJobState
-    data class BackupComplete(val manifest: ArchiveManifest) : BackupJobState
+    data class BackupComplete(
+        val manifest: ArchiveManifest,
+        val archiveSize: Long,
+    ) : BackupJobState
     data class RestoreComplete(val result: RestoreBatchResult) : BackupJobState
     data class Failure(val code: String) : BackupJobState
 }

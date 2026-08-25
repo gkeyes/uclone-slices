@@ -93,6 +93,7 @@
     <string name="password_loss_warning">密码不会保存。忘记密码后无法恢复该备份。</string>
     <string name="unencrypted_backup_warning">未加密文件可能包含账号凭据，请仅保存到可信位置。</string>
     <string name="backup_scope_exclusions">备份账号所需的 CE/DE 数据；不包含顶层 cache、code_cache、APK、OBB、媒体、外部存储或 Android Keystore 密钥。跨设备或重装后，个别 App 可能需要重新登录。</string>
+    <string name="profile_backup_automatic">已自动精简：不备份可重新下载的游戏资源。</string>
     <string name="choose_save_location">选择保存位置并开始</string>
     <string name="enter_backup_password">输入备份密码</string>
     <string name="encrypted_backup_description">此备份已加密。密码只用于本次校验和恢复。</string>
@@ -110,6 +111,11 @@
     <string name="restore_target">恢复到：%1$s</string>
     <string name="change_restore_target">更改恢复位置</string>
     <string name="restore_overwrite_warning">目标账号会被备份内容完整覆盖。未选择的现有分账号会保留。</string>
+    <string name="restore_profile_overwrite_warning">目标账号数据会被备份内容覆盖；已识别的现有游戏资源会保留。未选择的现有分账号不受影响。</string>
+    <string name="profile_restore_preserve_existing">账号数据将被覆盖，已有游戏资源将保留。</string>
+    <string name="profile_restore_new_account">恢复为新分账号时没有现有资源可保留，首次打开需要下载资源。</string>
+    <string name="profile_restore_unavailable">此精简备份对应的内置规则不可用，将恢复账号数据并清理目标资源，首次打开需要重新下载。</string>
+    <string name="full_archive_restore_resources">这是完整备份，归档内资源将一并恢复。</string>
     <string name="restore_confirmation_toggle">我已了解并确认覆盖上述目标账号</string>
     <string name="restore_signature_mismatch_confirmation_toggle">我确认这是可信兼容版本，并接受签名不一致的覆盖风险</string>
     <string name="start_restore">开始覆盖并恢复</string>
@@ -120,6 +126,7 @@
     <string name="do_not_force_stop">操作期间 App 会保持停止；请勿强制停止 Manager 或移除模块。</string>
     <string name="backup_complete">备份完成</string>
     <string name="backup_complete_summary">已保存 %1$d 个账号，共 %2$s。</string>
+    <string name="profile_backup_complete_summary">已保存 %1$d 个账号，备份文件 %2$s；已排除约 %3$s 可重新下载资源。</string>
     <string name="restore_complete">恢复完成</string>
     <string name="restore_complete_summary">成功 %1$d 个，失败 %2$d 个，未处理 %3$d 个。成功账号已经保留。</string>
     <string name="restore_app_not_started">恢复完成后不会自动打开 App。请手动打开并检查账号状态。</string>

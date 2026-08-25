@@ -17,6 +17,7 @@ data class InstalledApp(
     val icon: Drawable? = null,
     val signingIdentity: SigningIdentity? = null,
     val versionName: String = "",
+    val versionCode: Long = 0,
 )
 
 fun interface InstalledAppsSource {
@@ -42,15 +43,14 @@ class PackageManagerInstalledApps(
             }
             .distinctBy(ApplicationInfo::packageName)
             .map { application ->
+                val packageInfo = packageManager.getPackageInfo(application.packageName, 0)
                 InstalledApp(
                     packageName = application.packageName,
                     label = packageManager.getApplicationLabel(application).toString(),
                     icon = packageManager.getApplicationIcon(application),
                     signingIdentity = signingIdentity(application.packageName),
-                    versionName = packageManager.getPackageInfo(
-                        application.packageName,
-                        0,
-                    ).versionName.orEmpty(),
+                    versionName = packageInfo.versionName.orEmpty(),
+                    versionCode = packageInfo.longVersionCode,
                 )
             }
             .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })

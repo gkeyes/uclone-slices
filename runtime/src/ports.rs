@@ -3,7 +3,8 @@ use thiserror::Error;
 use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, Capabilities, ObservedView,
     PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection, PackageName,
-    RebindIntent, RestoreBatchResult, RestoreStaging, SeedMode, Slot, SlotId, TransferId,
+    RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging, SeedMode, Slot, SlotId,
+    TransferId,
 };
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -122,6 +123,7 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
         token: &AccountIoToken,
         transfer_id: &TransferId,
         account: &ArchiveAccountId,
+        policy: &RestorePolicy,
     ) -> Result<(), AdapterError>;
 
     fn ensure_restore_capacity(
@@ -131,6 +133,7 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
         _transfer_id: &TransferId,
         _account: &ArchiveAccountId,
         _target: &SlotId,
+        _policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
         Ok(())
     }
@@ -148,6 +151,7 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
         transfer_id: &TransferId,
         account: &ArchiveAccountId,
         target: &SlotId,
+        policy: &RestorePolicy,
     ) -> Result<(), AdapterError>;
 
     fn rollback_account(
@@ -155,6 +159,7 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
         package: &PackageName,
         token: &AccountIoToken,
         target: &SlotId,
+        policy: &RestorePolicy,
     ) -> Result<(), AdapterError>;
 
     fn finalize_account(

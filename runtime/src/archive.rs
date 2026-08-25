@@ -80,6 +80,60 @@ pub enum ArchiveSigningKind {
     Multiple,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveDomain {
+    Ce,
+    De,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveBackupBehavior {
+    Exclude,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveRestoreBehavior {
+    Preserve,
+    Discard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackupProfileRule {
+    pub domain: ArchiveDomain,
+    pub path: String,
+    pub backup: ArchiveBackupBehavior,
+    pub restore: ArchiveRestoreBehavior,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackupProfile {
+    pub id: String,
+    pub revision: u32,
+    pub rules_digest: String,
+    pub rules: Vec<BackupProfileRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveProfileManifest {
+    pub id: String,
+    pub revision: u32,
+    pub rules_digest: String,
+    pub excluded_entries: u64,
+    pub excluded_logical_size: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveBackupType {
+    ProfiledAccount,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DomainState {
@@ -134,6 +188,8 @@ pub struct ArchiveManifest {
     pub signing_kind: ArchiveSigningKind,
     pub signing_sha256: Vec<String>,
     pub app_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_version_code: Option<u64>,
     pub android_version: String,
     pub device: String,
     pub created_at_millis: u64,
@@ -142,6 +198,10 @@ pub struct ArchiveManifest {
     pub launch_after_reboot: bool,
     pub logical_size: u64,
     pub accounts: Vec<ArchiveAccountManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_type: Option<ArchiveBackupType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ArchiveProfileManifest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,6 +224,8 @@ pub struct BackupRequest {
     pub signing_kind: ArchiveSigningKind,
     pub signing_sha256: Vec<String>,
     pub app_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_version_code: Option<u64>,
     pub android_version: String,
     pub device: String,
     pub created_at_millis: u64,
@@ -171,6 +233,8 @@ pub struct BackupRequest {
     pub active_account_id: Option<String>,
     pub launch_after_reboot: bool,
     pub sources: Vec<ArchiveSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<BackupProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,6 +529,11 @@ fn validate_backup_request(request: &BackupRequest) -> Result<(), ArchiveError> 
         return Err(ArchiveError::Invalid);
     }
     validate_signing_identity(request.signing_kind, &request.signing_sha256)?;
+    match (&request.profile, request.app_version_code) {
+        (Some(profile), Some(_)) => validate_backup_profile(profile)?,
+        (None, None) => {}
+        _ => return Err(ArchiveError::Invalid),
+    }
     let ids = request
         .sources
         .iter()
@@ -489,12 +558,30 @@ fn validate_backup_request(request: &BackupRequest) -> Result<(), ArchiveError> 
 fn build_manifest(request: &BackupRequest) -> Result<ArchiveManifest, ArchiveError> {
     let mut accounts = Vec::with_capacity(request.sources.len());
     let mut logical_size = 0_u64;
+    let mut excluded = ExcludedStats::default();
+    let rules = request
+        .profile
+        .as_ref()
+        .map(|profile| profile.rules.as_slice())
+        .unwrap_or_default();
     for source in &request.sources {
-        let ce = scan_domain(&source.ce_path)?;
-        let de = scan_domain(&source.de_path)?;
+        let ce = scan_domain(
+            &source.ce_path,
+            ArchiveDomain::Ce,
+            rules,
+            request.profile.is_some(),
+        )?;
+        let de = scan_domain(
+            &source.de_path,
+            ArchiveDomain::De,
+            rules,
+            request.profile.is_some(),
+        )?;
+        excluded.add(&ce.excluded)?;
+        excluded.add(&de.excluded)?;
         logical_size = logical_size
-            .checked_add(ce.logical_size)
-            .and_then(|size| size.checked_add(de.logical_size))
+            .checked_add(ce.manifest.logical_size)
+            .and_then(|size| size.checked_add(de.manifest.logical_size))
             .ok_or(ArchiveError::Invalid)?;
         if logical_size > MAX_LOGICAL_BYTES {
             return Err(ArchiveError::Invalid);
@@ -508,16 +595,27 @@ fn build_manifest(request: &BackupRequest) -> Result<ArchiveManifest, ArchiveErr
             },
             kind: source.kind,
             source_slot: source.source_slot.clone(),
-            ce,
-            de,
+            ce: ce.manifest,
+            de: de.manifest,
         });
     }
+    let profile = request
+        .profile
+        .as_ref()
+        .map(|profile| ArchiveProfileManifest {
+            id: profile.id.clone(),
+            revision: profile.revision,
+            rules_digest: profile.rules_digest.clone(),
+            excluded_entries: excluded.entries,
+            excluded_logical_size: excluded.logical_size,
+        });
     let manifest = ArchiveManifest {
-        format_version: 1,
+        format_version: if profile.is_some() { 2 } else { 1 },
         package: request.package.clone(),
         signing_kind: request.signing_kind,
         signing_sha256: request.signing_sha256.clone(),
         app_version: request.app_version.clone(),
+        app_version_code: profile.as_ref().and(request.app_version_code),
         android_version: request.android_version.clone(),
         device: request.device.clone(),
         created_at_millis: request.created_at_millis,
@@ -526,15 +624,58 @@ fn build_manifest(request: &BackupRequest) -> Result<ArchiveManifest, ArchiveErr
         launch_after_reboot: request.launch_after_reboot,
         logical_size,
         accounts,
+        backup_type: profile.as_ref().map(|_| ArchiveBackupType::ProfiledAccount),
+        profile,
     };
     validate_manifest(&manifest)?;
     Ok(manifest)
 }
 
-fn scan_domain(root: &Path) -> Result<DomainManifest, ArchiveError> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExcludedStats {
+    entries: u64,
+    logical_size: u64,
+}
+
+impl ExcludedStats {
+    fn add(&mut self, other: &Self) -> Result<(), ArchiveError> {
+        self.entries = self
+            .entries
+            .checked_add(other.entries)
+            .ok_or(ArchiveError::Invalid)?;
+        self.logical_size = self
+            .logical_size
+            .checked_add(other.logical_size)
+            .filter(|size| *size <= MAX_LOGICAL_BYTES)
+            .ok_or(ArchiveError::Invalid)?;
+        Ok(())
+    }
+}
+
+struct DomainScan {
+    manifest: DomainManifest,
+    excluded: ExcludedStats,
+}
+
+fn scan_domain(
+    root: &Path,
+    domain: ArchiveDomain,
+    rules: &[BackupProfileRule],
+    record_exclusions: bool,
+) -> Result<DomainScan, ArchiveError> {
     require_real_directory(root)?;
     let mut entries = Vec::new();
-    collect_entries(root, root, 0, &mut entries)?;
+    let mut excluded = ExcludedStats::default();
+    collect_entries(
+        root,
+        root,
+        0,
+        domain,
+        rules,
+        record_exclusions,
+        &mut entries,
+        &mut excluded,
+    )?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     if entries.len() > MAX_ENTRIES {
         return Err(ArchiveError::Invalid);
@@ -542,14 +683,17 @@ fn scan_domain(root: &Path) -> Result<DomainManifest, ArchiveError> {
     let logical_size = entries.iter().try_fold(0_u64, |total, entry| {
         total.checked_add(entry.size).ok_or(ArchiveError::Invalid)
     })?;
-    Ok(DomainManifest {
-        state: if entries.is_empty() {
-            DomainState::Empty
-        } else {
-            DomainState::Data
+    Ok(DomainScan {
+        manifest: DomainManifest {
+            state: if entries.is_empty() {
+                DomainState::Empty
+            } else {
+                DomainState::Data
+            },
+            logical_size,
+            entries,
         },
-        logical_size,
-        entries,
+        excluded,
     })
 }
 
@@ -557,7 +701,11 @@ fn collect_entries(
     root: &Path,
     directory: &Path,
     depth: usize,
+    domain: ArchiveDomain,
+    rules: &[BackupProfileRule],
+    record_exclusions: bool,
     entries: &mut Vec<ManifestEntry>,
+    excluded: &mut ExcludedStats,
 ) -> Result<(), ArchiveError> {
     let mut children = fs::read_dir(directory)
         .map_err(io_error)?
@@ -570,15 +718,27 @@ fn collect_entries(
             .to_str()
             .map(str::to_owned)
             .ok_or(ArchiveError::Invalid)?;
-        if depth == 0 && EXCLUDED_TOP_LEVEL.contains(&name.as_str()) {
-            continue;
-        }
         let path = entry.path();
         let relative = path
             .strip_prefix(root)
             .map_err(|_error| ArchiveError::Invalid)?;
         validate_relative_path(relative)?;
         let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
+        let global_exclusion = depth == 0 && EXCLUDED_TOP_LEVEL.contains(&name.as_str());
+        let profile_exclusion = rules
+            .iter()
+            .any(|rule| rule.domain == domain && profile_path_matches(&rule.path, relative));
+        if global_exclusion || profile_exclusion {
+            if profile_exclusion
+                && (!metadata.file_type().is_dir() || metadata.file_type().is_symlink())
+            {
+                return Err(ArchiveError::Invalid);
+            }
+            if record_exclusions {
+                collect_excluded_stats(root, &path, &metadata, excluded)?;
+            }
+            continue;
+        }
         let mode = metadata.mode() & 0o1777;
         let mtime_seconds = metadata.mtime().max(0) as u64;
         if metadata.file_type().is_dir() {
@@ -591,7 +751,16 @@ fn collect_entries(
                 mode,
                 mtime_seconds,
             });
-            collect_entries(root, &path, depth.saturating_add(1), entries)?;
+            collect_entries(
+                root,
+                &path,
+                depth.saturating_add(1),
+                domain,
+                rules,
+                record_exclusions,
+                entries,
+                excluded,
+            )?;
         } else if metadata.file_type().is_file() {
             if metadata.nlink() != 1 {
                 return Err(ArchiveError::Invalid);
@@ -625,6 +794,40 @@ fn collect_entries(
         if entries.len() > MAX_ENTRIES {
             return Err(ArchiveError::Invalid);
         }
+    }
+    Ok(())
+}
+
+fn collect_excluded_stats(
+    root: &Path,
+    path: &Path,
+    metadata: &fs::Metadata,
+    stats: &mut ExcludedStats,
+) -> Result<(), ArchiveError> {
+    stats.entries = stats.entries.checked_add(1).ok_or(ArchiveError::Invalid)?;
+    if stats.entries > MAX_ENTRIES as u64 {
+        return Err(ArchiveError::Invalid);
+    }
+    if metadata.file_type().is_file() {
+        stats.logical_size = stats
+            .logical_size
+            .checked_add(metadata.len())
+            .filter(|size| *size <= MAX_LOGICAL_BYTES)
+            .ok_or(ArchiveError::Invalid)?;
+    } else if metadata.file_type().is_dir() {
+        for entry in fs::read_dir(path).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            let child = entry.path();
+            let child_metadata = fs::symlink_metadata(&child).map_err(io_error)?;
+            collect_excluded_stats(root, &child, &child_metadata, stats)?;
+        }
+    } else if metadata.file_type().is_symlink() {
+        let target = fs::read_link(path).map_err(io_error)?;
+        if target.is_absolute() || !relative_link_stays_inside(root, path, &target) {
+            return Err(ArchiveError::Invalid);
+        }
+    } else {
+        return Err(ArchiveError::Invalid);
     }
     Ok(())
 }
@@ -788,13 +991,36 @@ fn open_payload(
 }
 
 fn validate_manifest(manifest: &ArchiveManifest) -> Result<(), ArchiveError> {
-    if manifest.format_version != 1
+    if !matches!(manifest.format_version, 1 | 2)
         || manifest.package.is_empty()
         || manifest.accounts.is_empty()
         || manifest.accounts.len() > MAX_ACCOUNTS
         || manifest.logical_size > MAX_LOGICAL_BYTES
     {
         return Err(ArchiveError::Incompatible);
+    }
+    match manifest.format_version {
+        1 if manifest.profile.is_some()
+            || manifest.app_version_code.is_some()
+            || manifest.backup_type.is_some() =>
+        {
+            return Err(ArchiveError::Invalid);
+        }
+        2 => {
+            let profile = manifest.profile.as_ref().ok_or(ArchiveError::Invalid)?;
+            if manifest.app_version_code.is_none()
+                || manifest.backup_type != Some(ArchiveBackupType::ProfiledAccount)
+            {
+                return Err(ArchiveError::Invalid);
+            }
+            validate_profile_identity(&profile.id, profile.revision, &profile.rules_digest)?;
+            if profile.excluded_logical_size > MAX_LOGICAL_BYTES
+                || profile.excluded_entries > MAX_ENTRIES as u64
+            {
+                return Err(ArchiveError::Invalid);
+            }
+        }
+        _ => {}
     }
     validate_signing_identity(manifest.signing_kind, &manifest.signing_sha256)?;
     let ids = manifest
@@ -892,6 +1118,87 @@ fn validate_signing_identity(
         return Err(ArchiveError::Invalid);
     }
     Ok(())
+}
+
+fn validate_backup_profile(profile: &BackupProfile) -> Result<(), ArchiveError> {
+    validate_profile_identity(&profile.id, profile.revision, &profile.rules_digest)?;
+    if profile.rules.is_empty() || profile.rules.len() > 64 {
+        return Err(ArchiveError::Invalid);
+    }
+    for rule in &profile.rules {
+        validate_profile_path(&rule.path)?;
+    }
+    for (index, left) in profile.rules.iter().enumerate() {
+        for right in profile.rules.iter().skip(index + 1) {
+            if left.domain == right.domain && profile_patterns_overlap(&left.path, &right.path) {
+                return Err(ArchiveError::Invalid);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_profile_identity(
+    id: &str,
+    revision: u32,
+    rules_digest: &str,
+) -> Result<(), ArchiveError> {
+    validate_archive_id(id)?;
+    if revision == 0
+        || rules_digest.len() != 64
+        || !rules_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(ArchiveError::Invalid);
+    }
+    Ok(())
+}
+
+fn validate_profile_path(value: &str) -> Result<(), ArchiveError> {
+    if value.is_empty() || value.len() > MAX_PATH_BYTES || value.starts_with('/') {
+        return Err(ArchiveError::Invalid);
+    }
+    let segments = value.split('/').collect::<Vec<_>>();
+    if segments.is_empty()
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || matches!(*segment, "." | ".." | "**")
+                || (*segment != "*"
+                    && !segment.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+                    }))
+        })
+    {
+        return Err(ArchiveError::Invalid);
+    }
+    Ok(())
+}
+
+fn profile_path_matches(pattern: &str, path: &Path) -> bool {
+    let pattern = pattern.split('/').collect::<Vec<_>>();
+    let path = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    pattern.len() == path.len()
+        && pattern
+            .iter()
+            .zip(path)
+            .all(|(expected, actual)| *expected == "*" || *expected == actual)
+}
+
+fn profile_patterns_overlap(left: &str, right: &str) -> bool {
+    let left = left.split('/').collect::<Vec<_>>();
+    let right = right.split('/').collect::<Vec<_>>();
+    let shared = left.len().min(right.len());
+    left.iter()
+        .take(shared)
+        .zip(right.iter().take(shared))
+        .all(|(left, right)| left == right || *left == "*" || *right == "*")
 }
 
 fn validate_manifest_entry(entry: &ManifestEntry) -> Result<(), ArchiveError> {
@@ -1338,6 +1645,7 @@ mod tests {
             signing_kind: ArchiveSigningKind::Lineage,
             signing_sha256: vec!["a".repeat(64)],
             app_version: "1.0".to_owned(),
+            app_version_code: None,
             android_version: "17".to_owned(),
             device: "test".to_owned(),
             created_at_millis: 1,
@@ -1352,7 +1660,57 @@ mod tests {
                 ce_path: ce,
                 de_path: de,
             }],
+            profile: None,
         }
+    }
+
+    fn profiled_request(root: &Path) -> BackupRequest {
+        let mut request = request(root, false);
+        let ce = &request.sources[0].ce_path;
+        fs::set_permissions(ce.join("files"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir_all(
+            ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer/version/patch"),
+        )
+        .unwrap();
+        fs::write(
+            ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer/version/patch/a.pak"),
+            vec![7_u8; 8192],
+        )
+        .unwrap();
+        fs::create_dir_all(ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/1.2.3/Paks"))
+            .unwrap();
+        fs::write(
+            ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/1.2.3/Paks/a.pak"),
+            vec![8_u8; 4096],
+        )
+        .unwrap();
+        fs::write(
+            ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/config.dat"),
+            b"account-related",
+        )
+        .unwrap();
+        fs::write(ce.join("files/MSDK.mmap3"), b"login-state").unwrap();
+        request.app_version_code = Some(2019);
+        request.profile = Some(BackupProfile {
+            id: "delta-force-cn-account-v1".to_owned(),
+            revision: 1,
+            rules_digest: "b".repeat(64),
+            rules: vec![
+                BackupProfileRule {
+                    domain: ArchiveDomain::Ce,
+                    path: "files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer".to_owned(),
+                    backup: ArchiveBackupBehavior::Exclude,
+                    restore: ArchiveRestoreBehavior::Preserve,
+                },
+                BackupProfileRule {
+                    domain: ArchiveDomain::Ce,
+                    path: "files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/*/Paks".to_owned(),
+                    backup: ArchiveBackupBehavior::Exclude,
+                    restore: ArchiveRestoreBehavior::Preserve,
+                },
+            ],
+        });
+        request
     }
 
     #[test]
@@ -1405,6 +1763,77 @@ mod tests {
             );
             assert!(!ce.join("cache").exists());
         }
+    }
+
+    #[test]
+    fn profiled_archive_prunes_downloadable_resources_without_dropping_account_state() {
+        let root = tempfile::tempdir().unwrap();
+        let request = profiled_request(root.path());
+        let output = request.output_path.clone();
+
+        let manifest = create_backup(request).unwrap();
+
+        assert_eq!(manifest.format_version, 2);
+        assert_eq!(
+            manifest.backup_type,
+            Some(ArchiveBackupType::ProfiledAccount)
+        );
+        assert_eq!(manifest.app_version_code, Some(2019));
+        let profile = manifest.profile.as_ref().unwrap();
+        assert_eq!(profile.id, "delta-force-cn-account-v1");
+        assert_eq!(profile.excluded_logical_size, 8192 + 4096 + 5);
+        let paths = manifest.accounts[0]
+            .ce
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&"files/MSDK.mmap3"));
+        assert!(paths.contains(&"files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/config.dat"));
+        assert!(!paths.iter().any(|path| path.contains("Puffer")));
+        assert!(!paths.iter().any(|path| path.contains("/Paks")));
+        assert_eq!(inspect_backup(&output, None).unwrap(), manifest);
+
+        let restored_ce = root.path().join("restore-profiled/ce");
+        let restored_de = root.path().join("restore-profiled/de");
+        fs::create_dir_all(&restored_ce).unwrap();
+        fs::create_dir_all(&restored_de).unwrap();
+        assert_eq!(
+            restore_backup(RestoreRequest {
+                input_path: output,
+                password: None,
+                destinations: vec![RestoreDestination {
+                    archive_account_id: "account-0".to_owned(),
+                    ce_path: restored_ce.clone(),
+                    de_path: restored_de,
+                }],
+            })
+            .unwrap(),
+            manifest,
+        );
+        assert_eq!(
+            fs::read(restored_ce.join("files/MSDK.mmap3")).unwrap(),
+            b"login-state",
+        );
+        assert!(
+            !restored_ce
+                .join("files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn profile_paths_are_validated_before_scanning() {
+        let root = tempfile::tempdir().unwrap();
+        let mut request = profiled_request(root.path());
+        request.profile.as_mut().unwrap().rules[0].path = "../Puffer".to_owned();
+        assert!(matches!(create_backup(request), Err(ArchiveError::Invalid)));
+
+        let root = tempfile::tempdir().unwrap();
+        let mut request = profiled_request(root.path());
+        let duplicate = request.profile.as_ref().unwrap().rules[0].clone();
+        request.profile.as_mut().unwrap().rules.push(duplicate);
+        assert!(matches!(create_backup(request), Err(ArchiveError::Invalid)));
     }
 
     #[test]

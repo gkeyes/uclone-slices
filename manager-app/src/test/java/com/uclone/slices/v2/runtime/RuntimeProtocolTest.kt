@@ -53,6 +53,14 @@ class RuntimeProtocolTest {
                         archiveKind = ArchivedAccountKind.Base,
                         name = "系统原始空间",
                         target = RestoreTarget.Existing("base"),
+                        restorePolicy = RestorePolicy.PreservePaths(
+                            listOf(
+                                RestorePath(
+                                    RestoreDomain.Ce,
+                                    "files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer",
+                                ),
+                            ),
+                        ),
                     ),
                     RestoreMapping(
                         archiveAccountId = "slot-1",
@@ -107,12 +115,15 @@ class RuntimeProtocolTest {
     }
 
     @Test
-    fun onlyNonProbeCommandsCarryTheManagerBuildId() {
+    fun onlyNonProbeCommandsCarryTheStableRuntimeProtocolId() {
         val probe = JSONObject(RuntimeProtocol.encode(RuntimeCommand.Probe))
         val list = JSONObject(RuntimeProtocol.encode(RuntimeCommand.ListPackages))
 
         assertEquals(false, probe.has("client_build_id"))
-        assertEquals(BuildConfig.VERSION_NAME, list.getString("client_build_id"))
+        assertEquals(
+            BuildConfig.RUNTIME_PROTOCOL_BUILD_ID,
+            list.getString("client_build_id"),
+        )
     }
 
     @Test

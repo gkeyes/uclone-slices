@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::Write as _;
 #[cfg(not(target_os = "android"))]
@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, PackageAggregate, PackageBinding,
-    PackageName, RebindIntent, RestoreBatchResult, RestoreStaging, SeedMode, Slot, SlotId,
-    TransferId,
+    PackageName, RebindIntent, RestoreBatchResult, RestoreDomain, RestorePolicy, RestoreStaging,
+    SeedMode, Slot, SlotId, TransferId,
 };
 use crate::ports::{AdapterError, PackageStore, SlotStorage};
 
@@ -574,9 +574,13 @@ impl FileSlotStorage {
         staged_de: &Path,
         target_ce: &Path,
         target_de: &Path,
+        policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
         let mut requirements = Vec::with_capacity(2);
-        for (staged, target) in [(staged_ce, target_ce), (staged_de, target_de)] {
+        for (staged, target, domain) in [
+            (staged_ce, target_ce, RestoreDomain::Ce),
+            (staged_de, target_de, RestoreDomain::De),
+        ] {
             let target_device = fs::metadata(target).map_err(io_error)?.dev();
             let (staging_device, available) = self.available_bytes(staged)?;
             if target_device != staging_device {
@@ -584,11 +588,12 @@ impl FileSlotStorage {
                     "Base restore staging and target are on different filesystems",
                 ));
             }
-            // This gate runs before any Base mutation. Do not assume that deleting an
-            // App tree immediately returns all of its blocks: existing hard links or
-            // open kernel references can delay reclamation. Reserve both copies on the
-            // backing filesystem so a later rollback never depends on optimistic reuse.
-            let required = copied_tree_bytes(target)?
+            // This gate runs before any Base mutation. Reserve the staged account and
+            // a rollback copy of only the data that the transaction will replace.
+            // Preserved resource trees stay on the same filesystem and are moved by
+            // rename, so copying their multi-gigabyte contents is neither needed nor
+            // included in the capacity requirement.
+            let required = copied_tree_bytes_excluding(target, &policy.paths_for(domain))?
                 .checked_add(copied_tree_bytes(staged)?)
                 .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
             requirements.push((staging_device, required, available));
@@ -739,6 +744,7 @@ impl SlotStorage for FileSlotStorage {
         token: &AccountIoToken,
         transfer_id: &TransferId,
         account: &ArchiveAccountId,
+        policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
         let (ce, de) = self.transfer_account_paths(package, token, account)?;
         for path in [&ce, &de] {
@@ -758,6 +764,13 @@ impl SlotStorage for FileSlotStorage {
             }
             validate_staged_tree(path)?;
         }
+        for (path, domain) in [(&ce, RestoreDomain::Ce), (&de, RestoreDomain::De)] {
+            if !resolve_preserve_roots(path, &policy.paths_for(domain))?.is_empty() {
+                return Err(AdapterError::state_conflict(
+                    "staged account overlaps a preserved resource path",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -768,14 +781,15 @@ impl SlotStorage for FileSlotStorage {
         transfer_id: &TransferId,
         account: &ArchiveAccountId,
         target: &SlotId,
+        policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
         if !target.is_base() {
             return Ok(());
         }
-        self.validate_staged_account(package, token, transfer_id, account)?;
+        self.validate_staged_account(package, token, transfer_id, account, policy)?;
         let (staged_ce, staged_de) = self.transfer_account_paths(package, token, account)?;
         let (target_ce, target_de) = self.replacement_target_paths(package, token, target)?;
-        self.ensure_base_restore_capacity(&staged_ce, &staged_de, &target_ce, &target_de)
+        self.ensure_base_restore_capacity(&staged_ce, &staged_de, &target_ce, &target_de, policy)
     }
 
     fn prepare_maintenance(
@@ -816,22 +830,37 @@ impl SlotStorage for FileSlotStorage {
         transfer_id: &TransferId,
         account: &ArchiveAccountId,
         target: &SlotId,
+        policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
-        self.validate_staged_account(package, token, transfer_id, account)?;
+        self.validate_staged_account(package, token, transfer_id, account, policy)?;
         let (staged_ce, staged_de) = self.transfer_account_paths(package, token, account)?;
         let (target_ce, target_de) = self.replacement_target_paths(package, token, target)?;
         if target.is_base() {
-            self.ensure_base_restore_capacity(&staged_ce, &staged_de, &target_ce, &target_de)?;
+            self.ensure_base_restore_capacity(
+                &staged_ce, &staged_de, &target_ce, &target_de, policy,
+            )?;
         }
         normalize_restored_tree(&self.canonical_ce_root.join(package.as_str()), &staged_ce)?;
         normalize_restored_tree(&self.canonical_de_root.join(package.as_str()), &staged_de)?;
         let (rollback_ce, rollback_de) = self.rollback_paths(package, token, target)?;
-        let ce_result = replace_domain(&staged_ce, &target_ce, &rollback_ce, target.is_base());
+        let ce_result = replace_domain(
+            &staged_ce,
+            &target_ce,
+            &rollback_ce,
+            target.is_base(),
+            &policy.paths_for(RestoreDomain::Ce),
+        );
         if let Err(error) = ce_result {
             let _rollback = rollback_domain(&target_ce, &rollback_ce, target.is_base());
             return Err(error);
         }
-        let de_result = replace_domain(&staged_de, &target_de, &rollback_de, target.is_base());
+        let de_result = replace_domain(
+            &staged_de,
+            &target_de,
+            &rollback_de,
+            target.is_base(),
+            &policy.paths_for(RestoreDomain::De),
+        );
         if let Err(error) = de_result {
             let de_rollback = rollback_domain(&target_de, &rollback_de, target.is_base());
             let ce_rollback = rollback_domain(&target_ce, &rollback_ce, target.is_base());
@@ -850,6 +879,7 @@ impl SlotStorage for FileSlotStorage {
         package: &PackageName,
         token: &AccountIoToken,
         target: &SlotId,
+        _policy: &RestorePolicy,
     ) -> Result<(), AdapterError> {
         let (rollback_ce, rollback_de) = self.rollback_paths(package, token, target)?;
         if !rollback_ce.exists() && !rollback_de.exists() {
@@ -1087,6 +1117,7 @@ fn replace_domain(
     target: &Path,
     rollback: &Path,
     keep_target_root: bool,
+    preserve_patterns: &[&str],
 ) -> Result<(), AdapterError> {
     if rollback.exists() {
         return Err(AdapterError::state_conflict(
@@ -1098,6 +1129,14 @@ fn replace_domain(
         .ok_or_else(|| AdapterError::new("rollback path has no parent"))?;
     fs::create_dir_all(rollback_parent).map_err(io_error)?;
     fs::create_dir(rollback).map_err(io_error)?;
+    let preserved = resolve_preserve_roots(target, preserve_patterns)?;
+    if !preserved.is_empty() {
+        write_json_atomic(&rollback.join("preserve-plan.json"), &preserved)?;
+        if !keep_target_root {
+            fs::create_dir(rollback.join("preserved")).map_err(io_error)?;
+            move_preserved_to_holding(target, rollback, &preserved)?;
+        }
+    }
     let old = rollback.join("old");
     let missing = rollback.join("old-missing");
     if keep_target_root {
@@ -1107,13 +1146,25 @@ fn replace_domain(
             ));
         }
         fs::create_dir(&old).map_err(io_error)?;
-        copy_tree(target, &old)?;
+        if preserved.is_empty() {
+            copy_tree(target, &old)?;
+        } else {
+            copy_tree_excluding(target, &old, &preserved)?;
+        }
         sync_tree(&old)?;
         fs::write(rollback.join("backup-complete"), b"").map_err(io_error)?;
         sync_directory(rollback)?;
-        remove_directory_contents(target)?;
+        if preserved.is_empty() {
+            remove_directory_contents(target)?;
+        } else {
+            remove_directory_contents_excluding(target, &preserved)?;
+        }
         copy_tree(staged, target)?;
-        sync_tree(target)?;
+        if preserved.is_empty() {
+            sync_tree(target)?;
+        } else {
+            sync_tree_excluding(target, &preserved)?;
+        }
         remove_tree_if_exists(staged)?;
         sync_directory(target)?;
     } else {
@@ -1128,6 +1179,9 @@ fn replace_domain(
         }
         rename_path(staged, target).map_err(io_error)?;
         sync_directory(target_parent)?;
+    }
+    if !keep_target_root {
+        restore_preserved_from_holding(target, rollback, &preserved)?;
     }
     sync_directory(rollback)?;
     sync_directory(rollback_parent)
@@ -1146,6 +1200,44 @@ fn copied_tree_bytes(root: &Path) -> Result<u64, AdapterError> {
             let entry = entry.map_err(io_error)?;
             bytes = bytes
                 .checked_add(copied_tree_bytes(&entry.path())?)
+                .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
+        }
+    }
+    Ok(bytes)
+}
+
+fn copied_tree_bytes_excluding(root: &Path, patterns: &[&str]) -> Result<u64, AdapterError> {
+    let excluded = resolve_preserve_roots(root, patterns)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    copied_tree_bytes_filtered(root, root, &excluded)
+}
+
+fn copied_tree_bytes_filtered(
+    root: &Path,
+    path: &Path,
+    excluded: &BTreeSet<PathBuf>,
+) -> Result<u64, AdapterError> {
+    if path != root {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        if excluded.contains(relative) {
+            return Ok(0);
+        }
+    }
+    let metadata = fs::symlink_metadata(path).map_err(io_error)?;
+    let mut bytes = metadata
+        .blocks()
+        .checked_mul(512)
+        .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?
+        .max(metadata.len())
+        .max(metadata.blksize());
+    if metadata.file_type().is_dir() {
+        for entry in fs::read_dir(path).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            bytes = bytes
+                .checked_add(copied_tree_bytes_filtered(root, &entry.path(), excluded)?)
                 .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
         }
     }
@@ -1183,6 +1275,8 @@ fn rollback_domain(
     if !rollback.exists() {
         return Ok(());
     }
+    let preserved = read_optional_json::<Vec<PathBuf>>(&rollback.join("preserve-plan.json"))?
+        .unwrap_or_default();
     let old = rollback.join("old");
     let old_missing = rollback.join("old-missing").is_file();
     let restore_started = rollback.join("restore-started");
@@ -1194,7 +1288,11 @@ fn rollback_domain(
             ));
         }
         if !rollback.join("backup-complete").is_file() {
-            return remove_tree_if_exists(rollback);
+            remove_tree_if_exists(rollback)?;
+            let parent = rollback
+                .parent()
+                .ok_or_else(|| AdapterError::new("rollback path has no parent"))?;
+            return sync_directory(parent);
         }
         if !restore_started.is_file() && !old_available {
             return Err(AdapterError::state_conflict(
@@ -1202,19 +1300,28 @@ fn rollback_domain(
             ));
         }
         if !restore_started.is_file() {
-            remove_directory_contents(target)?;
+            if preserved.is_empty() {
+                remove_directory_contents(target)?;
+            } else {
+                remove_directory_contents_excluding(target, &preserved)?;
+            }
             fs::write(&restore_started, b"").map_err(io_error)?;
             sync_directory(rollback)?;
         }
         if old_available {
             copy_tree(&old, target)?;
-            sync_tree(target)?;
+            if preserved.is_empty() {
+                sync_tree(target)?;
+            } else {
+                sync_tree_excluding(target, &preserved)?;
+            }
         }
         sync_directory(target)?;
         return retire_completed_rollback(rollback);
     } else {
         if old_available {
             if !restore_started.is_file() {
+                move_preserved_to_holding(target, rollback, &preserved)?;
                 remove_tree_if_exists(target)?;
                 if let Some(parent) = target.parent() {
                     sync_directory(parent)?;
@@ -1228,10 +1335,14 @@ fn rollback_domain(
         } else if restore_started.is_file() && real_directory(target)? {
             // The old tree was already atomically renamed before interruption.
         } else {
-            return Err(AdapterError::state_conflict(
-                "restore rollback has no prior-state marker",
-            ));
+            restore_preserved_from_holding(target, rollback, &preserved)?;
+            remove_tree_if_exists(rollback)?;
+            let parent = rollback
+                .parent()
+                .ok_or_else(|| AdapterError::new("rollback path has no parent"))?;
+            return sync_directory(parent);
         }
+        restore_preserved_from_holding(target, rollback, &preserved)?;
         if let Some(parent) = target.parent() {
             sync_directory(parent)?;
         }
@@ -1241,6 +1352,178 @@ fn rollback_domain(
         .parent()
         .ok_or_else(|| AdapterError::new("rollback path has no parent"))?;
     sync_directory(parent)
+}
+
+fn resolve_preserve_roots(root: &Path, patterns: &[&str]) -> Result<Vec<PathBuf>, AdapterError> {
+    if patterns.is_empty() || !root.exists() {
+        return Ok(Vec::new());
+    }
+    if !real_directory(root)? {
+        return Err(AdapterError::state_conflict(
+            "preserve source is not a real directory",
+        ));
+    }
+    let mut resolved = BTreeSet::new();
+    for pattern in patterns {
+        let segments = pattern.split('/').collect::<Vec<_>>();
+        resolve_preserve_pattern(root, Path::new(""), &segments, 0, &mut resolved)?;
+    }
+    let resolved = resolved.into_iter().collect::<Vec<_>>();
+    for (index, left) in resolved.iter().enumerate() {
+        if resolved
+            .iter()
+            .skip(index + 1)
+            .any(|right| left.starts_with(right) || right.starts_with(left))
+        {
+            return Err(AdapterError::state_conflict(
+                "preserved resource paths overlap",
+            ));
+        }
+    }
+    Ok(resolved)
+}
+
+fn resolve_preserve_pattern(
+    root: &Path,
+    relative: &Path,
+    segments: &[&str],
+    index: usize,
+    resolved: &mut BTreeSet<PathBuf>,
+) -> Result<(), AdapterError> {
+    if index == segments.len() {
+        let path = root.join(relative);
+        let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+            return Err(AdapterError::state_conflict(
+                "preserved resource root is not a real directory",
+            ));
+        }
+        resolved.insert(relative.to_path_buf());
+        return Ok(());
+    }
+    let current = root.join(relative);
+    let segment = segments[index];
+    if segment == "*" {
+        let mut children = fs::read_dir(&current)
+            .map_err(io_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(io_error)?;
+        children.sort_by_key(|entry| entry.file_name());
+        for child in children {
+            let metadata = fs::symlink_metadata(child.path()).map_err(io_error)?;
+            if metadata.file_type().is_symlink() {
+                return Err(AdapterError::state_conflict(
+                    "preserved resource wildcard crosses a symbolic link",
+                ));
+            }
+            if metadata.file_type().is_dir() {
+                resolve_preserve_pattern(
+                    root,
+                    &relative.join(child.file_name()),
+                    segments,
+                    index + 1,
+                    resolved,
+                )?;
+            }
+        }
+        return Ok(());
+    }
+    let next = relative.join(segment);
+    match fs::symlink_metadata(root.join(&next)) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(AdapterError::state_conflict(
+                    "preserved resource path crosses a symbolic link",
+                ));
+            }
+            if !metadata.file_type().is_dir() {
+                return Err(AdapterError::state_conflict(
+                    "preserved resource path is not a directory",
+                ));
+            }
+            resolve_preserve_pattern(root, &next, segments, index + 1, resolved)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+fn move_preserved_to_holding(
+    target: &Path,
+    rollback: &Path,
+    paths: &[PathBuf],
+) -> Result<(), AdapterError> {
+    let holding = rollback.join("preserved");
+    for relative in paths {
+        let source = target.join(relative);
+        let destination = holding.join(relative);
+        let source_exists = real_directory(&source)?;
+        let destination_exists = real_directory(&destination)?;
+        match (source_exists, destination_exists) {
+            (true, false) => {
+                let parent = destination
+                    .parent()
+                    .ok_or_else(|| AdapterError::new("preserved path has no parent"))?;
+                fs::create_dir_all(parent).map_err(io_error)?;
+                rename_path(&source, &destination).map_err(io_error)?;
+                if let Some(parent) = source.parent() {
+                    sync_directory(parent)?;
+                }
+                sync_directory(parent)?;
+            }
+            (false, true) => {}
+            (true, true) => {
+                return Err(AdapterError::state_conflict(
+                    "preserved resource exists in target and rollback",
+                ));
+            }
+            (false, false) => {
+                return Err(AdapterError::state_conflict(
+                    "preserved resource disappeared during restore",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn restore_preserved_from_holding(
+    target: &Path,
+    rollback: &Path,
+    paths: &[PathBuf],
+) -> Result<(), AdapterError> {
+    let holding = rollback.join("preserved");
+    for relative in paths {
+        let source = holding.join(relative);
+        let destination = target.join(relative);
+        let source_exists = real_directory(&source)?;
+        let destination_exists = real_directory(&destination)?;
+        match (source_exists, destination_exists) {
+            (true, false) => {
+                let parent = destination
+                    .parent()
+                    .ok_or_else(|| AdapterError::new("restored resource has no parent"))?;
+                fs::create_dir_all(parent).map_err(io_error)?;
+                rename_path(&source, &destination).map_err(io_error)?;
+                if let Some(parent) = source.parent() {
+                    sync_directory(parent)?;
+                }
+                sync_directory(parent)?;
+            }
+            (false, true) => {}
+            (true, true) => {
+                return Err(AdapterError::state_conflict(
+                    "restored account overlaps a preserved resource",
+                ));
+            }
+            (false, false) => {
+                return Err(AdapterError::state_conflict(
+                    "preserved resource is unavailable",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn retire_completed_rollback(rollback: &Path) -> Result<(), AdapterError> {
@@ -1407,6 +1690,34 @@ fn sync_tree(root: &Path) -> Result<(), AdapterError> {
     Ok(())
 }
 
+fn sync_tree_excluding(root: &Path, excluded: &[PathBuf]) -> Result<(), AdapterError> {
+    let excluded = excluded.iter().cloned().collect::<BTreeSet<_>>();
+    let mut directories = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), PathBuf::new())];
+    while let Some((directory, relative)) = pending.pop() {
+        directories.push(directory.clone());
+        for entry in fs::read_dir(&directory).map_err(io_error)? {
+            let entry = entry.map_err(io_error)?;
+            let child_relative = relative.join(entry.file_name());
+            if excluded.contains(&child_relative) {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(entry.path()).map_err(io_error)?;
+            if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+                pending.push((entry.path(), child_relative));
+            } else if metadata.file_type().is_file() {
+                File::open(entry.path())
+                    .and_then(|file| file.sync_all())
+                    .map_err(io_error)?;
+            }
+        }
+    }
+    for directory in directories.into_iter().rev() {
+        sync_directory(&directory)?;
+    }
+    Ok(())
+}
+
 fn remove_directory_contents(path: &Path) -> Result<(), AdapterError> {
     for entry in fs::read_dir(path).map_err(io_error)? {
         let entry = entry.map_err(io_error)?;
@@ -1418,6 +1729,44 @@ fn remove_directory_contents(path: &Path) -> Result<(), AdapterError> {
         }
     }
     sync_directory(path)
+}
+
+fn remove_directory_contents_excluding(
+    root: &Path,
+    excluded: &[PathBuf],
+) -> Result<(), AdapterError> {
+    remove_directory_contents_excluding_at(root, Path::new(""), excluded)
+}
+
+fn remove_directory_contents_excluding_at(
+    directory: &Path,
+    relative: &Path,
+    excluded: &[PathBuf],
+) -> Result<(), AdapterError> {
+    for entry in fs::read_dir(directory).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let child_relative = relative.join(entry.file_name());
+        if excluded.iter().any(|path| path == &child_relative) {
+            continue;
+        }
+        let contains_preserved = excluded
+            .iter()
+            .any(|path| path.starts_with(&child_relative));
+        let metadata = fs::symlink_metadata(entry.path()).map_err(io_error)?;
+        if contains_preserved {
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+                return Err(AdapterError::state_conflict(
+                    "preserved resource ancestor is not a real directory",
+                ));
+            }
+            remove_directory_contents_excluding_at(&entry.path(), &child_relative, excluded)?;
+        } else if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+            fs::remove_dir_all(entry.path()).map_err(io_error)?;
+        } else {
+            fs::remove_file(entry.path()).map_err(io_error)?;
+        }
+    }
+    sync_directory(directory)
 }
 
 #[cfg(target_os = "android")]
@@ -1570,6 +1919,105 @@ fn apply_android_context(_source: &Path, _target: &Path) -> Result<(), AdapterEr
     Ok(())
 }
 
+fn copy_tree_excluding(
+    source: &Path,
+    target: &Path,
+    excluded: &[PathBuf],
+) -> Result<(), AdapterError> {
+    copy_tree_excluding_at(source, target, Path::new(""), excluded)
+}
+
+fn copy_tree_excluding_at(
+    source: &Path,
+    target: &Path,
+    relative: &Path,
+    excluded: &[PathBuf],
+) -> Result<(), AdapterError> {
+    for entry in fs::read_dir(source).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let child_relative = relative.join(entry.file_name());
+        if excluded.iter().any(|path| path == &child_relative) {
+            continue;
+        }
+        let destination = target.join(entry.file_name());
+        let contains_preserved = excluded
+            .iter()
+            .any(|path| path.starts_with(&child_relative));
+        if contains_preserved {
+            let metadata = fs::symlink_metadata(entry.path()).map_err(io_error)?;
+            if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+                return Err(AdapterError::state_conflict(
+                    "preserved resource ancestor is not a real directory",
+                ));
+            }
+            match fs::symlink_metadata(&destination) {
+                Ok(metadata)
+                    if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {}
+                Ok(_) => {
+                    return Err(AdapterError::state_conflict(
+                        "copy destination type does not match source directory",
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::create_dir(&destination).map_err(io_error)?;
+                }
+                Err(error) => return Err(io_error(error)),
+            }
+            copy_tree_excluding_at(&entry.path(), &destination, &child_relative, excluded)?;
+            apply_filtered_directory_profile(&entry.path(), &destination)?;
+        } else {
+            copy_path_preserving(&entry.path(), &destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_filtered_directory_profile(source: &Path, target: &Path) -> Result<(), AdapterError> {
+    apply_root_profile(source, target)?;
+    let source_metadata = fs::metadata(source).map_err(io_error)?;
+    filetime::set_file_mtime(
+        target,
+        filetime::FileTime::from_last_modification_time(&source_metadata),
+    )
+    .map_err(io_error)
+}
+
+#[cfg(target_os = "android")]
+fn copy_path_preserving(source: &Path, destination: &Path) -> Result<(), AdapterError> {
+    if destination.exists() {
+        return Err(AdapterError::state_conflict(
+            "filtered copy destination already exists",
+        ));
+    }
+    let status = Command::new("/system/bin/cp")
+        .args(["-a", "--"])
+        .arg(source)
+        .arg(destination)
+        .status()
+        .map_err(io_error)?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| AdapterError::new("could not copy filtered Android data tree"))
+}
+
+#[cfg(not(target_os = "android"))]
+fn copy_path_preserving(source: &Path, destination: &Path) -> Result<(), AdapterError> {
+    let metadata = fs::symlink_metadata(source).map_err(io_error)?;
+    if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
+        fs::create_dir(destination).map_err(io_error)?;
+        copy_tree(source, destination)?;
+        apply_root_profile(source, destination)
+    } else if metadata.file_type().is_file() {
+        fs::copy(source, destination).map_err(io_error)?;
+        apply_root_profile(source, destination)
+    } else if metadata.file_type().is_symlink() {
+        symlink(fs::read_link(source).map_err(io_error)?, destination).map_err(io_error)
+    } else {
+        Err(AdapterError::new("unsupported base artifact"))
+    }
+}
+
 #[cfg(target_os = "android")]
 fn copy_tree(source: &Path, target: &Path) -> Result<(), AdapterError> {
     let status = Command::new("/system/bin/cp")
@@ -1706,11 +2154,26 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
-    use crate::model::{DisplayName, PackageAggregate, PackageIdentity};
+    use crate::model::{DisplayName, PackageAggregate, PackageIdentity, RestorePath};
     use std::os::unix::fs::symlink;
 
     fn identity() -> PackageIdentity {
         PackageIdentity::new(10_000, "/data/app/example/base.apk", 1, 2).unwrap()
+    }
+
+    fn resource_preserve_policy() -> RestorePolicy {
+        RestorePolicy::PreservePaths {
+            paths: vec![
+                RestorePath {
+                    domain: RestoreDomain::Ce,
+                    path: "files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer".to_owned(),
+                },
+                RestorePath {
+                    domain: RestoreDomain::Ce,
+                    path: "files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/*/Paks".to_owned(),
+                },
+            ],
+        }
     }
 
     fn open_slot_storage(
@@ -2151,8 +2614,14 @@ mod tests {
             .unwrap();
 
         let non_base_exdev = fail_next_rename_into(&[&target_ce]);
-        let first_attempt =
-            storage.replace_account(&package, &token, &transfer, &account, slot.id());
+        let first_attempt = storage.replace_account(
+            &package,
+            &token,
+            &transfer,
+            &account,
+            slot.id(),
+            &RestorePolicy::Replace,
+        );
         assert!(
             first_attempt
                 .as_ref()
@@ -2162,7 +2631,14 @@ mod tests {
         drop(non_base_exdev);
 
         storage
-            .replace_account(&package, &token, &transfer, &account, slot.id())
+            .replace_account(
+                &package,
+                &token,
+                &transfer,
+                &account,
+                slot.id(),
+                &RestorePolicy::Replace,
+            )
             .unwrap();
 
         assert_eq!(fs::read(target_ce.join("new-ce")).unwrap(), b"new");
@@ -2179,7 +2655,7 @@ mod tests {
         fs::rename(rollback_de.join("old"), &target_de).unwrap();
 
         storage
-            .rollback_account(&package, &token, slot.id())
+            .rollback_account(&package, &token, slot.id(), &RestorePolicy::Replace)
             .unwrap();
 
         assert_eq!(fs::read(target_ce.join("old-ce-a")).unwrap(), b"old-a");
@@ -2188,6 +2664,276 @@ mod tests {
         assert_eq!(fs::read(target_de.join("old-de-b")).unwrap(), b"old-b");
         assert!(!target_ce.join("new-ce").exists());
         assert!(!target_de.join("new-de").exists());
+    }
+
+    #[test]
+    fn slot_restore_preserves_resources_while_replacing_and_rolling_back_account_data() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.tencent.tmgp.dfm").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        fs::create_dir_all(canonical_ce_root.join(package.as_str())).unwrap();
+        fs::create_dir_all(canonical_de_root.join(package.as_str())).unwrap();
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let mut storage = open_slot_storage(
+            &root.path().join("ce/uclone-slices-v2/slots"),
+            &root.path().join("de/uclone-slices-v2/slots"),
+            &canonical_ce_root,
+            &canonical_de_root,
+        );
+        let mut aggregate = PackageAggregate::enrolled(package.clone(), identity());
+        let slot = aggregate
+            .reserve_slot(DisplayName::new("Work").unwrap())
+            .unwrap();
+        storage
+            .materialize(&package, &slot, SeedMode::Blank)
+            .unwrap();
+        let (target_ce, target_de) = storage.slot_paths(&package, slot.id());
+        fs::write(target_ce.join("old-account"), b"old-account").unwrap();
+        fs::write(target_de.join("old-device"), b"old-device").unwrap();
+        let puffer = target_ce
+            .join("files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer/download/resource.pak");
+        let paks =
+            target_ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/1.2.3/Paks/base.pak");
+        fs::create_dir_all(puffer.parent().unwrap()).unwrap();
+        fs::create_dir_all(paks.parent().unwrap()).unwrap();
+        fs::write(&puffer, b"puffer-resource").unwrap();
+        fs::write(&paks, b"dolphin-resource").unwrap();
+        fs::create_dir_all(target_ce.join("cache")).unwrap();
+        fs::write(target_ce.join("cache/transient"), b"discard").unwrap();
+
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let transfer = TransferId::new("transfer-preserve-slot").unwrap();
+        let account = ArchiveAccountId::new("account-preserve-slot").unwrap();
+        let staging = storage
+            .prepare_restore_staging(&package, &token, &transfer, std::slice::from_ref(&account))
+            .unwrap();
+        fs::write(
+            Path::new(&staging[0].ce_path).join("new-account"),
+            b"new-account",
+        )
+        .unwrap();
+        fs::write(
+            Path::new(&staging[0].de_path).join("new-device"),
+            b"new-device",
+        )
+        .unwrap();
+        let policy = resource_preserve_policy();
+
+        let (rollback_ce, _) = storage.rollback_paths(&package, &token, slot.id()).unwrap();
+        let interrupted_resource =
+            rollback_ce.join("preserved/files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer");
+        let interrupted_move = fail_next_rename_into(&[&interrupted_resource]);
+        let interrupted =
+            storage.replace_account(&package, &token, &transfer, &account, slot.id(), &policy);
+        assert!(
+            interrupted
+                .as_ref()
+                .is_err_and(|error| error.to_string().contains("Cross-device link"))
+        );
+        assert!(interrupted_move.was_triggered());
+        assert_eq!(
+            fs::read(target_ce.join("old-account")).unwrap(),
+            b"old-account"
+        );
+        assert_eq!(fs::read(&puffer).unwrap(), b"puffer-resource");
+        assert_eq!(fs::read(&paks).unwrap(), b"dolphin-resource");
+        assert!(!rollback_ce.exists());
+        drop(interrupted_move);
+
+        storage
+            .replace_account(&package, &token, &transfer, &account, slot.id(), &policy)
+            .unwrap();
+
+        assert_eq!(
+            fs::read(target_ce.join("new-account")).unwrap(),
+            b"new-account"
+        );
+        assert_eq!(
+            fs::read(target_de.join("new-device")).unwrap(),
+            b"new-device"
+        );
+        assert_eq!(fs::read(&puffer).unwrap(), b"puffer-resource");
+        assert_eq!(fs::read(&paks).unwrap(), b"dolphin-resource");
+        assert!(!target_ce.join("old-account").exists());
+        assert!(!target_ce.join("cache").exists());
+
+        storage
+            .rollback_account(&package, &token, slot.id(), &policy)
+            .unwrap();
+
+        assert_eq!(
+            fs::read(target_ce.join("old-account")).unwrap(),
+            b"old-account"
+        );
+        assert_eq!(
+            fs::read(target_de.join("old-device")).unwrap(),
+            b"old-device"
+        );
+        assert_eq!(fs::read(&puffer).unwrap(), b"puffer-resource");
+        assert_eq!(fs::read(&paks).unwrap(), b"dolphin-resource");
+        assert!(!target_ce.join("new-account").exists());
+    }
+
+    #[test]
+    fn base_restore_capacity_excludes_preserved_resource_trees() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.tencent.tmgp.dfm").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        let target_ce = canonical_ce_root.join(package.as_str());
+        let target_de = canonical_de_root.join(package.as_str());
+        fs::create_dir_all(&target_ce).unwrap();
+        fs::create_dir_all(&target_de).unwrap();
+        fs::write(target_ce.join("old-account"), b"old-account").unwrap();
+        fs::write(target_de.join("old-device"), b"old-device").unwrap();
+        let resource =
+            target_ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer/resource.pak");
+        fs::create_dir_all(resource.parent().unwrap()).unwrap();
+        fs::write(&resource, vec![0x5a; 1024 * 1024]).unwrap();
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let mut storage = open_slot_storage(
+            &root.path().join("ce/uclone-slices-v2/slots"),
+            &root.path().join("de/uclone-slices-v2/slots"),
+            &canonical_ce_root,
+            &canonical_de_root,
+        );
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let transfer = TransferId::new("transfer-preserve-base").unwrap();
+        let account = ArchiveAccountId::new("account-preserve-base").unwrap();
+        let staging = storage
+            .prepare_restore_staging(&package, &token, &transfer, std::slice::from_ref(&account))
+            .unwrap();
+        let staged_ce = Path::new(&staging[0].ce_path);
+        let staged_de = Path::new(&staging[0].de_path);
+        fs::write(staged_ce.join("new-account"), b"new-account").unwrap();
+        fs::write(staged_de.join("new-device"), b"new-device").unwrap();
+        let policy = resource_preserve_policy();
+        let required_without_resources =
+            copied_tree_bytes_excluding(&target_ce, &policy.paths_for(RestoreDomain::Ce)).unwrap()
+                + copied_tree_bytes_excluding(&target_de, &policy.paths_for(RestoreDomain::De))
+                    .unwrap()
+                + copied_tree_bytes(staged_ce).unwrap()
+                + copied_tree_bytes(staged_de).unwrap();
+        assert!(copied_tree_bytes(&target_ce).unwrap() > required_without_resources);
+        storage
+            .set_available_bytes(staged_ce, required_without_resources)
+            .unwrap();
+
+        storage
+            .replace_account(
+                &package,
+                &token,
+                &transfer,
+                &account,
+                &SlotId::base(),
+                &policy,
+            )
+            .unwrap();
+
+        assert_eq!(
+            fs::read(target_ce.join("new-account")).unwrap(),
+            b"new-account"
+        );
+        assert_eq!(
+            fs::read(target_de.join("new-device")).unwrap(),
+            b"new-device"
+        );
+        assert_eq!(fs::metadata(&resource).unwrap().len(), 1024 * 1024);
+        assert!(!target_ce.join("old-account").exists());
+
+        storage
+            .rollback_account(&package, &token, &SlotId::base(), &policy)
+            .unwrap();
+
+        assert_eq!(
+            fs::read(target_ce.join("old-account")).unwrap(),
+            b"old-account"
+        );
+        assert_eq!(
+            fs::read(target_de.join("old-device")).unwrap(),
+            b"old-device"
+        );
+        assert_eq!(fs::metadata(&resource).unwrap().len(), 1024 * 1024);
+        assert!(!target_ce.join("new-account").exists());
+    }
+
+    #[test]
+    fn preserve_policy_rejects_staged_overlap_and_target_symlink_before_mutation() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.tencent.tmgp.dfm").unwrap();
+        let canonical_ce_root = root.path().join("canonical-ce");
+        let canonical_de_root = root.path().join("canonical-de");
+        let target_ce = canonical_ce_root.join(package.as_str());
+        let target_de = canonical_de_root.join(package.as_str());
+        fs::create_dir_all(&target_ce).unwrap();
+        fs::create_dir_all(&target_de).unwrap();
+        fs::write(target_ce.join("old-account"), b"old-account").unwrap();
+        fs::write(target_de.join("old-device"), b"old-device").unwrap();
+        fs::create_dir(root.path().join("ce")).unwrap();
+        fs::create_dir(root.path().join("de")).unwrap();
+        let mut storage = open_slot_storage(
+            &root.path().join("ce/uclone-slices-v2/slots"),
+            &root.path().join("de/uclone-slices-v2/slots"),
+            &canonical_ce_root,
+            &canonical_de_root,
+        );
+        let token = AccountIoToken::new("0123456789abcdef0123456789abcdef").unwrap();
+        let transfer = TransferId::new("transfer-preserve-conflict").unwrap();
+        let account = ArchiveAccountId::new("account-preserve-conflict").unwrap();
+        let staging = storage
+            .prepare_restore_staging(&package, &token, &transfer, std::slice::from_ref(&account))
+            .unwrap();
+        let staged_resource =
+            Path::new(&staging[0].ce_path).join("files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer");
+        fs::create_dir_all(&staged_resource).unwrap();
+        let policy = resource_preserve_policy();
+        assert!(
+            storage
+                .validate_staged_account(&package, &token, &transfer, &account, &policy)
+                .is_err()
+        );
+        remove_tree_if_exists(&staged_resource).unwrap();
+
+        let outside = root.path().join("outside-resource");
+        fs::create_dir(&outside).unwrap();
+        let target_resource = target_ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer");
+        fs::create_dir_all(target_resource.parent().unwrap()).unwrap();
+        symlink(&outside, &target_resource).unwrap();
+        fs::write(
+            Path::new(&staging[0].ce_path).join("new-account"),
+            b"new-account",
+        )
+        .unwrap();
+        fs::write(
+            Path::new(&staging[0].de_path).join("new-device"),
+            b"new-device",
+        )
+        .unwrap();
+
+        assert!(
+            storage
+                .replace_account(
+                    &package,
+                    &token,
+                    &transfer,
+                    &account,
+                    &SlotId::base(),
+                    &policy,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(target_ce.join("old-account")).unwrap(),
+            b"old-account"
+        );
+        assert_eq!(
+            fs::read(target_de.join("old-device")).unwrap(),
+            b"old-device"
+        );
+        assert!(!target_ce.join("new-account").exists());
     }
 
     #[test]
@@ -2227,7 +2973,14 @@ mod tests {
         fs::write(Path::new(&staging[0].de_path).join("new-de"), b"new").unwrap();
         let base_rename_guard = fail_next_rename_into(&[&target_ce, &target_de]);
         storage
-            .replace_account(&package, &token, &transfer, &account, &SlotId::base())
+            .replace_account(
+                &package,
+                &token,
+                &transfer,
+                &account,
+                &SlotId::base(),
+                &RestorePolicy::Replace,
+            )
             .unwrap();
         assert!(!base_rename_guard.was_triggered());
         assert_eq!(fs::read(target_ce.join("new-ce")).unwrap(), b"new");
@@ -2250,7 +3003,7 @@ mod tests {
         fs::copy(rollback_de.join("old/old-de-a"), target_de.join("old-de-a")).unwrap();
 
         storage
-            .rollback_account(&package, &token, &SlotId::base())
+            .rollback_account(&package, &token, &SlotId::base(), &RestorePolicy::Replace)
             .unwrap();
         assert!(!base_rename_guard.was_triggered());
 
@@ -2282,6 +3035,10 @@ mod tests {
         fs::create_dir_all(&target_de).unwrap();
         fs::write(target_ce.join("old-ce"), b"old-ce").unwrap();
         fs::write(target_de.join("old-de"), b"old-de").unwrap();
+        let resource =
+            target_ce.join("files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer/resource.pak");
+        fs::create_dir_all(resource.parent().unwrap()).unwrap();
+        fs::write(&resource, b"resource").unwrap();
         fs::create_dir(root.path().join("ce")).unwrap();
         fs::create_dir(root.path().join("de")).unwrap();
         let mut storage = open_slot_storage(
@@ -2302,12 +3059,20 @@ mod tests {
         fs::write(staged_de.join("new-de"), b"new-de").unwrap();
 
         let _copy_failure = fail_next_copy(staged_de, &target_de);
-        let result =
-            storage.replace_account(&package, &token, &transfer, &account, &SlotId::base());
+        let policy = resource_preserve_policy();
+        let result = storage.replace_account(
+            &package,
+            &token,
+            &transfer,
+            &account,
+            &SlotId::base(),
+            &policy,
+        );
 
         assert!(result.is_err_and(|error| error.to_string().contains("injected copy failure")));
         assert_eq!(fs::read(target_ce.join("old-ce")).unwrap(), b"old-ce");
         assert_eq!(fs::read(target_de.join("old-de")).unwrap(), b"old-de");
+        assert_eq!(fs::read(&resource).unwrap(), b"resource");
         assert!(!target_ce.join("new-ce").exists());
         assert!(!target_de.join("new-de").exists());
         let (rollback_ce, rollback_de) = storage
@@ -2362,8 +3127,14 @@ mod tests {
             .set_available_bytes(staged_ce, rollback_only)
             .unwrap();
 
-        let result =
-            storage.replace_account(&package, &token, &transfer, &account, &SlotId::base());
+        let result = storage.replace_account(
+            &package,
+            &token,
+            &transfer,
+            &account,
+            &SlotId::base(),
+            &RestorePolicy::Replace,
+        );
 
         assert!(
             result
@@ -2420,7 +3191,13 @@ mod tests {
 
         assert!(
             storage
-                .validate_staged_account(&package, &token, &transfer, &account)
+                .validate_staged_account(
+                    &package,
+                    &token,
+                    &transfer,
+                    &account,
+                    &RestorePolicy::Replace,
+                )
                 .is_err()
         );
     }

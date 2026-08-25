@@ -14,6 +14,9 @@ import com.uclone.slices.v2.runtime.ArchivedState
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.RestoreMapping
+import com.uclone.slices.v2.runtime.RestoreDomain
+import com.uclone.slices.v2.runtime.RestorePath
+import com.uclone.slices.v2.runtime.RestorePolicy
 import com.uclone.slices.v2.runtime.RestoreTarget
 import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeCommand
@@ -62,6 +65,9 @@ internal data class BackupRestoreUiState(
     val targetApp: InstalledApp? = null,
     val targetPackage: PackageSnapshot? = null,
     val signatureMatches: Boolean = true,
+    val backupProfile: BackupProfile? = null,
+    val restoreProfile: BackupProfile? = null,
+    val profileUnavailable: Boolean = false,
     val mappings: List<RestoreMappingUi> = emptyList(),
     val destructiveConfirmed: Boolean = false,
     val jobState: BackupJobState = BackupJobState.Idle,
@@ -105,6 +111,7 @@ internal class BackupRestoreViewModel(
     private val installedApps: InstalledAppsSource,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val injectedScope: CoroutineScope? = null,
+    private val profileCatalog: BackupProfileCatalog = BackupProfileCatalog.load(context),
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(BackupRestoreUiState())
     val state: StateFlow<BackupRestoreUiState> = mutableState.asStateFlow()
@@ -195,6 +202,21 @@ internal class BackupRestoreViewModel(
             packageName = packageName,
             slotId = slotId,
         )
+        coroutineScope.launch(dispatcher) {
+            val app = installedApps.load().firstOrNull { it.packageName == packageName }
+            val profile = profileCatalog.resolve(packageName, app?.signingIdentity)
+            mutableState.update { current ->
+                if (
+                    current.page == BackupRestorePage.BackupSetup &&
+                    current.packageName == packageName &&
+                    current.slotId == slotId
+                ) {
+                    current.copy(backupProfile = profile)
+                } else {
+                    current
+                }
+            }
+        }
         refreshAccountIoStatus()
     }
 
@@ -232,6 +254,7 @@ internal class BackupRestoreViewModel(
                 password?.fill('\u0000')
                 return@launch fail("identity_mismatch")
             }
+            val profile = profileCatalog.resolve(packageName, signing)
             val slotId = current.slotId
             if (slotId != null && snapshot.slots.none { it.id == slotId }) {
                 password?.fill('\u0000')
@@ -248,8 +271,10 @@ internal class BackupRestoreViewModel(
                     signingKind = signing.kind,
                     signingSha256 = signing.sha256,
                     appVersion = app.versionName,
+                    appVersionCode = app.versionCode,
                     activeAccountId = slotId ?: snapshot.activeSlot,
                     launchAfterReboot = snapshot.launchAfterReboot,
+                    profile = profile,
                 ),
             )
             if (!submitted) {
@@ -403,6 +428,20 @@ internal class BackupRestoreViewModel(
                 target = target,
             )
         }
+        val signatureMatches = archiveSigningMatches(
+            preview.manifest.signingKind,
+            preview.manifest.signingSha256,
+            app.signingIdentity,
+        )
+        val restoreProfile = if (signatureMatches) {
+            profileCatalog.resolve(
+                preview.manifest.packageName,
+                preview.manifest.profile,
+                app.signingIdentity,
+            )
+        } else {
+            null
+        }
         mutableState.update {
             it.copy(
                 page = BackupRestorePage.RestorePreview,
@@ -410,11 +449,9 @@ internal class BackupRestoreViewModel(
                 restoreSessionId = preview.sessionId,
                 targetApp = app,
                 targetPackage = configured,
-                signatureMatches = archiveSigningMatches(
-                    preview.manifest.signingKind,
-                    preview.manifest.signingSha256,
-                    app.signingIdentity,
-                ),
+                signatureMatches = signatureMatches,
+                restoreProfile = restoreProfile,
+                profileUnavailable = preview.manifest.profile != null && restoreProfile == null,
                 mappings = mappings,
                 destructiveConfirmed = false,
                 jobState = preview,
@@ -460,6 +497,7 @@ internal class BackupRestoreViewModel(
         }
         val targets = current.mappings.mapNotNull { (it.target as? RestoreTarget.Existing)?.slotId }
         if (targets.distinct().size != targets.size) return fail("invalid_request")
+        val restorePolicy = restorePolicyFor(current.restoreProfile)
         val mappings = current.mappings.map { mapping ->
             RestoreMapping(
                 archiveAccountId = mapping.archiveAccountId,
@@ -470,6 +508,7 @@ internal class BackupRestoreViewModel(
                 },
                 name = mapping.name,
                 target = mapping.target,
+                restorePolicy = restorePolicy,
             )
         }
         val submitted = BackupRestoreJobRegistry.submit(
@@ -610,6 +649,27 @@ internal class BackupRestoreViewModel(
 
 internal fun backupBindingAllows(bindingState: BindingState): Boolean =
     bindingState == BindingState.Ready
+
+internal fun restorePolicyFor(profile: BackupProfile?): RestorePolicy {
+    val preservePaths = profile
+        ?.rules
+        .orEmpty()
+        .filter { it.restore == BackupProfileRestore.Preserve }
+        .map { rule ->
+            RestorePath(
+                domain = when (rule.domain) {
+                    BackupProfileDomain.Ce -> RestoreDomain.Ce
+                    BackupProfileDomain.De -> RestoreDomain.De
+                },
+                path = rule.path,
+            )
+        }
+    return if (preservePaths.isEmpty()) {
+        RestorePolicy.Replace
+    } else {
+        RestorePolicy.PreservePaths(preservePaths)
+    }
+}
 
 internal fun archiveSigningMatches(
     archiveKind: SigningKind,

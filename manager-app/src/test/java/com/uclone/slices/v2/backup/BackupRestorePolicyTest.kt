@@ -1,6 +1,7 @@
 package com.uclone.slices.v2.backup
 
 import android.content.ContextWrapper
+import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
 import com.uclone.slices.v2.runtime.AccountIoKind
 import com.uclone.slices.v2.runtime.AccountIoStatus
@@ -9,6 +10,7 @@ import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RestoreBatchResult
 import com.uclone.slices.v2.runtime.RestoreItemResult
 import com.uclone.slices.v2.runtime.RestoreItemState
+import com.uclone.slices.v2.runtime.RestorePolicy
 import com.uclone.slices.v2.runtime.SigningIdentity
 import com.uclone.slices.v2.runtime.SigningKind
 import com.uclone.slices.v2.runtime.RuntimeCommand
@@ -137,6 +139,75 @@ class BackupRestorePolicyTest {
         assertFalse(backupBindingAllows(BindingState.LegacyUnbound))
         assertFalse(backupBindingAllows(BindingState.RebindRequired))
         assertFalse(backupBindingAllows(BindingState.LegacyConfirmationRequired))
+    }
+
+    @Test
+    fun profiledRestorePreservesOnlyRulesMarkedPreserve() {
+        val profile = BackupProfile(
+            id = "profile",
+            revision = 1,
+            packageName = "com.example.app",
+            signerSha256 = listOf(first),
+            rulesDigest = second,
+            rules = listOf(
+                BackupProfileRule(
+                    BackupProfileDomain.Ce,
+                    "files/resources",
+                    BackupProfileRestore.Preserve,
+                ),
+                BackupProfileRule(
+                    BackupProfileDomain.Ce,
+                    "files/logs",
+                    BackupProfileRestore.Discard,
+                ),
+            ),
+        )
+
+        val policy = assertIs<RestorePolicy.PreservePaths>(restorePolicyFor(profile))
+
+        assertEquals(listOf("files/resources"), policy.paths.map { it.path })
+        assertEquals(RestorePolicy.Replace, restorePolicyFor(null))
+    }
+
+    @Test
+    fun openingBackupAutomaticallySelectsMatchingProfile() {
+        val catalog = BackupProfileCatalog.fromJson(
+            listOf(
+                """{
+                  "schema_version":1,
+                  "id":"profile",
+                  "revision":1,
+                  "package":"com.example.app",
+                  "signer_sha256":["$first"],
+                  "rules":[
+                    {"domain":"ce","path":"files/resources","backup":"exclude","restore":"preserve"}
+                  ]
+                }""".toByteArray(),
+            ),
+        )
+        val client = AccountIoRecoveryRuntimeClient()
+        val viewModel = BackupRestoreViewModel(
+            ContextWrapper(null),
+            client,
+            InstalledAppsSource {
+                listOf(
+                    InstalledApp(
+                        packageName = "com.example.app",
+                        label = "Example",
+                        signingIdentity = SigningIdentity(SigningKind.Lineage, listOf(first)),
+                        versionName = "99",
+                        versionCode = 99,
+                    ),
+                )
+            },
+            Dispatchers.Unconfined,
+            CoroutineScope(Dispatchers.Unconfined),
+            catalog,
+        )
+
+        viewModel.onIntent(BackupUiIntent.OpenBackup("com.example.app", null))
+
+        assertEquals("profile", viewModel.state.value.backupProfile?.id)
     }
 
     @Test

@@ -360,7 +360,7 @@ mod tests {
     use super::*;
     use crate::adapters::{MemoryAndroidOps, MemoryPackageStore, MemorySlotStorage};
 
-    const CLIENT_BUILD_ID: &str = "0.2.1";
+    const CLIENT_BUILD_ID: &str = "0.2.2";
 
     #[test]
     fn shared_fixtures_cover_the_core_command_flow() {
@@ -451,7 +451,7 @@ mod tests {
         let response = handle_line(
             &mut runtime,
             CLIENT_BUILD_ID,
-            r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.2.1"}"#,
+            r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.2.2"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -468,7 +468,7 @@ mod tests {
         let response = handle_line(
             &mut runtime,
             CLIENT_BUILD_ID,
-            r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.2.1"}"#,
+            r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.2.2"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -483,8 +483,8 @@ mod tests {
         );
 
         for request in [
-            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.2.1"}"#,
-            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.2.1"}"#,
+            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.2.2"}"#,
+            r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.2.2"}"#,
         ] {
             assert_eq!(
                 handle_line(&mut runtime, CLIENT_BUILD_ID, request),
@@ -504,7 +504,7 @@ mod tests {
         let response = handle_line(
             &mut runtime,
             CLIENT_BUILD_ID,
-            r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.2.1"}"#,
+            r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.2.2"}"#,
         );
 
         assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -597,8 +597,8 @@ mod tests {
 
         let response = handle_line(
             &mut runtime,
-            "0.2.1",
-            r#"{"op":"begin_backup_io","package":"com.example.app","scope":{"kind":"account","slot":"base"},"client_build_id":"0.2.1"}"#,
+            "0.2.2",
+            r#"{"op":"begin_backup_io","package":"com.example.app","scope":{"kind":"account","slot":"base"},"client_build_id":"0.2.2"}"#,
         );
 
         assert!(response.contains("\"io_token\""), "response: {response}");
@@ -611,8 +611,8 @@ mod tests {
 
         let response = handle_line(
             &mut runtime,
-            "0.2.1",
-            r#"{"op":"list_account_io_status","client_build_id":"0.2.1"}"#,
+            "0.2.2",
+            r#"{"op":"list_account_io_status","client_build_id":"0.2.2"}"#,
         );
 
         assert_eq!(response, "{\"ok\":{\"account_io\":[]}}\n");
