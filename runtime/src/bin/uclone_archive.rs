@@ -49,16 +49,20 @@ fn run() -> Result<HelperResponse, ArchiveError> {
                     &source.de_path,
                 )?;
             }
-            create_backup_for_owner(request, manager_uid, manager_gid)
-                .map(|manifest| HelperResponse::Manifest { manifest })
+            create_backup_for_owner(*request, manager_uid, manager_gid).map(|manifest| {
+                HelperResponse::Manifest {
+                    manifest: Box::new(manifest),
+                }
+            })
         }
         HelperRequest::Inspect {
             input_path,
             password,
         } => {
             validate_manager_cache_path(&input_path, true)?;
-            inspect_backup(&input_path, password)
-                .map(|manifest| HelperResponse::Manifest { manifest })
+            inspect_backup(&input_path, password).map(|manifest| HelperResponse::Manifest {
+                manifest: Box::new(manifest),
+            })
         }
         HelperRequest::Restore(request) => {
             validate_manager_cache_path(&request.input_path, true)?;
@@ -66,7 +70,9 @@ fn run() -> Result<HelperResponse, ArchiveError> {
                 validate_transfer_destination(&destination.ce_path, true)?;
                 validate_transfer_destination(&destination.de_path, false)?;
             }
-            restore_backup(request).map(|manifest| HelperResponse::Manifest { manifest })
+            restore_backup(request).map(|manifest| HelperResponse::Manifest {
+                manifest: Box::new(manifest),
+            })
         }
     }
 }

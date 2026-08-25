@@ -256,7 +256,7 @@ pub struct RestoreRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HelperRequest {
-    Backup(BackupRequest),
+    Backup(Box<BackupRequest>),
     Inspect {
         input_path: PathBuf,
         password: Option<String>,
@@ -267,7 +267,7 @@ pub enum HelperRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HelperResponse {
-    Manifest { manifest: ArchiveManifest },
+    Manifest { manifest: Box<ArchiveManifest> },
     Error { error: HelperErrorBody },
 }
 
@@ -657,6 +657,13 @@ struct DomainScan {
     excluded: ExcludedStats,
 }
 
+struct ScanContext<'a> {
+    root: &'a Path,
+    domain: ArchiveDomain,
+    rules: &'a [BackupProfileRule],
+    record_exclusions: bool,
+}
+
 fn scan_domain(
     root: &Path,
     domain: ArchiveDomain,
@@ -666,16 +673,13 @@ fn scan_domain(
     require_real_directory(root)?;
     let mut entries = Vec::new();
     let mut excluded = ExcludedStats::default();
-    collect_entries(
+    let context = ScanContext {
         root,
-        root,
-        0,
         domain,
         rules,
         record_exclusions,
-        &mut entries,
-        &mut excluded,
-    )?;
+    };
+    collect_entries(&context, root, 0, &mut entries, &mut excluded)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     if entries.len() > MAX_ENTRIES {
         return Err(ArchiveError::Invalid);
@@ -698,12 +702,9 @@ fn scan_domain(
 }
 
 fn collect_entries(
-    root: &Path,
+    context: &ScanContext<'_>,
     directory: &Path,
     depth: usize,
-    domain: ArchiveDomain,
-    rules: &[BackupProfileRule],
-    record_exclusions: bool,
     entries: &mut Vec<ManifestEntry>,
     excluded: &mut ExcludedStats,
 ) -> Result<(), ArchiveError> {
@@ -720,22 +721,22 @@ fn collect_entries(
             .ok_or(ArchiveError::Invalid)?;
         let path = entry.path();
         let relative = path
-            .strip_prefix(root)
+            .strip_prefix(context.root)
             .map_err(|_error| ArchiveError::Invalid)?;
         validate_relative_path(relative)?;
         let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
         let global_exclusion = depth == 0 && EXCLUDED_TOP_LEVEL.contains(&name.as_str());
-        let profile_exclusion = rules
-            .iter()
-            .any(|rule| rule.domain == domain && profile_path_matches(&rule.path, relative));
+        let profile_exclusion = context.rules.iter().any(|rule| {
+            rule.domain == context.domain && profile_path_matches(&rule.path, relative)
+        });
         if global_exclusion || profile_exclusion {
             if profile_exclusion
                 && (!metadata.file_type().is_dir() || metadata.file_type().is_symlink())
             {
                 return Err(ArchiveError::Invalid);
             }
-            if record_exclusions {
-                collect_excluded_stats(root, &path, &metadata, excluded)?;
+            if context.record_exclusions {
+                collect_excluded_stats(context.root, &path, &metadata, excluded)?;
             }
             continue;
         }
@@ -751,16 +752,7 @@ fn collect_entries(
                 mode,
                 mtime_seconds,
             });
-            collect_entries(
-                root,
-                &path,
-                depth.saturating_add(1),
-                domain,
-                rules,
-                record_exclusions,
-                entries,
-                excluded,
-            )?;
+            collect_entries(context, &path, depth.saturating_add(1), entries, excluded)?;
         } else if metadata.file_type().is_file() {
             if metadata.nlink() != 1 {
                 return Err(ArchiveError::Invalid);
@@ -776,7 +768,7 @@ fn collect_entries(
             });
         } else if metadata.file_type().is_symlink() {
             let target = fs::read_link(&path).map_err(io_error)?;
-            if target.is_absolute() || !relative_link_stays_inside(root, &path, &target) {
+            if target.is_absolute() || !relative_link_stays_inside(context.root, &path, &target) {
                 return Err(ArchiveError::Invalid);
             }
             entries.push(ManifestEntry {
