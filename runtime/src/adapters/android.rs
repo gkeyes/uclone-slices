@@ -13,6 +13,10 @@ use crate::ports::{AdapterError, AndroidOps};
 
 const PROCESS_EXIT_CONFIRMATION_WINDOW: Duration = Duration::from_secs(10);
 const PROCESS_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const WECHAT_PACKAGE: &str = "com.tencent.mm";
+const WECHAT_FAST_RESTART_FORCE_STOP_LIMIT: usize = 5;
+const WECHAT_FAST_RESTART_CONFIRMATION_WINDOW: Duration = Duration::from_secs(2);
+const WECHAT_FAST_RESTART_QUIET_WINDOW: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 struct CommandOutput {
@@ -253,6 +257,59 @@ impl SystemAndroidOps {
         )
     }
 
+    fn request_force_stop(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        self.required(
+            "/system/bin/am",
+            &["force-stop", "--user", "0", package.as_str()],
+        )?;
+        Ok(())
+    }
+
+    fn force_stop_wechat(&mut self, package: &PackageName, uid: u32) -> Result<(), AdapterError> {
+        let deadline = Instant::now() + WECHAT_FAST_RESTART_CONFIRMATION_WINDOW;
+        let mut previous_generation = self.package_processes(uid)?;
+        let mut force_stop_attempts = 0_usize;
+
+        loop {
+            self.request_force_stop(package)?;
+            force_stop_attempts += 1;
+            let mut empty_since = None;
+
+            loop {
+                let remaining = self.package_processes(uid)?;
+                let now = Instant::now();
+                if remaining.is_empty() {
+                    let quiet_start = *empty_since.get_or_insert(now);
+                    if now.duration_since(quiet_start) >= WECHAT_FAST_RESTART_QUIET_WINDOW {
+                        return Ok(());
+                    }
+                } else {
+                    empty_since = None;
+                    let has_new_generation = remaining
+                        .iter()
+                        .any(|process| !previous_generation.contains(process));
+                    if has_new_generation
+                        && force_stop_attempts < WECHAT_FAST_RESTART_FORCE_STOP_LIMIT
+                    {
+                        previous_generation = remaining;
+                        break;
+                    }
+                }
+
+                if now >= deadline {
+                    return Err(AdapterError::new(format!(
+                        "WeChat FastRestart did not quiesce within {} ms after {force_stop_attempts} force-stop attempt(s); {} process(es) remain for UID {uid}",
+                        WECHAT_FAST_RESTART_CONFIRMATION_WINDOW.as_millis(),
+                        remaining.len()
+                    )));
+                }
+                thread::sleep(
+                    PROCESS_EXIT_POLL_INTERVAL.min(deadline.saturating_duration_since(now)),
+                );
+            }
+        }
+    }
+
     fn ensure_unmounted(&mut self, mount_point: &Path) -> Result<(), AdapterError> {
         loop {
             let content = fs::read_to_string(&self.mountinfo)
@@ -401,10 +458,11 @@ impl AndroidOps for SystemAndroidOps {
     }
 
     fn force_stop(&mut self, package: &PackageName) -> Result<(), AdapterError> {
-        self.required(
-            "/system/bin/am",
-            &["force-stop", "--user", "0", package.as_str()],
-        )?;
+        if package.as_str() == WECHAT_PACKAGE {
+            let uid = self.package_uid(package)?;
+            return self.force_stop_wechat(package, uid);
+        }
+        self.request_force_stop(package)?;
         let uid = self.package_uid(package)?;
         self.confirm_package_processes_stopped(uid)
     }
@@ -780,6 +838,63 @@ mod tests {
         proc_root: PathBuf,
     }
 
+    #[derive(Debug)]
+    struct FastRestartRunner {
+        commands: RecordedCommands,
+        proc_root: PathBuf,
+        package: PackageName,
+        uid: u32,
+        respawn_attempts: usize,
+        force_stop_attempts: usize,
+    }
+
+    impl FastRestartRunner {
+        fn replace_process_generation(&self, attempt: usize) -> Result<(), AdapterError> {
+            for entry in fs::read_dir(&self.proc_root)
+                .map_err(|error| AdapterError::new(error.to_string()))?
+            {
+                let entry = entry.map_err(|error| AdapterError::new(error.to_string()))?;
+                fs::remove_dir_all(entry.path())
+                    .map_err(|error| AdapterError::new(error.to_string()))?;
+            }
+            if attempt <= self.respawn_attempts {
+                let process = self.proc_root.join((10_000 + attempt).to_string());
+                fs::create_dir(&process).map_err(|error| AdapterError::new(error.to_string()))?;
+                fs::write(
+                    process.join("status"),
+                    format!("Name:\tapp\nUid:\t{0}\t{0}\t{0}\t{0}\n", self.uid),
+                )
+                .map_err(|error| AdapterError::new(error.to_string()))?;
+            }
+            Ok(())
+        }
+    }
+
+    impl CommandRunner for FastRestartRunner {
+        fn run(
+            &mut self,
+            program: &str,
+            arguments: &[&str],
+        ) -> Result<CommandOutput, AdapterError> {
+            self.commands.borrow_mut().push((
+                program.to_owned(),
+                arguments.iter().map(|value| (*value).to_owned()).collect(),
+            ));
+            if program == "/system/bin/am" && arguments.first().copied() == Some("force-stop") {
+                self.force_stop_attempts += 1;
+                self.replace_process_generation(self.force_stop_attempts)?;
+                return Ok(output(""));
+            }
+            if program == "/system/bin/cmd" {
+                return Ok(output(format!(
+                    "package:{} uid:{}\n",
+                    self.package, self.uid
+                )));
+            }
+            Ok(output(""))
+        }
+    }
+
     impl CommandRunner for ContainmentRunner {
         fn run(
             &mut self,
@@ -908,6 +1023,36 @@ mod tests {
         runner: RecordingRunner,
     ) -> (SystemAndroidOps, RecordedCommands) {
         let commands = Rc::clone(&runner.commands);
+        (
+            SystemAndroidOps {
+                build_id: "test".to_owned(),
+                ce_slots_root: root.join("slots-ce"),
+                de_slots_root: root.join("slots-de"),
+                canonical_ce_root: root.join("canonical-ce"),
+                canonical_de_root: root.join("canonical-de"),
+                mountinfo: root.join("mountinfo"),
+                proc_root: root.join("proc"),
+                runner: Box::new(runner),
+            },
+            commands,
+        )
+    }
+
+    fn system_with_fast_restart_runner(
+        root: &Path,
+        package: PackageName,
+        uid: u32,
+        respawn_attempts: usize,
+    ) -> (SystemAndroidOps, RecordedCommands) {
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = FastRestartRunner {
+            commands: Rc::clone(&commands),
+            proc_root: root.join("proc"),
+            package,
+            uid,
+            respawn_attempts,
+            force_stop_attempts: 0,
+        };
         (
             SystemAndroidOps {
                 build_id: "test".to_owned(),
@@ -1142,6 +1287,107 @@ mod tests {
         remover.join().unwrap();
 
         assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn wechat_force_stop_consumes_bounded_fast_restart_generations() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.tencent.mm").unwrap();
+        let proc_root = root.path().join("proc");
+        let initial_process = proc_root.join("123");
+        fs::create_dir_all(&initial_process).unwrap();
+        fs::write(
+            initial_process.join("status"),
+            "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+        )
+        .unwrap();
+        let (android, commands) =
+            system_with_fast_restart_runner(root.path(), package.clone(), 10_123, 4);
+        let fallback_cleanup = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            for entry in fs::read_dir(proc_root).unwrap() {
+                fs::remove_dir_all(entry.unwrap().path()).unwrap();
+            }
+        });
+        let mut android = android;
+
+        let result = android.force_stop(&package);
+        fallback_cleanup.join().unwrap();
+
+        assert!(result.is_ok(), "{result:?}");
+        let force_stop_count = commands
+            .borrow()
+            .iter()
+            .filter(|(program, arguments)| {
+                program == "/system/bin/am"
+                    && arguments.first().map(String::as_str) == Some("force-stop")
+            })
+            .count();
+        assert_eq!(force_stop_count, 5);
+    }
+
+    #[test]
+    fn wechat_force_stop_fails_closed_after_the_platform_restart_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.tencent.mm").unwrap();
+        let initial_process = root.path().join("proc/123");
+        fs::create_dir_all(&initial_process).unwrap();
+        fs::write(
+            initial_process.join("status"),
+            "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+        )
+        .unwrap();
+        let (mut android, commands) =
+            system_with_fast_restart_runner(root.path(), package.clone(), 10_123, 5);
+
+        let error = android.force_stop(&package).unwrap_err();
+
+        assert!(error.to_string().contains("WeChat FastRestart"));
+        let force_stop_count = commands
+            .borrow()
+            .iter()
+            .filter(|(program, arguments)| {
+                program == "/system/bin/am"
+                    && arguments.first().map(String::as_str) == Some("force-stop")
+            })
+            .count();
+        assert_eq!(force_stop_count, 5);
+    }
+
+    #[test]
+    fn wechat_force_stop_does_not_retry_a_lingering_old_pid() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.tencent.mm").unwrap();
+        let process = root.path().join("proc/123");
+        fs::create_dir_all(&process).unwrap();
+        fs::write(
+            process.join("status"),
+            "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+        )
+        .unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([output(format!("package:{package} uid:10123\n")), output("")]),
+            commands: Rc::clone(&commands),
+        };
+        let (mut android, _recorded) = system_with_runner(root.path(), runner);
+        let process_exit = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            fs::remove_dir_all(process).unwrap();
+        });
+
+        android.force_stop(&package).unwrap();
+        process_exit.join().unwrap();
+
+        let force_stop_count = commands
+            .borrow()
+            .iter()
+            .filter(|(program, arguments)| {
+                program == "/system/bin/am"
+                    && arguments.first().map(String::as_str) == Some("force-stop")
+            })
+            .count();
+        assert_eq!(force_stop_count, 1);
     }
 
     #[test]

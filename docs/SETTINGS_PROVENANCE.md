@@ -42,6 +42,7 @@
 | Android `cp -a`、源目录 owner/mode、源 SELinux context | 固定旧版 Android materializer 的实际复制与目录属性操作；不增加条目数、容量或时间经验阈值 | host 目录语义测试、Android 交叉编译 |
 | `/proc/self/mountinfo` 与 `/proc/<pid>/mountinfo` | Runtime 通过 `nsenter -t 1 -m` 进入 init mount namespace；前者确认施加结果，后者确认每个 App PID 的真实视图 | paired-mount 与 App PID 视图测试 |
 | `force-stop` 后最多 10 秒、每 10 ms 扫描且连续两次确认 UID 进程归零 | Android 17 真机中的 Chrome App Zygote 在 `am force-stop` 返回后约 5 秒才退出，微信切换也记录到旧 1 秒窗口结束时仍有 2 个同 UID 进程；单次立即快照或 1 秒窗口会误拒绝正常操作，单个空扫描也可能只是主进程与 push 进程的交接空窗。持续存在到确认窗结束仍失败，稳定归零前绝不改变挂载 | 瞬时退出/单次空扫描后重现/主进程与 push 进程交接/持续残留 Rust 测试与多进程 App 真机验收 |
+| 微信 `FastRestart` 最多 5 代、2 秒总窗口和 500 ms 归零窗口 | 当前 HyperOS `miui-services.jar` 的 `ProcessStarter` 将微信主进程和 push 进程列为保护对象，在 2 分钟内死亡计数小于 5 时以 `FastRestart` 重建；真机记录到每代约 0.1–0.2 秒出现，并在累计第 5 次后停止。Runtime 只在发现新 PID 代际时再次 `force-stop`，旧 PID 慢退出不消耗次数 | 4 代重启后第 5 次收敛、达到上限仍重启时 fail-closed、旧 PID 慢退出只停止一次的 Rust 测试与微信真机切换验收 |
 | `am start -W -n <resolved activity>` | 当前 API 36 设备的 Launcher activity 可由 `cmd package resolve-activity` 解析；`-W` 返回启动完成状态 | Android argv 与 App PID 视图测试 |
 | `sys.user.0.ce_available=true` 与 `cmd activity get-started-user-state 0` 的 `RUNNING_UNLOCKED` | 当前 API 37 设备提供的 CE 与 user0 生命周期信号；daemon 在两者满足前不开放 socket | daemon 启动代码、Boot marker 测试与真机无 RPC 重启验收 |
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
