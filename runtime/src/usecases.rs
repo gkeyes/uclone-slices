@@ -122,15 +122,13 @@ where
         let inspections = self.android.inspect_many(&names);
         let mut snapshots = Vec::with_capacity(names.len());
         for (package, inspection) in inspections {
-            let snapshot = inspection
-                .map_err(adapter_error)
-                .and_then(|inspection| {
-                    self.package_snapshot_with_inspection(
-                        &package,
-                        inspection,
-                        ReadyLoadContext::Interactive,
-                    )
-                });
+            let snapshot = inspection.map_err(adapter_error).and_then(|inspection| {
+                self.package_snapshot_with_inspection(
+                    &package,
+                    inspection,
+                    ReadyLoadContext::Interactive,
+                )
+            });
             match snapshot {
                 Ok(snapshot) => snapshots.push(snapshot),
                 Err(error) => {
