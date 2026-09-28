@@ -3,6 +3,7 @@ package com.uclone.slices.v2.apps
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Process
@@ -24,44 +25,94 @@ fun interface InstalledAppsSource {
     fun load(): List<InstalledApp>
 }
 
+interface OptimizedInstalledAppsSource {
+    fun loadPackages(packageNames: Set<String>): List<InstalledApp>
+    fun loadCatalog(): List<InstalledApp>
+}
+
+internal fun InstalledAppsSource.loadPackagesOptimized(
+    packageNames: Set<String>,
+): List<InstalledApp> {
+    if (packageNames.isEmpty()) return emptyList()
+    return (this as? OptimizedInstalledAppsSource)?.loadPackages(packageNames)
+        ?: load().filter { it.packageName in packageNames }
+}
+
+internal fun InstalledAppsSource.loadCatalogOptimized(): List<InstalledApp> =
+    (this as? OptimizedInstalledAppsSource)?.loadCatalog() ?: load()
+
+internal fun InstalledAppsSource.loadAppOptimized(packageName: String): InstalledApp? =
+    loadPackagesOptimized(setOf(packageName)).firstOrNull()
+
 class PackageManagerInstalledApps(
     context: Context,
-) : InstalledAppsSource {
+) : InstalledAppsSource, OptimizedInstalledAppsSource {
     private val packageManager = context.packageManager
     private val ownPackage = context.packageName
 
-    override fun load(): List<InstalledApp> {
+    override fun load(): List<InstalledApp> =
+        launcherApplications()
+            .mapNotNull(::loadFullApp)
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+
+    override fun loadCatalog(): List<InstalledApp> =
+        launcherApplications()
+            .map(::loadCatalogApp)
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+
+    override fun loadPackages(packageNames: Set<String>): List<InstalledApp> =
+        packageNames
+            .asSequence()
+            .mapNotNull { packageName ->
+                runCatching {
+                    packageManager.getApplicationInfo(packageName, 0)
+                }.getOrNull()
+            }
+            .filter(::isEligible)
+            .mapNotNull(::loadFullApp)
+            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+            .toList()
+
+    private fun launcherApplications(): List<ApplicationInfo> {
         val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         return packageManager
             .queryIntentActivities(launcher, 0)
             .asSequence()
             .map { it.activityInfo.applicationInfo }
-            .filter { application ->
-                application.packageName != ownPackage &&
-                    application.flags and ApplicationInfo.FLAG_SYSTEM == 0 &&
-                    UserHandle.getUserHandleForUid(application.uid) == Process.myUserHandle()
-            }
+            .filter(::isEligible)
             .distinctBy(ApplicationInfo::packageName)
-            .map { application ->
-                val packageInfo = packageManager.getPackageInfo(application.packageName, 0)
-                InstalledApp(
-                    packageName = application.packageName,
-                    label = packageManager.getApplicationLabel(application).toString(),
-                    icon = packageManager.getApplicationIcon(application),
-                    signingIdentity = signingIdentity(application.packageName),
-                    versionName = packageInfo.versionName.orEmpty(),
-                    versionCode = packageInfo.longVersionCode,
-                )
-            }
-            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
             .toList()
     }
 
-    private fun signingIdentity(packageName: String): SigningIdentity? = runCatching {
-        val info = packageManager.getPackageInfo(
-            packageName,
+    private fun isEligible(application: ApplicationInfo): Boolean =
+        application.packageName != ownPackage &&
+            application.flags and ApplicationInfo.FLAG_SYSTEM == 0 &&
+            UserHandle.getUserHandleForUid(application.uid) == Process.myUserHandle()
+
+    private fun loadCatalogApp(application: ApplicationInfo): InstalledApp =
+        InstalledApp(
+            packageName = application.packageName,
+            label = packageManager.getApplicationLabel(application).toString(),
+            icon = runCatching { packageManager.getApplicationIcon(application) }.getOrNull(),
+        )
+
+    private fun loadFullApp(application: ApplicationInfo): InstalledApp? = runCatching {
+        val packageInfo = packageManager.getPackageInfo(
+            application.packageName,
             PackageManager.GET_SIGNING_CERTIFICATES,
-        ).signingInfo ?: return@runCatching null
+        )
+        InstalledApp(
+            packageName = application.packageName,
+            label = packageManager.getApplicationLabel(application).toString(),
+            icon = runCatching { packageManager.getApplicationIcon(application) }.getOrNull(),
+            signingIdentity = signingIdentity(packageInfo),
+            versionName = packageInfo.versionName.orEmpty(),
+            versionCode = packageInfo.longVersionCode,
+        )
+    }.getOrNull()
+
+    private fun signingIdentity(packageInfo: PackageInfo): SigningIdentity? = runCatching {
+        val info = packageInfo.signingInfo ?: return@runCatching null
         val multiple = info.hasMultipleSigners()
         val signatures = if (multiple) {
             info.apkContentsSigners.orEmpty().toList()

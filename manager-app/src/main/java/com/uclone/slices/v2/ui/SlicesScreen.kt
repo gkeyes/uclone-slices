@@ -199,7 +199,7 @@ internal fun SlicesScreen(
         )
     }
 
-    if (state.busy) {
+    if (state.busy && state.operation !is OperationUiState.Refreshing) {
         OperationDialog(state.operation)
     }
 }
@@ -553,6 +553,8 @@ private fun OperationDialog(operation: OperationUiState) {
     val message = when (operation) {
         OperationUiState.Idle -> return
         OperationUiState.Refreshing -> stringResource(R.string.operation_refreshing)
+        is OperationUiState.PreparingConfiguration ->
+            stringResource(R.string.operation_preparing_configuration)
         is OperationUiState.Configuring -> stringResource(R.string.operation_configuring)
         is OperationUiState.OpeningPackage -> stringResource(R.string.operation_opening)
         is OperationUiState.CreatingSpace -> stringResource(

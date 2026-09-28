@@ -30,7 +30,7 @@ class SlotsViewModelTest {
 
     @Test
     fun initializationRefreshesRuntimePackagesAndLocalApps() {
-        val client = FakeRuntimeClient()
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
 
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
 

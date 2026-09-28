@@ -186,6 +186,7 @@
     <string name="reconnect">重新连接</string>
 
     <string name="operation_refreshing">正在刷新空间状态</string>
+    <string name="operation_preparing_configuration">正在读取应用信息</string>
     <string name="operation_configuring">正在配置应用</string>
     <string name="operation_opening">正在读取应用空间</string>
     <string name="operation_creating">正在创建“%1$s”</string>

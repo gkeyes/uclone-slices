@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
+import com.uclone.slices.v2.apps.loadAppOptimized
 import com.uclone.slices.v2.runtime.AccountIoStatus
 import com.uclone.slices.v2.runtime.AccountIoScope
 import com.uclone.slices.v2.runtime.ArchiveScope
@@ -203,7 +204,7 @@ internal class BackupRestoreViewModel(
             slotId = slotId,
         )
         coroutineScope.launch(dispatcher) {
-            val app = installedApps.load().firstOrNull { it.packageName == packageName }
+            val app = installedApps.loadAppOptimized(packageName)
             val profile = profileCatalog.resolve(packageName, app?.signingIdentity)
             mutableState.update { current ->
                 if (
@@ -245,7 +246,7 @@ internal class BackupRestoreViewModel(
                 password?.fill('\u0000')
                 return@launch fail("identity_mismatch")
             }
-            val app = installedApps.load().firstOrNull { it.packageName == packageName }
+            val app = installedApps.loadAppOptimized(packageName)
                 ?: run {
                     password?.fill('\u0000')
                     return@launch fail("not_found")
@@ -366,7 +367,7 @@ internal class BackupRestoreViewModel(
 
     private suspend fun resolvePreview(preview: BackupJobState.Preview) {
         val app = withContext(dispatcher) {
-            installedApps.load().firstOrNull { it.packageName == preview.manifest.packageName }
+            installedApps.loadAppOptimized(preview.manifest.packageName)
         }
         if (app?.signingIdentity == null) {
             BackupRestoreJobRegistry.discardSession(preview.sessionId)

@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import com.uclone.slices.v2.BuildConfig
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
+import com.uclone.slices.v2.apps.loadAppOptimized
+import com.uclone.slices.v2.apps.loadCatalogOptimized
+import com.uclone.slices.v2.apps.loadPackagesOptimized
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.PackageSnapshot
@@ -32,6 +35,7 @@ enum class ManagerDestination {
 sealed interface OperationUiState {
     data object Idle : OperationUiState
     data object Refreshing : OperationUiState
+    data class PreparingConfiguration(val packageName: String) : OperationUiState
     data class Configuring(val packageName: String) : OperationUiState
     data class OpeningPackage(val packageName: String) : OperationUiState
     data class CreatingSpace(
@@ -116,6 +120,8 @@ data class SlotsUiState(
     val initialLoadComplete: Boolean = false,
     val configuredAccountsExpanded: Boolean = false,
     val installedApps: List<InstalledApp> = emptyList(),
+    val appCatalogLoading: Boolean = false,
+    val appCatalogLoaded: Boolean = false,
     val packages: List<PackageSnapshot> = emptyList(),
     val selected: PackageSnapshot? = null,
     val seed: SeedMode = SeedMode.Blank,
@@ -195,7 +201,7 @@ internal class SlotsViewModel(
     fun onIntent(intent: UiIntent) {
         when (intent) {
             UiIntent.Refresh -> runOperation(OperationUiState.Refreshing) { refresh() }
-            UiIntent.OpenAddApps -> navigateTo(ManagerDestination.AddApp)
+            UiIntent.OpenAddApps -> openAddApps()
             UiIntent.OpenRuntimeStatus -> navigateTo(ManagerDestination.RuntimeStatus)
             is UiIntent.OpenBackupRestore -> {
                 if (!state.value.busy) {
@@ -220,15 +226,7 @@ internal class SlotsViewModel(
             is UiIntent.QuickActivateSlot ->
                 quickActivateSlot(intent.packageName, intent.slotId)
             UiIntent.NavigateBack -> navigateBack()
-            is UiIntent.RequestConfigureApp -> {
-                if (!state.value.operationsAllowed) {
-                    showUnavailableOrMismatch()
-                } else if (!state.value.busy) {
-                    mutableState.update {
-                        it.copy(pendingConfigurationPackage = intent.packageName, notice = null)
-                    }
-                }
-            }
+            is UiIntent.RequestConfigureApp -> requestConfigureApp(intent.packageName)
             UiIntent.ConfirmConfigureApp -> confirmConfigureApp()
             UiIntent.DismissConfigureApp -> mutableState.update {
                 it.copy(pendingConfigurationPackage = null)
@@ -278,6 +276,88 @@ internal class SlotsViewModel(
     private fun navigateTo(destination: ManagerDestination) {
         if (state.value.busy) return
         mutableState.update { it.copy(destination = destination, notice = null) }
+    }
+
+    private fun openAddApps() {
+        if (state.value.busy) return
+        navigateTo(ManagerDestination.AddApp)
+        val snapshot = state.value
+        if (!snapshot.appCatalogLoaded && !snapshot.appCatalogLoading) {
+            loadAppCatalog()
+        }
+    }
+
+    private fun loadAppCatalog() {
+        mutableState.update { it.copy(appCatalogLoading = true, notice = null) }
+        scope.launch {
+            val result = runCatching { installedApps.loadCatalogOptimized() }
+            if (result.isFailure) {
+                mutableState.update {
+                    it.copy(
+                        appCatalogLoading = false,
+                        appCatalogLoaded = false,
+                        notice = UiNotice.LocalAppsUnavailable,
+                    )
+                }
+                return@launch
+            }
+            val catalog = result.getOrThrow()
+            mutableState.update { current ->
+                val managedNames = current.packages
+                    .asSequence()
+                    .map(PackageSnapshot::packageName)
+                    .toSet()
+                val preserved = current.installedApps
+                    .filter { it.packageName in managedNames }
+                    .associateBy(InstalledApp::packageName)
+                val catalogNames = catalog.asSequence().map(InstalledApp::packageName).toSet()
+                val merged = (
+                    catalog.map { preserved[it.packageName] ?: it } +
+                        preserved.values.filter { it.packageName !in catalogNames }
+                    ).sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+                current.copy(
+                    installedApps = merged,
+                    appCatalogLoading = false,
+                    appCatalogLoaded = true,
+                )
+            }
+        }
+    }
+
+    private fun requestConfigureApp(packageName: String) {
+        val snapshot = state.value
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
+            return
+        }
+        if (snapshot.busy) return
+        if (signingFor(packageName) != null) {
+            mutableState.update {
+                it.copy(pendingConfigurationPackage = packageName, notice = null)
+            }
+            return
+        }
+        runOperation(OperationUiState.PreparingConfiguration(packageName)) {
+            val result = runCatching { installedApps.loadAppOptimized(packageName) }
+            if (result.isFailure) {
+                mutableState.update { it.copy(notice = UiNotice.LocalAppsUnavailable) }
+                return@runOperation
+            }
+            val app = result.getOrNull()
+            if (app?.signingIdentity == null) {
+                mutableState.update { it.copy(notice = UiNotice.SigningUnavailable) }
+                return@runOperation
+            }
+            mutableState.update { current ->
+                current.copy(
+                    installedApps = (
+                        current.installedApps.filterNot { it.packageName == packageName } + app
+                        ).sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label }),
+                    pendingConfigurationPackage = packageName,
+                    notice = null,
+                )
+            }
+        }
     }
 
     private fun navigateBack() {
@@ -719,13 +799,12 @@ internal class SlotsViewModel(
     }
 
     private suspend fun refresh() {
-        val localApps = runCatching(installedApps::load).getOrElse {
-            mutableState.update { state ->
-                state.copy(installedApps = emptyList(), notice = UiNotice.LocalAppsUnavailable)
-            }
-            emptyList()
+        mutableState.update {
+            it.copy(
+                appCatalogLoading = false,
+                appCatalogLoaded = false,
+            )
         }
-        mutableState.update { it.copy(installedApps = localApps) }
         when (val probe = client.execute(RuntimeCommand.Probe)) {
             is RuntimeReply.Capabilities -> {
                 val compatible = probe.buildId == BuildConfig.RUNTIME_PROTOCOL_BUILD_ID
@@ -768,36 +847,62 @@ internal class SlotsViewModel(
     private suspend fun refreshPackages() {
         when (val reply = client.execute(RuntimeCommand.ListPackages)) {
             is RuntimeReply.Packages -> {
+                val packageNames = reply.packages
+                    .asSequence()
+                    .map(PackageSnapshot::packageName)
+                    .toSet()
+                val localResult = runCatching {
+                    installedApps.loadPackagesOptimized(packageNames)
+                }
+                val loadedApps = localResult.getOrDefault(emptyList())
+                val loadedByPackage = loadedApps.associateBy(InstalledApp::packageName)
+                val visibleApps = packageNames
+                    .map { packageName ->
+                        loadedByPackage[packageName]
+                            ?: InstalledApp(packageName = packageName, label = packageName)
+                    }
+                    .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
+                mutableState.update { current ->
+                    current.copy(
+                        installedApps = visibleApps,
+                        notice = if (localResult.isFailure) {
+                            UiNotice.LocalAppsUnavailable
+                        } else {
+                            current.notice
+                        },
+                    )
+                }
+
                 val packages = if (state.value.runtimeCompatible) {
                     reconcileBindings(reply.packages)
                 } else {
                     reply.packages
                 }
                 mutableState.update { current ->
-                val selectedPackage = current.selected?.packageName
-                val selected = packages.firstOrNull {
-                    it.packageName == selectedPackage
-                }
-                current.copy(
-                    packages = packages.sortedBy(PackageSnapshot::packageName),
-                    selected = selected,
-                    seed = if (selected?.activeSlot == BASE_SLOT_ID) {
-                        current.seed
-                    } else {
-                        SeedMode.Blank
-                    },
-                    destination = if (
-                        current.destination == ManagerDestination.PackageDetails &&
-                        selected == null
-                    ) {
-                        ManagerDestination.Spaces
-                    } else {
-                        current.destination
-                    },
-                    pendingRename = null,
-                    pendingDelete = null,
-                    pendingUnenroll = null,
-                )
+                    val selectedPackage = current.selected?.packageName
+                    val selected = packages.firstOrNull {
+                        it.packageName == selectedPackage
+                    }
+                    current.copy(
+                        packages = packages.sortedBy(PackageSnapshot::packageName),
+                        selected = selected,
+                        seed = if (selected?.activeSlot == BASE_SLOT_ID) {
+                            current.seed
+                        } else {
+                            SeedMode.Blank
+                        },
+                        destination = if (
+                            current.destination == ManagerDestination.PackageDetails &&
+                            selected == null
+                        ) {
+                            ManagerDestination.Spaces
+                        } else {
+                            current.destination
+                        },
+                        pendingRename = null,
+                        pendingDelete = null,
+                        pendingUnenroll = null,
+                    )
                 }
             }
             is RuntimeReply.Error -> showError(reply.code)

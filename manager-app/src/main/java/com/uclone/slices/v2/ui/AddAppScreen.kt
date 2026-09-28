@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -84,7 +85,11 @@ internal fun AddAppScreen(
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
-        if (availableApps.isEmpty()) {
+        if (state.appCatalogLoading) {
+            item {
+                LoadingAvailableApps()
+            }
+        } else if (availableApps.isEmpty()) {
             item {
                 EmptyAvailableApps(hasQuery = query.isNotBlank())
             }
@@ -206,5 +211,24 @@ private fun EmptyAvailableApps(hasQuery: Boolean) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+
+@Composable
+private fun LoadingAvailableApps() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 36.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(26.dp))
+        Text(
+            text = stringResource(R.string.loading_apps),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
