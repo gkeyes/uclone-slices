@@ -211,6 +211,8 @@
     <string name="success_rebound">已保留分空间并完成重新绑定，应用未启动</string>
     <string name="success_created">已创建“%1$s”</string>
     <string name="success_switched">已切换至“%1$s”并启动</string>
+    <string name="success_switched_title">已切换至“%1$s”</string>
+    <string name="success_switch_launch_hint">应用已启动</string>
     <string name="success_launched">已启动“%1$s”</string>
     <string name="success_renamed">已重命名为“%1$s”</string>
     <string name="success_deleted">已删除“%1$s”及其数据</string>

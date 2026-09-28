@@ -5,10 +5,16 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,8 +22,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -25,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -37,11 +44,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.graphics.drawable.toBitmap
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.backup.BackupRestoreScreen
 import com.uclone.slices.v2.backup.BackupRestoreUiState
 import com.uclone.slices.v2.backup.BackupUiIntent
+import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator as MiuixCircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.extra.SuperDialog
@@ -63,18 +72,11 @@ internal fun SlicesScreen(
         onIntent(UiIntent.NavigateBack)
     }
 
-    Scaffold(
-        containerColor = MiuixTheme.colorScheme.surface,
-        bottomBar = {
-            state.notice?.let { notice ->
-                NoticeBar(
-                    notice = notice,
-                    onIntent = onIntent,
-                )
-            }
-        },
-    ) { contentPadding ->
-        AnimatedContent(
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            containerColor = MiuixTheme.colorScheme.surface,
+        ) { contentPadding ->
+            AnimatedContent(
             targetState = state.destination,
             transitionSpec = {
                 val forward = targetState != ManagerDestination.Spaces
@@ -132,6 +134,17 @@ internal fun SlicesScreen(
                 )
             }
         }
+
+        NoticeHost(
+            notice = state.notice,
+            onIntent = onIntent,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(start = 12.dp, top = 8.dp, end = 12.dp)
+                .zIndex(10f),
+        )
     }
 
     state.pendingConfigurationPackage?.let { packageName ->
@@ -685,64 +698,173 @@ internal fun AppIcon(
 }
 
 @Composable
-private fun NoticeBar(
+private fun NoticeHost(
+    notice: UiNotice?,
+    onIntent: (UiIntent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    LaunchedEffect(notice) {
+        val current = notice ?: return@LaunchedEffect
+        delay(
+            when {
+                isSuccessNotice(current) -> 3_200L
+                isRetryNotice(current) -> 5_200L
+                else -> 4_400L
+            },
+        )
+        onIntent(UiIntent.DismissNotice)
+    }
+
+    AnimatedContent(
+        targetState = notice,
+        transitionSpec = {
+            (
+                slideInVertically(
+                    animationSpec = spring(
+                        dampingRatio = 0.84f,
+                        stiffness = 520f,
+                    ),
+                    initialOffsetY = { -it - 28 },
+                ) +
+                    fadeIn(tween(150)) +
+                    scaleIn(
+                        animationSpec = tween(220),
+                        initialScale = 0.97f,
+                    )
+                ) togetherWith (
+                slideOutVertically(
+                    animationSpec = tween(180),
+                    targetOffsetY = { -it / 2 },
+                ) +
+                    fadeOut(tween(150)) +
+                    scaleOut(
+                        animationSpec = tween(150),
+                        targetScale = 0.985f,
+                    )
+                )
+        },
+        contentAlignment = Alignment.TopCenter,
+        label = "floating_notice",
+        modifier = modifier,
+    ) { current ->
+        current?.let {
+            FloatingNoticeCard(
+                notice = it,
+                onIntent = onIntent,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FloatingNoticeCard(
     notice: UiNotice,
     onIntent: (UiIntent) -> Unit,
 ) {
-    val success = notice is UiNotice.ConfigurationCompleted ||
+    val success = isSuccessNotice(notice)
+    val retry = isRetryNotice(notice)
+    val accent = if (success) SlicesSuccess else MaterialTheme.colorScheme.error
+    val accentContainer = if (success) {
+        SlicesSuccessContainer
+    } else {
+        MaterialTheme.colorScheme.errorContainer
+    }
+    val headline = noticeHeadline(notice)
+    val supporting = if (notice is UiNotice.SpaceActivated && notice.switched) {
+        stringResource(R.string.success_switch_launch_hint)
+    } else {
+        null
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        border = BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f),
+        ),
+        shadowElevation = 14.dp,
+        tonalElevation = 1.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                start = 10.dp,
+                top = 10.dp,
+                end = if (retry) 8.dp else 14.dp,
+                bottom = 10.dp,
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(40.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = accentContainer,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = if (success) "✓" else "!",
+                        color = accent,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 11.dp),
+            ) {
+                Text(
+                    text = headline,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                supporting?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+            if (retry) {
+                SlicesInlineAction(
+                    text = stringResource(R.string.retry),
+                    onClick = { onIntent(UiIntent.Refresh) },
+                    color = accent,
+                )
+            }
+        }
+    }
+}
+
+private fun isSuccessNotice(notice: UiNotice): Boolean =
+    notice is UiNotice.ConfigurationCompleted ||
         notice is UiNotice.ConfigurationRebound ||
         notice is UiNotice.SpaceCreated ||
         notice is UiNotice.SpaceActivated ||
         notice is UiNotice.SpaceRenamed ||
         notice is UiNotice.SpaceDeleted ||
         notice is UiNotice.AppUnenrolled
-    val message = noticeMessage(notice)
-    val retry = notice is UiNotice.LocalAppsUnavailable ||
+
+private fun isRetryNotice(notice: UiNotice): Boolean =
+    notice is UiNotice.LocalAppsUnavailable ||
         notice is UiNotice.RuntimeUnavailable ||
         notice is UiNotice.MissingEntity ||
         notice is UiNotice.StateChanged ||
         notice is UiNotice.OperationFailed
-    val actionLabel = if (retry) {
-        stringResource(R.string.retry)
-    } else {
-        stringResource(R.string.dismiss)
-    }
 
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding(),
-        color = if (success) {
-            SlicesSuccessContainer
-        } else {
-            MaterialTheme.colorScheme.errorContainer
-        },
-    ) {
-        Row(
-            modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = message,
-                color = if (success) SlicesSuccess else MaterialTheme.colorScheme.onErrorContainer,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f),
-            )
-            SlicesInlineAction(
-                text = actionLabel,
-                onClick = {
-                    onIntent(if (retry) UiIntent.Refresh else UiIntent.DismissNotice)
-                },
-                color = if (success) {
-                    SlicesSuccess
-                } else {
-                    MaterialTheme.colorScheme.onErrorContainer
-                },
-            )
-        }
+@Composable
+private fun noticeHeadline(notice: UiNotice): String =
+    if (notice is UiNotice.SpaceActivated && notice.switched) {
+        stringResource(R.string.success_switched_title, notice.name)
+    } else {
+        noticeMessage(notice)
     }
-}
 
 @Composable
 private fun noticeMessage(notice: UiNotice): String = when (notice) {
