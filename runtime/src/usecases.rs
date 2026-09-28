@@ -119,9 +119,19 @@ where
 
     pub fn list_packages(&mut self) -> Result<Vec<PackageSnapshot>, RuntimeError> {
         let names = self.packages.list().map_err(adapter_error)?;
+        let inspections = self.android.inspect_many(&names);
         let mut snapshots = Vec::with_capacity(names.len());
-        for package in names {
-            match self.package_snapshot(&package) {
+        for (package, inspection) in inspections {
+            let snapshot = inspection
+                .map_err(adapter_error)
+                .and_then(|inspection| {
+                    self.package_snapshot_with_inspection(
+                        &package,
+                        inspection,
+                        ReadyLoadContext::Interactive,
+                    )
+                });
+            match snapshot {
                 Ok(snapshot) => snapshots.push(snapshot),
                 Err(error) => {
                     eprintln!("op=list_packages package={package} step=load_package error={error}");
@@ -1502,16 +1512,25 @@ where
         package: &PackageName,
         context: ReadyLoadContext,
     ) -> Result<PackageSnapshot, RuntimeError> {
+        let inspection = self
+            .android
+            .inspect(package)
+            .map_err(|error| logged_adapter("load", package, "inspect", error))?;
+        self.package_snapshot_with_inspection(package, inspection, context)
+    }
+
+    fn package_snapshot_with_inspection(
+        &mut self,
+        package: &PackageName,
+        inspection: PackageInspection,
+        context: ReadyLoadContext,
+    ) -> Result<PackageSnapshot, RuntimeError> {
         let aggregate = self
             .packages
             .load(package)
             .map_err(adapter_error)?
             .ok_or(RuntimeError::NotFound)?;
         aggregate.validate().map_err(model_error)?;
-        let inspection = self
-            .android
-            .inspect(package)
-            .map_err(|error| logged_adapter("load", package, "inspect", error))?;
         let binding = self.packages.load_binding(package).map_err(adapter_error)?;
         let intent = self
             .packages

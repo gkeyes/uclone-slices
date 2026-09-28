@@ -179,6 +179,19 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
 pub(crate) trait AndroidOps: core::fmt::Debug {
     fn probe(&mut self) -> Result<Capabilities, AdapterError>;
     fn inspect(&mut self, package: &PackageName) -> Result<PackageInspection, AdapterError>;
+    fn inspect_many(
+        &mut self,
+        packages: &[PackageName],
+    ) -> Vec<(PackageName, Result<PackageInspection, AdapterError>)> {
+        packages
+            .iter()
+            .cloned()
+            .map(|package| {
+                let inspection = self.inspect(&package);
+                (package, inspection)
+            })
+            .collect()
+    }
     fn force_stop(&mut self, package: &PackageName) -> Result<(), AdapterError>;
     fn observe_view(&mut self, package: &PackageName) -> Result<ObservedView, AdapterError>;
     fn apply_view(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError>;

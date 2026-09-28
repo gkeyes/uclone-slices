@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
@@ -155,22 +156,42 @@ impl SystemAndroidOps {
             "/system/bin/cmd",
             &["package", "list", "packages", "-3", "-U", "--user", "0"],
         )?;
-        let rows: Vec<_> = output
+        let rows = output
             .stdout
             .lines()
             .filter_map(parse_package_uid_row)
-            .collect();
-        let uid = rows
-            .iter()
-            .find_map(|(name, uid)| (*name == package.as_str()).then_some(*uid))
-            .ok_or_else(|| AdapterError::new("package is not an ordinary user0 third-party app"))?;
-        if rows
-            .iter()
-            .any(|(name, owner_uid)| *name != package.as_str() && *owner_uid == uid)
-        {
-            return Err(AdapterError::new("package UID is shared by another app"));
+            .map(|(name, uid)| (name.to_owned(), uid))
+            .collect::<Vec<_>>();
+        package_uid_from_rows(&rows, package)
+    }
+
+    fn running_uids(&self) -> Result<HashSet<u32>, AdapterError> {
+        let entries =
+            fs::read_dir(&self.proc_root).map_err(|error| AdapterError::new(error.to_string()))?;
+        let mut uids = HashSet::new();
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(AdapterError::new(error.to_string())),
+            };
+            let name = entry.file_name();
+            let Some(pid) = name.to_str() else {
+                continue;
+            };
+            if !pid.bytes().all(|byte| byte.is_ascii_digit()) {
+                continue;
+            }
+            let status = match fs::read_to_string(entry.path().join("status")) {
+                Ok(status) => status,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(AdapterError::new(error.to_string())),
+            };
+            if let Some(uid) = status_uid(&status) {
+                uids.insert(uid);
+            }
         }
-        Ok(uid)
+        Ok(uids)
     }
 
     fn apk_path(&mut self, package: &PackageName) -> Result<PathBuf, AdapterError> {
@@ -423,10 +444,6 @@ impl AndroidOps for SystemAndroidOps {
         if unlocked.stdout.trim() != "RUNNING_UNLOCKED" {
             return Err(AdapterError::new("user0 is not unlocked"));
         }
-        self.required(
-            "/system/bin/cmd",
-            &["package", "list", "packages", "-3", "-U", "--user", "0"],
-        )?;
         Ok(Capabilities {
             build_id: self.build_id.clone(),
         })
@@ -455,6 +472,73 @@ impl AndroidOps for SystemAndroidOps {
             identity,
             was_running: !self.package_processes(uid)?.is_empty(),
         })
+    }
+
+    fn inspect_many(
+        &mut self,
+        packages: &[PackageName],
+    ) -> Vec<(PackageName, Result<PackageInspection, AdapterError>)> {
+        if packages.is_empty() {
+            return Vec::new();
+        }
+        let rows = match self.required(
+            "/system/bin/cmd",
+            &["package", "list", "packages", "-3", "-U", "--user", "0"],
+        ) {
+            Ok(output) => output
+                .stdout
+                .lines()
+                .filter_map(parse_package_uid_row)
+                .map(|(name, uid)| (name.to_owned(), uid))
+                .collect::<Vec<_>>(),
+            Err(error) => {
+                return packages
+                    .iter()
+                    .cloned()
+                    .map(|package| (package, Err(error.clone())))
+                    .collect();
+            }
+        };
+        let running_uids = match self.running_uids() {
+            Ok(uids) => uids,
+            Err(error) => {
+                return packages
+                    .iter()
+                    .cloned()
+                    .map(|package| (package, Err(error.clone())))
+                    .collect();
+            }
+        };
+        packages
+            .iter()
+            .cloned()
+            .map(|package| {
+                let inspection = (|| {
+                    let uid = package_uid_from_rows(&rows, &package)?;
+                    let apk_path = self.apk_path(&package)?;
+                    let (canonical_ce, canonical_de) = self.canonical_paths(&package);
+                    if !canonical_ce.is_dir() || !canonical_de.is_dir() {
+                        return Err(AdapterError::new(
+                            "package CE/DE directories are not both available",
+                        ));
+                    }
+                    let metadata = fs::metadata(&apk_path)
+                        .map_err(|error| AdapterError::new(error.to_string()))?;
+                    let identity = PackageIdentity::new(
+                        uid,
+                        path_text(&apk_path)?.to_owned(),
+                        metadata.dev(),
+                        metadata.ino(),
+                    )
+                    .map_err(|error| AdapterError::new(error.to_string()))?;
+                    Ok(PackageInspection {
+                        identity,
+                        was_running: running_uids.contains(&uid),
+                    })
+                })();
+                (package, inspection)
+            })
+            .collect()
     }
 
     fn force_stop(&mut self, package: &PackageName) -> Result<(), AdapterError> {
@@ -644,6 +728,23 @@ fn parse_package_uid_row(line: &str) -> Option<(&str, u32)> {
     let line = line.trim().strip_prefix("package:")?;
     let (package, uid) = line.rsplit_once(" uid:")?;
     Some((package, uid.parse().ok()?))
+}
+
+fn package_uid_from_rows(
+    rows: &[(String, u32)],
+    package: &PackageName,
+) -> Result<u32, AdapterError> {
+    let uid = rows
+        .iter()
+        .find_map(|(name, uid)| (name == package.as_str()).then_some(*uid))
+        .ok_or_else(|| AdapterError::new("package is not an ordinary user0 third-party app"))?;
+    if rows
+        .iter()
+        .any(|(name, owner_uid)| name != package.as_str() && *owner_uid == uid)
+    {
+        return Err(AdapterError::new("package UID is shared by another app"));
+    }
+    Ok(uid)
 }
 
 fn status_uid(content: &str) -> Option<u32> {
