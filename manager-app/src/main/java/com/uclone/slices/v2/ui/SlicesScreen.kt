@@ -134,6 +134,7 @@ internal fun SlicesScreen(
                 )
             }
         }
+        }
 
         NoticeHost(
             notice = state.notice,
