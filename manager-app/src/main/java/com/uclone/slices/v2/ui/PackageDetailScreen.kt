@@ -1,7 +1,6 @@
 package com.uclone.slices.v2.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,9 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -270,7 +267,6 @@ private fun CurrentSpaceCard(
             }
             HorizontalDivider(
                 modifier = Modifier.padding(vertical = 16.dp),
-                color = MaterialTheme.colorScheme.outlineVariant,
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
@@ -392,54 +388,18 @@ private fun SpaceActionsMenu(
     onRename: (() -> Unit)?,
     onDelete: (() -> Unit)?,
 ) {
-    var expanded by remember { mutableStateOf(false) }
-    Box {
-        IconButton(
-            enabled = enabled,
-            onClick = { expanded = true },
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_more_vert),
-                contentDescription = stringResource(R.string.space_actions),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-        ) {
-            DropdownMenuItem(
-                text = { Text(stringResource(R.string.backup_this_account_action)) },
-                onClick = {
-                    expanded = false
-                    onBackup()
-                },
-            )
-            onRename?.let { rename ->
-                DropdownMenuItem(
-                text = { Text(stringResource(R.string.rename_space)) },
-                onClick = {
-                    expanded = false
-                        rename()
-                },
-            )
-            }
-            onDelete?.let { delete ->
-                DropdownMenuItem(
-                    text = {
-                        Text(
-                            text = stringResource(R.string.delete_space),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    },
-                    onClick = {
-                        expanded = false
-                        delete()
-                    },
-                )
-            }
-        }
-    }
+    val backupText = stringResource(R.string.backup_this_account_action)
+    val renameText = stringResource(R.string.rename_space)
+    val deleteText = stringResource(R.string.delete_space)
+    SlicesOverflowMenu(
+        items = buildList {
+            add(SlicesMenuItem(text = backupText, onClick = onBackup))
+            onRename?.let { add(SlicesMenuItem(text = renameText, onClick = it)) }
+            onDelete?.let { add(SlicesMenuItem(text = deleteText, danger = true, onClick = it)) }
+        },
+        contentDescription = stringResource(R.string.space_actions),
+        enabled = enabled,
+    )
 }
 
 @Composable

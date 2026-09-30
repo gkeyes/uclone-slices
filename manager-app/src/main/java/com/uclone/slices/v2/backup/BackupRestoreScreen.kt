@@ -3,6 +3,7 @@ package com.uclone.slices.v2.backup
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -13,42 +14,38 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.runtime.AccountIoKind
-import com.uclone.slices.v2.runtime.ArchiveScope
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.RestoreItemState
 import com.uclone.slices.v2.runtime.RestoreTarget
 import com.uclone.slices.v2.ui.BASE_SLOT_ID
 import com.uclone.slices.v2.ui.SlicesActionButton
 import com.uclone.slices.v2.ui.SlicesConfirmationToggle
+import com.uclone.slices.v2.ui.SlicesMenuItem
 import com.uclone.slices.v2.ui.SlicesPanel
+import com.uclone.slices.v2.ui.SlicesPopupMenu
+import com.uclone.slices.v2.ui.SlicesSpinner
 import com.uclone.slices.v2.ui.SlicesTextAction
 import com.uclone.slices.v2.ui.SlotsUiState
 import com.uclone.slices.v2.ui.spaceDisplayName
 import java.text.DateFormat
+import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
+import top.yukonga.miuix.kmp.basic.Switch
+import top.yukonga.miuix.kmp.basic.TextField
 import java.util.Date
 
 @Composable
@@ -584,7 +581,7 @@ private fun MappingCard(
     state: BackupRestoreUiState,
     onIntent: (BackupUiIntent) -> Unit,
 ) {
-    var expanded by remember(mapping.archiveAccountId) { mutableStateOf(false) }
+    val showTargets = remember(mapping.archiveAccountId) { mutableStateOf(false) }
     val targetText = when (val target = mapping.target) {
         RestoreTarget.New -> stringResource(R.string.restore_as_new_account)
         is RestoreTarget.Existing -> if (target.slotId == BASE_SLOT_ID) {
@@ -609,39 +606,46 @@ private fun MappingCard(
                 modifier = Modifier.padding(top = 3.dp),
             )
             if (mapping.archiveKind == ArchiveAccountKind.Slot) {
-                SlicesTextAction(
-                    text = stringResource(R.string.change_restore_target),
-                    onClick = { expanded = true },
-                    primary = true,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.restore_as_new_account)) },
-                        onClick = {
-                            expanded = false
-                            onIntent(
-                                BackupUiIntent.RestoreMappingChanged(
-                                    mapping.archiveAccountId,
-                                    RestoreTarget.New,
-                                ),
-                            )
-                        },
-                    )
-                    state.targetPackage?.slots?.filterNot { it.id == BASE_SLOT_ID }?.forEach { slot ->
-                        DropdownMenuItem(
-                            text = { Text(spaceDisplayName(slot)) },
+                val newAccountText = stringResource(R.string.restore_as_new_account)
+                val targets = buildList {
+                    add(
+                        SlicesMenuItem(
+                            text = newAccountText,
+                            checked = mapping.target == RestoreTarget.New,
                             onClick = {
-                                expanded = false
                                 onIntent(
                                     BackupUiIntent.RestoreMappingChanged(
                                         mapping.archiveAccountId,
-                                        RestoreTarget.Existing(slot.id),
+                                        RestoreTarget.New,
                                     ),
                                 )
                             },
+                        ),
+                    )
+                    state.targetPackage?.slots?.filterNot { it.id == BASE_SLOT_ID }?.forEach { slot ->
+                        add(
+                            SlicesMenuItem(
+                                text = spaceDisplayName(slot),
+                                checked = mapping.target == RestoreTarget.Existing(slot.id),
+                                onClick = {
+                                    onIntent(
+                                        BackupUiIntent.RestoreMappingChanged(
+                                            mapping.archiveAccountId,
+                                            RestoreTarget.Existing(slot.id),
+                                        ),
+                                    )
+                                },
+                            ),
                         )
                     }
+                }
+                Box(Modifier.padding(top = 6.dp)) {
+                    SlicesTextAction(
+                        text = stringResource(R.string.change_restore_target),
+                        onClick = { showTargets.value = true },
+                        primary = true,
+                    )
+                    SlicesPopupMenu(show = showTargets, items = targets)
                 }
             }
         }
@@ -656,7 +660,7 @@ private fun RunningContent(state: BackupRestoreUiState, contentPadding: PaddingV
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        CircularProgressIndicator(modifier = Modifier.size(42.dp))
+        SlicesSpinner(size = 42.dp, strokeWidth = 4.dp)
         Text(
             text = when (running?.kind) {
                 BackupJobKind.Backup -> stringResource(R.string.backup_running)
@@ -672,7 +676,7 @@ private fun RunningContent(state: BackupRestoreUiState, contentPadding: PaddingV
                 .coerceIn(0.0, 1.0)
                 .toFloat()
             LinearProgressIndicator(
-                progress = { fraction },
+                progress = fraction,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 14.dp),
@@ -952,10 +956,11 @@ private fun PasswordField(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    OutlinedTextField(
+    TextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text(label) },
+        label = label,
+        useLabelAsPlaceholder = true,
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         visualTransformation = PasswordVisualTransformation(),

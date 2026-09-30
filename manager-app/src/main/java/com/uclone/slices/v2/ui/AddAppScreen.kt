@@ -11,8 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -173,7 +172,6 @@ private fun AvailableAppsCard(
             if (index < apps.lastIndex) {
                 HorizontalDivider(
                     modifier = Modifier.padding(start = 80.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant,
                 )
             }
         }
@@ -224,7 +222,7 @@ private fun LoadingAvailableApps() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        CircularProgressIndicator(modifier = Modifier.size(26.dp))
+        SlicesSpinner(size = 26.dp, strokeWidth = 3.dp)
         Text(
             text = stringResource(R.string.loading_apps),
             style = MaterialTheme.typography.bodyMedium,

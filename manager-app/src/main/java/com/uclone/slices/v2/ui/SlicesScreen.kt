@@ -14,7 +14,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,8 +50,8 @@ import com.uclone.slices.v2.backup.BackupRestoreScreen
 import com.uclone.slices.v2.backup.BackupRestoreUiState
 import com.uclone.slices.v2.backup.BackupUiIntent
 import kotlinx.coroutines.delay
-import top.yukonga.miuix.kmp.basic.CircularProgressIndicator as MiuixCircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.Surface as MiuixSurface
 import top.yukonga.miuix.kmp.extra.SuperDialog
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -593,7 +592,7 @@ private fun OperationDialog(operation: OperationUiState) {
                 .padding(vertical = 6.dp),
             contentAlignment = Alignment.Center,
         ) {
-            MiuixCircularProgressIndicator(modifier = Modifier.size(28.dp))
+            SlicesSpinner(size = 28.dp, strokeWidth = 3.dp)
         }
     }
 }
@@ -781,17 +780,13 @@ private fun FloatingNoticeCard(
         null
     }
 
-    Surface(
+    // Same container as MIUIX list popups: popup surface colour and a soft shadow, no outline.
+    MiuixSurface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.72f),
-        ),
-        shadowElevation = 14.dp,
-        tonalElevation = 1.dp,
+        color = MiuixTheme.colorScheme.surfaceContainer,
+        contentColor = MiuixTheme.colorScheme.onSurface,
+        shadowElevation = 11.dp,
     ) {
         Row(
             modifier = Modifier.padding(

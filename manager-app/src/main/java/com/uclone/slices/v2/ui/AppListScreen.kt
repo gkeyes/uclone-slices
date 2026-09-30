@@ -18,13 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -238,11 +234,9 @@ private fun HomeHeader(
             )
         }
         if (refreshing) {
-            CircularProgressIndicator(
-                modifier = Modifier
-                    .padding(12.dp)
-                    .size(22.dp),
-                strokeWidth = 2.dp,
+            SlicesSpinner(
+                size = 22.dp,
+                modifier = Modifier.padding(12.dp),
             )
         } else {
             IconButton(onClick = onRefresh, enabled = !busy) {
@@ -275,7 +269,6 @@ private fun ManagedAppsCard(
         apps.forEach { app ->
             key(app.packageName) {
                 val snapshot = packageByName.getValue(app.packageName)
-                var menuExpanded by remember(app.packageName) { mutableStateOf(false) }
                 SlicesPanel(
                     modifier = Modifier.fillMaxWidth(),
                     enabled = enabled,
@@ -372,75 +365,48 @@ private fun ManagedAppsCard(
                                         )
                                     }
                                 }
-                                Column(modifier = Modifier.align(Alignment.TopEnd)) {
-                                    IconButton(
-                                        onClick = { menuExpanded = true },
-                                        enabled = operationsEnabled,
-                                    ) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.ic_more_vert),
-                                            contentDescription = stringResource(
-                                                R.string.configured_app_actions,
-                                            ),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    DropdownMenu(
-                                        expanded = menuExpanded,
-                                        onDismissRequest = { menuExpanded = false },
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    stringResource(
-                                                        R.string.launch_after_reboot_action,
-                                                    ),
-                                                )
-                                            },
-                                            trailingIcon = {
-                                                Switch(
+                                val ready = snapshot.bindingState == BindingState.Ready
+                                val launchAfterRebootText =
+                                    stringResource(R.string.launch_after_reboot_action)
+                                val backupAllText =
+                                    stringResource(R.string.backup_all_accounts_action)
+                                val unenrollText = stringResource(R.string.unenroll_app_action)
+                                SlicesOverflowMenu(
+                                    items = buildList {
+                                        if (ready) {
+                                            add(
+                                                SlicesMenuItem(
+                                                    text = launchAfterRebootText,
                                                     checked = snapshot.launchAfterReboot,
-                                                    onCheckedChange = null,
-                                                    enabled = operationsEnabled &&
-                                                        snapshot.bindingState == BindingState.Ready,
-                                                )
-                                            },
-                                            enabled = operationsEnabled &&
-                                                snapshot.bindingState == BindingState.Ready,
-                                            onClick = {
-                                                menuExpanded = false
-                                                onSetLaunchAfterReboot(
-                                                    app.packageName,
-                                                    !snapshot.launchAfterReboot,
-                                                )
-                                            },
+                                                    onClick = {
+                                                        onSetLaunchAfterReboot(
+                                                            app.packageName,
+                                                            !snapshot.launchAfterReboot,
+                                                        )
+                                                    },
+                                                ),
+                                            )
+                                            add(
+                                                SlicesMenuItem(
+                                                    text = backupAllText,
+                                                    onClick = { onBackup(app.packageName) },
+                                                ),
+                                            )
+                                        }
+                                        add(
+                                            SlicesMenuItem(
+                                                text = unenrollText,
+                                                danger = true,
+                                                onClick = { onUnenroll(app.packageName) },
+                                            ),
                                         )
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    stringResource(
-                                                        R.string.backup_all_accounts_action,
-                                                    ),
-                                                )
-                                            },
-                                            enabled = operationsEnabled &&
-                                                snapshot.bindingState == BindingState.Ready,
-                                            onClick = {
-                                                menuExpanded = false
-                                                onBackup(app.packageName)
-                                            },
-                                        )
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(stringResource(R.string.unenroll_app_action))
-                                            },
-                                            onClick = {
-                                                menuExpanded = false
-                                                onUnenroll(app.packageName)
-                                            },
-                                        )
-                                    }
-                                }
+                                    },
+                                    contentDescription = stringResource(
+                                        R.string.configured_app_actions,
+                                    ),
+                                    enabled = operationsEnabled,
+                                    modifier = Modifier.align(Alignment.TopEnd),
+                                )
                             }
                         }
                     }
@@ -532,7 +498,7 @@ private fun LoadingAppsMessage() {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+        SlicesSpinner(size = 28.dp, strokeWidth = 3.dp)
         Text(
             text = stringResource(R.string.loading_apps),
             style = MaterialTheme.typography.bodyMedium,

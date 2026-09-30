@@ -1,6 +1,7 @@
 package com.uclone.slices.v2.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,11 +11,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -25,14 +28,24 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import com.uclone.slices.v2.R
 import top.yukonga.miuix.kmp.basic.Button as MiuixButton
 import top.yukonga.miuix.kmp.basic.ButtonDefaults as MiuixButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card as MiuixCard
 import top.yukonga.miuix.kmp.basic.CardDefaults as MiuixCardDefaults
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator as MiuixCircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon as MiuixIcon
+import top.yukonga.miuix.kmp.basic.IconButton as MiuixIconButton
+import top.yukonga.miuix.kmp.basic.ListPopup as MiuixListPopup
+import top.yukonga.miuix.kmp.basic.ListPopupColumn as MiuixListPopupColumn
+import top.yukonga.miuix.kmp.basic.PopupPositionProvider as MiuixPopupPositionProvider
+import top.yukonga.miuix.kmp.basic.ProgressIndicatorDefaults as MiuixProgressIndicatorDefaults
+import top.yukonga.miuix.kmp.basic.Switch as MiuixSwitch
 import top.yukonga.miuix.kmp.basic.Text as MiuixText
 import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
 import top.yukonga.miuix.kmp.basic.TextField as MiuixTextField
+import top.yukonga.miuix.kmp.extra.DropdownDefaults as MiuixDropdownDefaults
+import top.yukonga.miuix.kmp.extra.DropdownImpl as MiuixDropdownItem
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
 
@@ -116,11 +129,7 @@ internal fun SlicesActionButton(
         ),
     ) {
         if (loading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
-                color = contentColor,
-                strokeWidth = 2.dp,
-            )
+            SlicesSpinner(size = 18.dp, color = contentColor)
             Spacer(Modifier.width(8.dp))
         } else {
             icon?.let {
@@ -308,10 +317,103 @@ internal fun SlicesConfirmationToggle(
             color = textColor,
             style = MaterialTheme.typography.bodyMedium,
         )
-        Switch(
+        MiuixSwitch(
             checked = checked,
             onCheckedChange = null,
         )
+    }
+}
+
+/** MIUIX indeterminate spinner; [color] defaults to the theme primary. */
+@Composable
+internal fun SlicesSpinner(
+    size: Dp,
+    modifier: Modifier = Modifier,
+    color: Color = MiuixTheme.colorScheme.primary,
+    strokeWidth: Dp = 2.dp,
+) {
+    MiuixCircularProgressIndicator(
+        modifier = modifier,
+        size = size,
+        strokeWidth = strokeWidth,
+        colors = MiuixProgressIndicatorDefaults.progressIndicatorColors(
+            foregroundColor = color,
+            backgroundColor = Color.Transparent,
+        ),
+    )
+}
+
+internal data class SlicesMenuItem(
+    val text: String,
+    val onClick: () -> Unit,
+    /** Shown with the MIUIX check mark, for on/off options inside a menu. */
+    val checked: Boolean = false,
+    val danger: Boolean = false,
+)
+
+/**
+ * MIUIX popup list (the same one SuperDropdown opens) anchored to its parent layout, so it
+ * must be placed in the same Box as the control that opens it. Flips above the anchor when
+ * there is no room below.
+ */
+@Composable
+internal fun SlicesPopupMenu(
+    show: MutableState<Boolean>,
+    items: List<SlicesMenuItem>,
+) {
+    MiuixListPopup(
+        show = show,
+        alignment = MiuixPopupPositionProvider.Align.Right,
+        onDismissRequest = { show.value = false },
+    ) {
+        MiuixListPopupColumn {
+            items.forEachIndexed { index, item ->
+                key(index, item.text) {
+                    MiuixDropdownItem(
+                        text = item.text,
+                        optionSize = items.size,
+                        isSelected = item.checked,
+                        index = index,
+                        dropdownColors = if (item.danger) {
+                            MiuixDropdownDefaults.dropdownColors(
+                                contentColor = MiuixTheme.colorScheme.error,
+                            )
+                        } else {
+                            MiuixDropdownDefaults.dropdownColors()
+                        },
+                        onSelectedIndexChange = {
+                            show.value = false
+                            item.onClick()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The "more" button used on cards, opening a [SlicesPopupMenu]. */
+@Composable
+internal fun SlicesOverflowMenu(
+    items: List<SlicesMenuItem>,
+    contentDescription: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val show = remember { mutableStateOf(false) }
+    Box(modifier) {
+        MiuixIconButton(
+            onClick = { show.value = true },
+            enabled = enabled && items.isNotEmpty(),
+            holdDownState = show.value,
+        ) {
+            MiuixIcon(
+                painter = painterResource(R.drawable.ic_more_vert),
+                contentDescription = contentDescription,
+                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+            )
+        }
+        SlicesPopupMenu(show = show, items = items)
     }
 }
 
@@ -346,11 +448,7 @@ internal fun SlicesSlotButton(
         ),
     ) {
         if (loading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(16.dp),
-                color = contentColor,
-                strokeWidth = 2.dp,
-            )
+            SlicesSpinner(size = 16.dp, color = contentColor)
             Spacer(Modifier.width(7.dp))
         } else {
             icon?.let {
