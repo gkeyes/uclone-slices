@@ -26,9 +26,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     prepare_runtime_root(&root)?;
     wait_for_user0_ready();
     let boot_id = fs::read_to_string(BOOT_ID_PATH)?;
-    let mut boot_runtime = production(&root, build_id.clone())?;
-    reconcile_once_per_boot(&root, boot_id.trim(), || boot_runtime.reconcile_boot())?;
-    drop(boot_runtime);
+    // A failed boot convergence is logged and retried on the next start in this boot (its
+    // marker is not written). The socket still opens: every request re-validates its own
+    // package, and a package whose state cannot be read keeps failing closed on its own.
+    let boot_result = production(&root, build_id.clone())
+        .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+        .and_then(|mut boot_runtime| {
+            reconcile_once_per_boot(&root, boot_id.trim(), || boot_runtime.reconcile_boot())
+        });
+    if let Err(error) = boot_result {
+        eprintln!("ucloned boot reconcile failed; serving requests anyway: {error}");
+    }
     remove_stale_socket(&socket)?;
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;

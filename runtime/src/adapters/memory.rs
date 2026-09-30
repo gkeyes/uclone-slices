@@ -165,6 +165,7 @@ impl PackageStore for MemoryPackageStore {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SlotFailure {
+    MaterializeCapacity,
     MaterializeCe,
     MaterializeDe,
     Discard,
@@ -238,6 +239,19 @@ impl SlotStorage for MemorySlotStorage {
             return Err(AdapterError::new("injected DE materialization failure"));
         }
         self.domains.insert(key, (true, true));
+        Ok(())
+    }
+
+    fn ensure_materialize_capacity(
+        &self,
+        _package: &PackageName,
+        _seed: SeedMode,
+    ) -> Result<(), AdapterError> {
+        if self.failures.front() == Some(&SlotFailure::MaterializeCapacity) {
+            return Err(AdapterError::insufficient_storage(
+                "injected materialize capacity failure",
+            ));
+        }
         Ok(())
     }
 

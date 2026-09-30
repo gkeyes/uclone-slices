@@ -94,12 +94,14 @@ impl PackageStore for FilePackageStore {
             if !entry.path().join("aggregate.json").is_file() {
                 continue;
             }
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                return Err(AdapterError::new("package directory is not UTF-8"));
-            };
-            packages.push(
-                PackageName::new(name).map_err(|error| AdapterError::new(error.to_string()))?,
-            );
+            // One foreign or damaged directory must not hide every healthy package.
+            match package_directory_name(&entry) {
+                Ok(package) => packages.push(package),
+                Err(error) => eprintln!(
+                    "op=list_packages path={} step=skip_package_directory error={error}",
+                    entry.path().display()
+                ),
+            }
         }
         packages.sort();
         Ok(packages)
@@ -193,15 +195,17 @@ impl PackageStore for FilePackageStore {
             if !entry.file_type().map_err(io_error)?.is_dir() {
                 continue;
             }
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                return Err(AdapterError::state_conflict(
-                    "package directory is not UTF-8",
-                ));
-            };
-            let package = PackageName::new(name)
-                .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
-            if let Some(intent) = self.load_account_io_intent(&package)? {
-                intents.push(intent);
+            // An unreadable intent stays on disk and keeps blocking its own package through
+            // `load_account_io_intent`; it must not block the leases of other packages.
+            let intent = package_directory_name(&entry)
+                .and_then(|package| self.load_account_io_intent(&package));
+            match intent {
+                Ok(Some(intent)) => intents.push(intent),
+                Ok(None) => {}
+                Err(error) => eprintln!(
+                    "op=list_account_io path={} step=skip_unreadable_intent error={error}",
+                    entry.path().display()
+                ),
             }
         }
         intents.sort_by(|left, right| left.package.cmp(&right.package));
@@ -287,6 +291,15 @@ impl PackageStore for FilePackageStore {
             Err(error) => Err(io_error(error)),
         }
     }
+}
+
+fn package_directory_name(entry: &fs::DirEntry) -> Result<PackageName, AdapterError> {
+    let name = entry
+        .file_name()
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| AdapterError::state_conflict("package directory is not UTF-8"))?;
+    PackageName::new(name).map_err(|error| AdapterError::state_conflict(error.to_string()))
 }
 
 fn read_optional_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, AdapterError> {
@@ -642,8 +655,14 @@ impl SlotStorage for FileSlotStorage {
                 &temporary_de,
                 seed,
             )?;
+            // The aggregate is committed right after this returns; the copied pair must be
+            // durable before it is published under its final name.
+            sync_tree(&temporary_ce)?;
+            sync_tree(&temporary_de)?;
             fs::rename(&temporary_ce, &target_ce).map_err(io_error)?;
             fs::rename(&temporary_de, &target_de).map_err(io_error)?;
+            sync_directory(&ce_package_root)?;
+            sync_directory(&de_package_root)?;
             Ok(())
         })();
         if result.is_err() {
@@ -653,6 +672,32 @@ impl SlotStorage for FileSlotStorage {
             let _de_target = remove_tree_if_exists(&target_de);
         }
         result
+    }
+
+    fn ensure_materialize_capacity(
+        &self,
+        package: &PackageName,
+        seed: SeedMode,
+    ) -> Result<(), AdapterError> {
+        if seed != SeedMode::CloneBase {
+            return Ok(());
+        }
+        let mut requirements = Vec::with_capacity(2);
+        for (source, slots_root) in [
+            (
+                self.canonical_ce_root.join(package.as_str()),
+                &self.ce_slots_root,
+            ),
+            (
+                self.canonical_de_root.join(package.as_str()),
+                &self.de_slots_root,
+            ),
+        ] {
+            let required = copied_tree_bytes(&source)?;
+            let (device, available) = self.available_bytes(slots_root)?;
+            requirements.push((device, required, available));
+        }
+        ensure_filesystem_capacity(requirements)
     }
 
     fn discard(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError> {
@@ -1160,11 +1205,7 @@ fn replace_domain(
             remove_directory_contents_excluding(target, &preserved)?;
         }
         copy_tree(staged, target)?;
-        if preserved.is_empty() {
-            sync_tree(target)?;
-        } else {
-            sync_tree_excluding(target, &preserved)?;
-        }
+        sync_tree(target)?;
         remove_tree_if_exists(staged)?;
         sync_directory(target)?;
     } else {
@@ -1261,7 +1302,7 @@ fn ensure_filesystem_capacity(
         .any(|(required, available)| required > available)
     {
         return Err(AdapterError::insufficient_storage(
-            "insufficient storage for Base rollback and replacement copies",
+            "insufficient storage for the requested account data copy",
         ));
     }
     Ok(())
@@ -1310,11 +1351,7 @@ fn rollback_domain(
         }
         if old_available {
             copy_tree(&old, target)?;
-            if preserved.is_empty() {
-                sync_tree(target)?;
-            } else {
-                sync_tree_excluding(target, &preserved)?;
-            }
+            sync_tree(target)?;
         }
         sync_directory(target)?;
         return retire_completed_rollback(rollback);
@@ -1667,55 +1704,14 @@ fn rename_path(source: &Path, target: &Path) -> std::io::Result<()> {
     fs::rename(source, target)
 }
 
+/// Makes everything written under `root` durable with one `syncfs` on its filesystem.
+///
+/// `syncfs` flushes every dirty file and directory of that filesystem, a superset of
+/// fsyncing each copied file and directory one by one, with one system call instead of one
+/// per entry (the per-entry walk dominated restores of accounts with many small files).
 fn sync_tree(root: &Path) -> Result<(), AdapterError> {
-    let mut directories = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(directory) = pending.pop() {
-        directories.push(directory.clone());
-        for entry in fs::read_dir(&directory).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            let metadata = fs::symlink_metadata(entry.path()).map_err(io_error)?;
-            if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
-                pending.push(entry.path());
-            } else if metadata.file_type().is_file() {
-                File::open(entry.path())
-                    .and_then(|file| file.sync_all())
-                    .map_err(io_error)?;
-            }
-        }
-    }
-    for directory in directories.into_iter().rev() {
-        sync_directory(&directory)?;
-    }
-    Ok(())
-}
-
-fn sync_tree_excluding(root: &Path, excluded: &[PathBuf]) -> Result<(), AdapterError> {
-    let excluded = excluded.iter().cloned().collect::<BTreeSet<_>>();
-    let mut directories = Vec::new();
-    let mut pending = vec![(root.to_path_buf(), PathBuf::new())];
-    while let Some((directory, relative)) = pending.pop() {
-        directories.push(directory.clone());
-        for entry in fs::read_dir(&directory).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            let child_relative = relative.join(entry.file_name());
-            if excluded.contains(&child_relative) {
-                continue;
-            }
-            let metadata = fs::symlink_metadata(entry.path()).map_err(io_error)?;
-            if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() {
-                pending.push((entry.path(), child_relative));
-            } else if metadata.file_type().is_file() {
-                File::open(entry.path())
-                    .and_then(|file| file.sync_all())
-                    .map_err(io_error)?;
-            }
-        }
-    }
-    for directory in directories.into_iter().rev() {
-        sync_directory(&directory)?;
-    }
-    Ok(())
+    let directory = File::open(root).map_err(io_error)?;
+    rustix::fs::syncfs(&directory).map_err(|error| io_error(std::io::Error::from(error)))
 }
 
 fn remove_directory_contents(path: &Path) -> Result<(), AdapterError> {
@@ -2372,6 +2368,62 @@ mod tests {
             fs::metadata(target_de.parent().unwrap()).unwrap().mode() & 0o777,
             0o700,
         );
+    }
+
+    #[test]
+    fn base_clone_capacity_counts_the_base_tree_and_blank_needs_none() {
+        let root = tempfile::tempdir().unwrap();
+        let ce = root.path().join("base-ce");
+        let de = root.path().join("base-de");
+        let package = PackageName::new("com.example.app").unwrap();
+        fs::create_dir_all(ce.join(package.as_str())).unwrap();
+        fs::create_dir_all(de.join(package.as_str())).unwrap();
+        fs::write(
+            ce.join(package.as_str()).join("ce.bin"),
+            vec![1_u8; 64 * 1024],
+        )
+        .unwrap();
+        let ce_slots = root.path().join("slots-ce");
+        let de_slots = root.path().join("slots-de");
+        let mut storage = open_slot_storage(&ce_slots, &de_slots, &ce, &de);
+        let required = copied_tree_bytes(&ce.join(package.as_str())).unwrap()
+            + copied_tree_bytes(&de.join(package.as_str())).unwrap();
+
+        storage
+            .set_available_bytes(&ce_slots, required - 1)
+            .unwrap();
+        let error = storage
+            .ensure_materialize_capacity(&package, SeedMode::CloneBase)
+            .unwrap_err();
+        assert!(error.is_insufficient_storage());
+        assert!(
+            storage
+                .ensure_materialize_capacity(&package, SeedMode::Blank)
+                .is_ok()
+        );
+
+        storage.set_available_bytes(&ce_slots, required).unwrap();
+        assert!(
+            storage
+                .ensure_materialize_capacity(&package, SeedMode::CloneBase)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn package_listing_skips_a_foreign_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let store = FilePackageStore::open(root.path()).unwrap();
+        let mut writable = FilePackageStore::open(root.path()).unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        writable
+            .save(&PackageAggregate::enrolled(package.clone(), identity()))
+            .unwrap();
+        let foreign = root.path().join("packages").join("Not A Package");
+        fs::create_dir_all(&foreign).unwrap();
+        fs::write(foreign.join("aggregate.json"), b"{}").unwrap();
+
+        assert_eq!(store.list().unwrap(), vec![package]);
     }
 
     #[test]

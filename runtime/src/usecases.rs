@@ -887,6 +887,9 @@ where
         {
             return Err(RuntimeError::StateConflict);
         }
+        self.slots
+            .ensure_materialize_capacity(package, seed)
+            .map_err(|error| logged_adapter("create_slot", package, "check_capacity", error))?;
 
         let slot = aggregate.reserve_slot(display_name).map_err(model_error)?;
         let target = slot.id().clone();
@@ -2895,6 +2898,72 @@ mod tests {
         assert_eq!(result, Err(RuntimeError::OperationFailed));
         let (_packages, slots, _android) = runtime.into_parts();
         assert!(!slots.contains(&package, &SlotId::numbered(1)));
+    }
+
+    #[test]
+    fn insufficient_clone_capacity_is_reported_before_any_side_effect() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let (packages, mut slots, android) = runtime.into_parts();
+        slots.fail_next(SlotFailure::MaterializeCapacity);
+        let saves_before = packages.save_calls();
+        let mut runtime = Runtime::new(packages, slots, android);
+        let calls_before = runtime.android.calls().len();
+
+        let result = runtime.create_slot(
+            &package,
+            DisplayName::new("Copy").unwrap(),
+            SeedMode::CloneBase,
+        );
+
+        assert_eq!(result, Err(RuntimeError::InsufficientStorage));
+        let (packages, slots, android) = runtime.into_parts();
+        assert_eq!(packages.save_calls(), saves_before);
+        assert!(!slots.contains(&package, &SlotId::numbered(1)));
+        assert!(
+            !android.calls()[calls_before..]
+                .iter()
+                .any(|call| matches!(call, AndroidCall::ForceStop(_)))
+        );
+        assert!(android.is_running(&package));
+    }
+
+    #[test]
+    fn one_unreadable_account_io_intent_does_not_block_other_packages_or_boot() {
+        use crate::adapters::FilePackageStore;
+
+        let root = tempfile::tempdir().unwrap();
+        let healthy = package();
+        let mut android = MemoryAndroidOps::default();
+        android.install(healthy.clone());
+        let mut runtime = Runtime::new(
+            FilePackageStore::open(root.path()).unwrap(),
+            MemorySlotStorage::default(),
+            android,
+        );
+        runtime.enroll(healthy.clone(), false, None).unwrap();
+        let broken = PackageName::new("com.other.app").unwrap();
+        let broken_root = root.path().join("packages").join(broken.as_str());
+        std::fs::create_dir_all(&broken_root).unwrap();
+        std::fs::write(
+            broken_root.join("account-io-intent-v1.json"),
+            br#"{"schema_version":99}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.path().join("packages").join("Not A Package")).unwrap();
+
+        assert_eq!(runtime.reconcile_boot(), Ok(()));
+        assert_eq!(runtime.list_account_io_status(), Ok(Vec::new()));
+        let lease = runtime
+            .begin_backup_io(&healthy, AccountIoScope::AllAccounts)
+            .unwrap();
+        assert_eq!(runtime.list_account_io_status().unwrap().len(), 1);
+        assert_eq!(runtime.finish_backup_io(&lease.io_token), Ok(()));
+        assert_eq!(runtime.list_packages().unwrap().len(), 1);
+        // The unreadable package itself stays fail-closed.
+        assert!(runtime.unenroll(&broken).is_err());
+        assert!(broken_root.join("account-io-intent-v1.json").is_file());
     }
 
     #[test]

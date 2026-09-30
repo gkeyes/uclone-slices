@@ -93,6 +93,15 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
         seed: SeedMode,
     ) -> Result<(), AdapterError>;
 
+    /// Verifies, before any side effect, that `materialize` has room for its copy.
+    fn ensure_materialize_capacity(
+        &self,
+        _package: &PackageName,
+        _seed: SeedMode,
+    ) -> Result<(), AdapterError> {
+        Ok(())
+    }
+
     fn discard(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError>;
 
     fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError>;
