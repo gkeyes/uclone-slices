@@ -75,9 +75,13 @@ case "$PID_EXE" in
 esac
 
 rm -f "$PID_FILE" "$SOCKET"
+# Keep exactly the previous start's log so the file cannot grow across boots.
+LOG_FILE=$RUNTIME_ROOT/ucloned.log
+[ ! -f "$LOG_FILE" ] || mv -f "$LOG_FILE" "$LOG_FILE.1"
+printf 'ucloned start %s build=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$BUILD_ID" >"$LOG_FILE"
 UCLONE_RUNTIME_ROOT="$RUNTIME_ROOT" \
 UCLONE_RUNTIME_SOCKET="$SOCKET" \
 UCLONE_BUILD_ID="$BUILD_ID" \
 /system/bin/nsenter -t 1 -m -- \
-"$MODDIR/bin/ucloned" >>"$RUNTIME_ROOT/ucloned.log" 2>&1 &
+"$MODDIR/bin/ucloned" >>"$LOG_FILE" 2>&1 &
 echo "$!" >"$PID_FILE"

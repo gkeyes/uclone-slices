@@ -26,6 +26,7 @@ grep -F 'chmod 0600 "$SOCKET"' "$SERVICE" >/dev/null
 grep -F 'kill -9 "$PID"' "$SERVICE" >/dev/null
 grep -F '/system/bin/nsenter -t 1 -m --' "$SERVICE" >/dev/null
 grep -F '"$MODDIR/bin/ucloned"' "$SERVICE" >/dev/null
+grep -F 'mv -f "$LOG_FILE" "$LOG_FILE.1"' "$SERVICE" >/dev/null
 if grep -E 'package|mount|disable|enable|reconcile|rescue' "$SERVICE" >/dev/null; then
     exit 1
 fi
