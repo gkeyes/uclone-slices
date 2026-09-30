@@ -1,8 +1,20 @@
 # UClone Slices V2 待办
 
-更新日期：2026-08-25。
+更新日期：2026-09-30。
 
 这里只记录尚未完成的交付或真机工作。已经由主机测试关闭的问题由 Git 历史和回归测试保存。
+
+## 0.2.3 候选门禁
+
+- [ ] 在 GitHub Actions 对同一提交执行全部门禁并产出固定证书签名的 Manager APK、KernelSU ZIP 和 SHA256SUMS。
+- [ ] 按 [`docs/DEVICE_QA.md`](docs/DEVICE_QA.md) 的 0.2.3 清单完成真机验收。
+- [ ] 只有用户明确确认该候选版可以发布后，才创建 GitHub Release。
+
+## 审计遗留（需先写只读探针）
+
+- [ ] Base 恢复改为顶层子项 rename，去掉旧数据与新数据两次整份复制；先确认 `/data/user/0/<pkg>` 与 `/data/misc_ce/0` 之间 rename 不返回 EXDEV。
+- [ ] mount/umount 改用系统调用并以 `EBUSY` 判断 lazy detach，替代对 umount 英文报错的精确匹配。
+- [ ] 停止确认阶段的 `/proc` 扫描改为增量读取。
 
 ## 0.2.1 候选门禁
 

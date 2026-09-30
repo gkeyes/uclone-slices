@@ -5,7 +5,7 @@
 
 UClone Slices V2 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前版本为 **v0.2.2**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。
+当前版本为 **v0.2.3**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 稳定协议 ID 仍为 `0.2.2`：0.2.3 未改变 wire，但 Runtime 修复需要同时刷入 0.2.3 模块。
 
 ## 功能
 
@@ -35,8 +35,8 @@ UClone Slices V2 是一款适用于 Root Android / KernelSU 设备的多账号�
 
 Release 产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
 
-1. `uclone-slices-v2-manager-0.2.2-<sha>.apk`
-2. `uclone-slices-v2-kernelsu-0.2.2-<sha>.zip`
+1. `uclone-slices-v2-manager-0.2.3-<sha>.apk`
+2. `uclone-slices-v2-kernelsu-0.2.3-<sha>.zip`
 3. `SHA256SUMS.txt`
 
 安装步骤：
@@ -44,7 +44,7 @@ Release 产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认首页显示 `Runtime 0.2.2`。
+4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.2.2`（协议 ID）。
 
 Fixture 只参与 CI 编译兼容检查，不属于正式交付物，也不用于本轮真机验收。
 
@@ -52,13 +52,13 @@ Fixture 只参与 CI 编译兼容检查，不属于正式交付物，也不用�
 
 ## 基本使用
 
-1. 点击“添加应用”，选择需要管理的 App。
+1. 点击首页标题栏的“添加”图标，选择需要管理的 App。
 2. 登记后进入详情页，创建空白空间或原始空间副本。
-3. 返回首页并展开账号，点击空间按钮即可切换并启动 App。
+3. 返回首页，点击应用下方的空间按钮即可切换并启动 App；进度显示在被点的按钮上。
 4. 当前空间使用西瓜红高亮；再次点击当前空间只重新启动 App。
 5. 普通空间可在详情页重命名或删除。
 6. 已配置 App 的菜单可开启“重启后自动切换并打开 App”；默认关闭时重启恢复只切换空间，不启动 App。
-7. 首页进入“备份与恢复”，可备份全部账号、单独备份 Base 或单独备份一个分账号。
+7. 首页标题栏的“备份”图标进入“备份与恢复”，可备份全部账号、单独备份 Base 或单独备份一个分账号，页面和通知显示完成百分比。
 8. 恢复时选择 `.ucsbackup`，输入密码并核对来源；Base 目标固定，分账号可覆盖现有分账号或恢复为新分账号。
 9. 同一菜单可执行“取消配置并删除分空间”。
 

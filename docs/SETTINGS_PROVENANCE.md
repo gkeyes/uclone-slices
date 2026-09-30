@@ -48,8 +48,13 @@
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.2.2`、versionCode `13`、Runtime 协议 ID `0.2.2` | 首次加入通用备份 Profile 和资源保留恢复；Manager 展示版本与协议 ID 解耦，不恢复桌面 Hook，不修改 Aggregate | `check-decision-alignment.sh` 保证 Runtime/模块协议一致，并独立校验 Manager/Fixture 交付版本 |
-| `.ucsbackup` magic `UCSBKP01`、format v1/v2、manifest/control 4 MiB、256 账号、4096 字节路径、1,000,000 条目、1 TiB 逻辑数据 | v1 保持完整备份兼容；v2 只增加签名 Profile、来源 versionCode 和排除统计，magic、压缩与加密不变 | Rust v1/v2 往返、Profile 剪枝、超限和恶意路径测试 |
+| 版本 `0.2.3`、versionCode `14`、Runtime 协议 ID `0.2.2` | 0.2.3 只修复实现与界面，不增加 wire 命令、字段或错误码，因此协议 ID 保持 `0.2.2`；Manager 展示版本与协议 ID 解耦，不修改 Aggregate | `check-decision-alignment.sh` 保证 Runtime/模块协议一致，并独立校验 Manager/Fixture 交付版本 |
+| `.ucsbackup` magic `UCSBKP01`、format v1/v2、manifest 64 MiB、helper control frame 4 MiB、256 账号、4096 字节路径、1,000,000 条目、1 TiB 逻辑数据 | v1 保持完整备份兼容；v2 只增加签名 Profile、来源 versionCode 和排除统计，magic、压缩与加密不变 | Rust v1/v2 往返、Profile 剪枝、超限和恶意路径测试 |
+| manifest 64 MiB | 主机实测 app 数据路径的 manifest 约 260 字节/条目：4 MiB 在每目录 100 个文件时于 15,937 个文件成功、16,005 个失败；64 MiB 按同一密度约容纳 25 万条目，manifest 整体驻留 helper 内存。1,000,000 条目上限仍用于暂存树校验，超出 64 MiB 的账号返回 `backup_invalid` | 3 万文件往返测试、manifest 超 4 MiB 断言 |
+| helper 进度按整百分比输出 | 进度只用于界面显示，整百分比是界面显示粒度；备份总量为逻辑大小的 2 倍（哈希一遍、写入一遍），恢复为逻辑大小 | 备份两遍与恢复的进度单调性测试 |
+| `sync_tree` 与 helper 解包用 `syncfs` | 对所在文件系统执行一次 `syncfs` 覆盖逐文件 `fsync` 的全部持久化范围，系统调用从每条目一次降为一次；不引入数值设置 | Base/槽恢复、回滚与物化测试 |
+| Runtime 日志每次启动轮转为 `ucloned.log.1` | 只保留当前与上一次启动的日志，避免 `/data/adb` 下日志跨启动无限增长；不按大小截断，不引入数值阈值 | `test-kernelsu.sh` 静态检查 |
+| 首页空间按钮默认展开 | 切换空间是首页核心操作；已保存的折叠选择继续生效 | `configuredAccountsStartExpanded` 与偏好持久化测试 |
 | zstd level 3 | zstd crate 的默认压缩级别，作为首版格式实现选择；不作为数据正确性或时限门槛 | 明文/加密归档往返测试 |
 | 默认开启 age passphrase 加密 | 账号归档可能包含凭据；默认保护、允许用户明确选择未加密。密码仅走内存和 helper stdin | Helper 协议测试、Manager UI/lint |
 | 顶层排除 `cache`、`code_cache` | 产品范围是账号状态而非可再生成缓存；APK、OBB、媒体和外部存储本来不位于被授予的 CE/DE 根 | 归档排除测试与恢复往返测试 |
