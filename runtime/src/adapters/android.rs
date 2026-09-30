@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
@@ -57,6 +57,11 @@ pub(crate) struct SystemAndroidOps {
     mountinfo: PathBuf,
     proc_root: PathBuf,
     runner: Box<dyn CommandRunner>,
+    // One SystemAndroidOps serves one request (ucloned recomposes the Runtime per request),
+    // so these answers cannot go stale across requests. Within a switch they replace two
+    // repeated full package listings and a repeated Launcher resolution.
+    package_rows: Option<Vec<(String, u32)>>,
+    launchers: BTreeMap<PackageName, String>,
 }
 
 impl SystemAndroidOps {
@@ -76,6 +81,8 @@ impl SystemAndroidOps {
             mountinfo: PathBuf::from("/proc/self/mountinfo"),
             proc_root: PathBuf::from("/proc"),
             runner: Box::<ProcessRunner>::default(),
+            package_rows: None,
+            launchers: BTreeMap::new(),
         }
     }
 
@@ -151,18 +158,25 @@ impl SystemAndroidOps {
         }
     }
 
+    fn package_rows(&mut self) -> Result<&[(String, u32)], AdapterError> {
+        if self.package_rows.is_none() {
+            let output = self.required(
+                "/system/bin/cmd",
+                &["package", "list", "packages", "-3", "-U", "--user", "0"],
+            )?;
+            let rows = output
+                .stdout
+                .lines()
+                .filter_map(parse_package_uid_row)
+                .map(|(name, uid)| (name.to_owned(), uid))
+                .collect::<Vec<_>>();
+            self.package_rows = Some(rows);
+        }
+        Ok(self.package_rows.as_deref().unwrap_or_default())
+    }
+
     fn package_uid(&mut self, package: &PackageName) -> Result<u32, AdapterError> {
-        let output = self.required(
-            "/system/bin/cmd",
-            &["package", "list", "packages", "-3", "-U", "--user", "0"],
-        )?;
-        let rows = output
-            .stdout
-            .lines()
-            .filter_map(parse_package_uid_row)
-            .map(|(name, uid)| (name.to_owned(), uid))
-            .collect::<Vec<_>>();
-        package_uid_from_rows(&rows, package)
+        package_uid_from_rows(self.package_rows()?, package)
     }
 
     fn running_uids(&self) -> Result<HashSet<u32>, AdapterError> {
@@ -209,6 +223,9 @@ impl SystemAndroidOps {
     }
 
     fn launcher_component(&mut self, package: &PackageName) -> Result<String, AdapterError> {
+        if let Some(component) = self.launchers.get(package) {
+            return Ok(component.clone());
+        }
         let output = self.required(
             "/system/bin/cmd",
             &[
@@ -224,8 +241,10 @@ impl SystemAndroidOps {
                 package.as_str(),
             ],
         )?;
-        parse_launcher_component(&output.stdout, package)
-            .ok_or_else(|| AdapterError::new("package has no Launcher activity"))
+        let component = parse_launcher_component(&output.stdout, package)
+            .ok_or_else(|| AdapterError::new("package has no Launcher activity"))?;
+        self.launchers.insert(package.clone(), component.clone());
+        Ok(component)
     }
 
     fn read_self_view(&self, package: &PackageName) -> Result<ObservedView, AdapterError> {
@@ -481,16 +500,8 @@ impl AndroidOps for SystemAndroidOps {
         if packages.is_empty() {
             return Vec::new();
         }
-        let rows = match self.required(
-            "/system/bin/cmd",
-            &["package", "list", "packages", "-3", "-U", "--user", "0"],
-        ) {
-            Ok(output) => output
-                .stdout
-                .lines()
-                .filter_map(parse_package_uid_row)
-                .map(|(name, uid)| (name.to_owned(), uid))
-                .collect::<Vec<_>>(),
+        let rows = match self.package_rows() {
+            Ok(rows) => rows.to_vec(),
             Err(error) => {
                 return packages
                     .iter()
@@ -1134,6 +1145,8 @@ mod tests {
                 mountinfo: root.join("mountinfo"),
                 proc_root: root.join("proc"),
                 runner: Box::new(runner),
+                package_rows: None,
+                launchers: BTreeMap::new(),
             },
             commands,
         )
@@ -1164,6 +1177,8 @@ mod tests {
                 mountinfo: root.join("mountinfo"),
                 proc_root: root.join("proc"),
                 runner: Box::new(runner),
+                package_rows: None,
+                launchers: BTreeMap::new(),
             },
             commands,
         )
@@ -1613,6 +1628,54 @@ mod tests {
     }
 
     #[test]
+    fn one_request_lists_packages_and_resolves_the_launcher_once() {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        let apk = root.path().join("base.apk");
+        fs::write(&apk, b"apk").unwrap();
+        fs::create_dir_all(root.path().join("canonical-ce").join(package.as_str())).unwrap();
+        fs::create_dir_all(root.path().join("canonical-de").join(package.as_str())).unwrap();
+        let process = root.path().join("proc").join("123");
+        fs::create_dir_all(&process).unwrap();
+        fs::write(
+            process.join("status"),
+            "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
+        )
+        .unwrap();
+        fs::write(process.join("mountinfo"), b"").unwrap();
+        fs::write(root.path().join("mountinfo"), b"").unwrap();
+        let commands = Rc::new(RefCell::new(Vec::new()));
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([
+                output(format!("package:{package} uid:10123\n")),
+                output(format!("package:{}\n", apk.display())),
+                output(format!("{package}/.MainActivity\n")),
+                output("Status: ok\n"),
+            ]),
+            commands: Rc::clone(&commands),
+        };
+        let (mut android, recorded) = system_with_runner(root.path(), runner);
+
+        let inspection = android.inspect(&package).unwrap();
+        android.launch_verified(&package, &SlotId::base()).unwrap();
+
+        assert!(inspection.was_running);
+        let recorded = recorded.borrow();
+        let listings = recorded
+            .iter()
+            .filter(|(_, arguments)| arguments.get(1).map(String::as_str) == Some("list"))
+            .count();
+        let resolutions = recorded
+            .iter()
+            .filter(|(_, arguments)| {
+                arguments.get(1).map(String::as_str) == Some("resolve-activity")
+            })
+            .count();
+        assert_eq!((listings, resolutions), (1, 1));
+        assert_eq!(recorded.len(), 4);
+    }
+
+    #[test]
     fn launch_rejects_a_remote_process_with_the_wrong_view() {
         let root = tempfile::tempdir().unwrap();
         let package = PackageName::new("com.example.app").unwrap();
@@ -1715,6 +1778,8 @@ mod tests {
                 mountinfo: root.path().join("mountinfo"),
                 proc_root: root.path().join("proc"),
                 runner: Box::new(runner),
+                package_rows: None,
+                launchers: BTreeMap::new(),
             };
 
             let error = android.launch_verified(&package, &slot).unwrap_err();
@@ -1770,6 +1835,8 @@ mod tests {
             mountinfo,
             proc_root: root.path().join("proc"),
             runner: Box::new(runner),
+            package_rows: None,
+            launchers: BTreeMap::new(),
         };
 
         android.apply_view(&package, &slot).unwrap();
@@ -1858,6 +1925,8 @@ mod tests {
             mountinfo,
             proc_root: root.path().join("proc"),
             runner: Box::new(runner),
+            package_rows: None,
+            launchers: BTreeMap::new(),
         };
 
         android.apply_maintenance_view(&package, &token).unwrap();
@@ -1938,6 +2007,8 @@ mod tests {
                 mountinfo,
                 proc_root: root.path().join("proc"),
                 runner: Box::new(runner),
+                package_rows: None,
+                launchers: BTreeMap::new(),
             };
 
             assert!(android.apply_view(&package, &slot).is_err());
@@ -1980,6 +2051,8 @@ mod tests {
             mountinfo,
             proc_root: root.path().join("proc"),
             runner: Box::new(runner),
+            package_rows: None,
+            launchers: BTreeMap::new(),
         };
 
         assert!(android.apply_view(&package, &SlotId::base()).is_err());
@@ -2024,6 +2097,8 @@ mod tests {
             mountinfo,
             proc_root: root.path().join("proc"),
             runner: Box::new(runner),
+            package_rows: None,
+            launchers: BTreeMap::new(),
         };
 
         android.apply_view(&package, &SlotId::base()).unwrap();
@@ -2093,6 +2168,8 @@ mod tests {
             mountinfo,
             proc_root: root.path().join("proc"),
             runner: Box::new(runner),
+            package_rows: None,
+            launchers: BTreeMap::new(),
         };
 
         let error = android
@@ -2145,6 +2222,8 @@ mod tests {
             mountinfo,
             proc_root: root.path().join("proc"),
             runner: Box::new(runner),
+            package_rows: None,
+            launchers: BTreeMap::new(),
         };
 
         let error = android
