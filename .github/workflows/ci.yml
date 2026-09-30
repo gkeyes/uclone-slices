@@ -72,7 +72,32 @@ jobs:
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:lintRelease :manager-app:assembleRelease :device-fixture-app:lintFromDebug :device-fixture-app:lintToDebug :device-fixture-app:assembleFromDebug :device-fixture-app:assembleToDebug
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:lintRelease :manager-app:assembleRelease :device-fixture-app:lintFromDebug :device-fixture-app:lintToDebug :device-fixture-app:assembleFromDebug :device-fixture-app:assembleToDebug 2>&1 | tee "$RUNNER_TEMP/gradle-android.log"
+
+      # Job logs are not always reachable from where the failure is read; the key lines are
+      # repeated as one annotation per source so they show up in the checks API and UI.
+      - name: Summarize Android failures
+        if: failure()
+        run: |
+          annotate() {
+            message=$(sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')
+            [ -n "$message" ] && printf '::error title=%s::%s\n' "$1" "$message"
+            return 0
+          }
+          if [ -f "$RUNNER_TEMP/gradle-android.log" ]; then
+            { grep -E '^e: |^w: .*error|What went wrong|> Task .* FAILED|FAILED$|Lint found|Error: |Exception|expected:' \
+              "$RUNNER_TEMP/gradle-android.log" || true; } | head -n 80 | annotate "Gradle"
+          fi
+          for report in manager-app/build/test-results/testDebugUnitTest/*.xml; do
+            [ -f "$report" ] || continue
+            { grep -A4 '<failure' "$report" || true; } | head -n 30
+          done | annotate "Unit tests"
+          for report in manager-app/build/reports/lint-results-*.txt manager-app/build/intermediates/lint_intermediate_text_report/*/*/lint-results-*.txt; do
+            [ -f "$report" ] || continue
+            { grep -B1 -A2 'Error' "$report" || true; } | head -n 60
+          done | annotate "Lint"
 
       - name: Validate KernelSU startup layer
         run: |
