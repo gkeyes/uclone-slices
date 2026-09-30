@@ -123,6 +123,7 @@
     <string name="inspect_running">正在校验备份文件</string>
     <string name="restore_running">正在恢复账号</string>
     <string name="restore_progress">已处理 %1$d / %2$d 个账号</string>
+    <string name="data_progress">已完成 %1$d%%</string>
     <string name="do_not_force_stop">操作期间 App 会保持停止；请勿强制停止 Manager 或移除模块。</string>
     <string name="backup_complete">备份完成</string>
     <string name="backup_complete_summary">已保存 %1$d 个账号，共 %2$s。</string>
@@ -157,6 +158,7 @@
     <string name="backup_restore_notification_channel">账号备份与恢复</string>
     <string name="backup_restore_notification_title">正在处理账号数据</string>
     <string name="backup_restore_notification_text">请勿强制停止 UClone Slices</string>
+    <string name="backup_restore_notification_percent">已完成 %1$d%%，请勿强制停止 UClone Slices</string>
     <string name="delete_space_title">永久删除数据空间？</string>
     <string name="delete_space_message">即将删除“%1$s”。</string>
     <string name="delete_space_data_warning">该空间的凭据、设置和其他 CE/DE 独立数据将永久删除。</string>

@@ -15,7 +15,10 @@ use zeroize::Zeroize as _;
 
 const MAGIC: &[u8; 8] = b"UCSBKP01";
 const FLAG_ENCRYPTED: u8 = 1;
-const MAX_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_CONTROL_FRAME_BYTES: u64 = 4 * 1024 * 1024;
+// A manifest line is about 260 bytes for a typical app data path (measured: 4 MiB held about
+// 16,000 files). 64 MiB keeps roughly 250,000 entries in one in-memory manifest.
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ACCOUNTS: usize = 256;
 const MAX_ENTRIES: usize = 1_000_000;
 const MAX_PATH_BYTES: usize = 4096;
@@ -204,6 +207,134 @@ pub struct ArchiveManifest {
     pub profile: Option<ArchiveProfileManifest>,
 }
 
+/// What the Manager needs from a manifest: everything except the per-entry list, plus the
+/// digest of the full manifest so a restore can prove it read the same archive it previewed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DomainSummary {
+    pub state: DomainState,
+    pub logical_size: u64,
+    pub entry_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveAccountSummary {
+    pub archive_account_id: String,
+    pub name: String,
+    pub kind: ArchiveAccountKind,
+    pub source_slot: String,
+    pub ce: DomainSummary,
+    pub de: DomainSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArchiveSummary {
+    pub format_version: u8,
+    pub package: String,
+    pub signing_kind: ArchiveSigningKind,
+    pub signing_sha256: Vec<String>,
+    pub app_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_version_code: Option<u64>,
+    pub android_version: String,
+    pub device: String,
+    pub created_at_millis: u64,
+    pub scope: ArchiveScope,
+    pub active_account_id: Option<String>,
+    pub launch_after_reboot: bool,
+    pub logical_size: u64,
+    pub accounts: Vec<ArchiveAccountSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_type: Option<ArchiveBackupType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ArchiveProfileManifest>,
+    pub manifest_sha256: String,
+}
+
+impl ArchiveManifest {
+    pub fn summary(&self) -> Result<ArchiveSummary, ArchiveError> {
+        let bytes = serde_json::to_vec(self).map_err(io_error)?;
+        let domain = |manifest: &DomainManifest| DomainSummary {
+            state: manifest.state,
+            logical_size: manifest.logical_size,
+            entry_count: manifest.entries.len() as u64,
+        };
+        Ok(ArchiveSummary {
+            format_version: self.format_version,
+            package: self.package.clone(),
+            signing_kind: self.signing_kind,
+            signing_sha256: self.signing_sha256.clone(),
+            app_version: self.app_version.clone(),
+            app_version_code: self.app_version_code,
+            android_version: self.android_version.clone(),
+            device: self.device.clone(),
+            created_at_millis: self.created_at_millis,
+            scope: self.scope,
+            active_account_id: self.active_account_id.clone(),
+            launch_after_reboot: self.launch_after_reboot,
+            logical_size: self.logical_size,
+            accounts: self
+                .accounts
+                .iter()
+                .map(|account| ArchiveAccountSummary {
+                    archive_account_id: account.archive_account_id.clone(),
+                    name: account.name.clone(),
+                    kind: account.kind,
+                    source_slot: account.source_slot.clone(),
+                    ce: domain(&account.ce),
+                    de: domain(&account.de),
+                })
+                .collect(),
+            backup_type: self.backup_type,
+            profile: self.profile.clone(),
+            manifest_sha256: format!("{:x}", Sha256::digest(&bytes)),
+        })
+    }
+}
+
+/// Reports bytes processed against a known total, once per whole percent.
+pub struct Progress<'a> {
+    done: u64,
+    total: u64,
+    last_percent: Option<u64>,
+    sink: &'a mut dyn FnMut(u64, u64),
+}
+
+impl<'a> Progress<'a> {
+    pub fn new(sink: &'a mut dyn FnMut(u64, u64)) -> Self {
+        Self {
+            done: 0,
+            total: 0,
+            last_percent: None,
+            sink,
+        }
+    }
+
+    fn set_total(&mut self, total: u64) {
+        self.total = total;
+        self.done = 0;
+        self.last_percent = None;
+        self.advance(0);
+    }
+
+    fn advance(&mut self, bytes: u64) {
+        self.done = self.done.saturating_add(bytes).min(self.total);
+        let percent = self
+            .done
+            .saturating_mul(100)
+            .checked_div(self.total)
+            .unwrap_or(100);
+        if self.last_percent != Some(percent) {
+            self.last_percent = Some(percent);
+            (self.sink)(self.done, self.total);
+        }
+    }
+}
+
+fn ignore_progress(_done: u64, _total: u64) {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchiveSource {
@@ -267,7 +398,7 @@ pub enum HelperRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum HelperResponse {
-    Manifest { manifest: Box<ArchiveManifest> },
+    Manifest { manifest: Box<ArchiveSummary> },
     Error { error: HelperErrorBody },
 }
 
@@ -280,7 +411,7 @@ pub fn read_control_frame(reader: &mut impl Read) -> Result<HelperRequest, Archi
     let mut length = [0_u8; 4];
     reader.read_exact(&mut length).map_err(io_error)?;
     let length = u32::from_be_bytes(length) as usize;
-    if length == 0 || length > MAX_MANIFEST_BYTES as usize {
+    if length == 0 || length > MAX_CONTROL_FRAME_BYTES as usize {
         return Err(ArchiveError::Invalid);
     }
     let mut bytes = vec![0_u8; length];
@@ -299,7 +430,7 @@ pub fn write_response(
 }
 
 pub fn create_backup(request: BackupRequest) -> Result<ArchiveManifest, ArchiveError> {
-    create_backup_with_owner(request, None)
+    create_backup_with_progress(request, None, &mut Progress::new(&mut ignore_progress))
 }
 
 pub fn create_backup_for_owner(
@@ -307,15 +438,22 @@ pub fn create_backup_for_owner(
     uid: u32,
     gid: u32,
 ) -> Result<ArchiveManifest, ArchiveError> {
-    create_backup_with_owner(request, Some((uid, gid)))
+    create_backup_with_progress(
+        request,
+        Some((uid, gid)),
+        &mut Progress::new(&mut ignore_progress),
+    )
 }
 
-fn create_backup_with_owner(
+/// Creates the archive, reporting progress over both passes: hashing for the manifest, then
+/// streaming every file into the archive while hashing it again against that manifest.
+pub fn create_backup_with_progress(
     mut request: BackupRequest,
     output_owner: Option<(u32, u32)>,
+    progress: &mut Progress<'_>,
 ) -> Result<ArchiveManifest, ArchiveError> {
     validate_backup_request(&request)?;
-    let manifest = build_manifest(&request)?;
+    let manifest = build_manifest(&request, progress)?;
     let password = request.password.take().map(SecretString::from);
     let temporary = request.output_path.with_extension("ucsbackup.partial");
     let _stale = fs::remove_file(&temporary);
@@ -338,10 +476,11 @@ fn create_backup_with_owner(
             Some(password) => {
                 let encryptor = age::Encryptor::with_user_passphrase(password);
                 let age_writer = encryptor.wrap_output(output).map_err(io_error)?;
-                let age_writer = write_compressed_tar(age_writer, &manifest, &request.sources)?;
+                let age_writer =
+                    write_compressed_tar(age_writer, &manifest, &request.sources, progress)?;
                 age_writer.finish().map_err(io_error)?
             }
-            None => write_compressed_tar(output, &manifest, &request.sources)?,
+            None => write_compressed_tar(output, &manifest, &request.sources, progress)?,
         };
         if let Some((uid, gid)) = output_owner {
             fchown(&output, Some(uid), Some(gid)).map_err(io_error)?;
@@ -364,6 +503,11 @@ fn create_backup_with_owner(
     result.map(|()| manifest)
 }
 
+/// Reads only the header and the manifest, which is all a preview shows.
+///
+/// A wrong password or a damaged header fails here. Every entry is still verified during
+/// `restore_backup`, which writes only into Runtime staging and clears it on any failure, so a
+/// damaged body is rejected before any account is committed.
 pub fn inspect_backup(
     input_path: &Path,
     password: Option<String>,
@@ -371,58 +515,43 @@ pub fn inspect_backup(
     let reader = open_payload(input_path, password)?;
     let decoder = zstd::stream::read::Decoder::new(reader).map_err(io_error)?;
     let mut archive = tar::Archive::new(decoder);
-    let manifest = {
-        let mut entries = archive.entries().map_err(io_error)?;
-        let Some(first) = entries.next() else {
-            return Err(ArchiveError::Invalid);
-        };
-        let mut first = first.map_err(io_error)?;
-        if first.path().map_err(io_error)?.as_ref() != Path::new("manifest.json")
-            || first.size() > MAX_MANIFEST_BYTES
-        {
-            return Err(ArchiveError::Invalid);
-        }
-        let mut bytes = Vec::with_capacity(first.size() as usize);
-        first.read_to_end(&mut bytes).map_err(io_error)?;
-        let manifest: ArchiveManifest =
-            serde_json::from_slice(&bytes).map_err(|_error| ArchiveError::Invalid)?;
-        validate_manifest(&manifest)?;
-        let expected = manifest_entry_index(&manifest);
-        let mut seen = BTreeSet::new();
-        let mut entry_count = 0_usize;
-        let mut inspected_size = 0_u64;
-        for entry in &mut entries {
-            entry_count = entry_count.saturating_add(1);
-            if entry_count > MAX_ENTRIES {
-                return Err(ArchiveError::Invalid);
-            }
-            let mut entry = entry.map_err(io_error)?;
-            let path = entry.path().map_err(io_error)?.into_owned();
-            let (account_id, domain, relative) = parse_archive_data_path(&path)?;
-            let key = (account_id.to_owned(), domain.to_owned(), relative);
-            if !seen.insert(key.clone()) {
-                return Err(ArchiveError::Invalid);
-            }
-            let expected_entry = expected.get(&key).ok_or(ArchiveError::Invalid)?;
-            validate_archive_entry(
-                &mut entry,
-                expected_entry,
-                &mut inspected_size,
-                manifest.logical_size,
-            )?;
-        }
-        if seen.len() != expected.len() || inspected_size != manifest.logical_size {
-            return Err(ArchiveError::Invalid);
-        }
-        manifest
-    };
-    validate_archive_end(archive.into_inner())?;
+    let mut entries = archive.entries().map_err(io_error)?;
+    let first = entries.next().ok_or(ArchiveError::Invalid)?;
+    read_manifest_entry(first.map_err(io_error)?)
+}
+
+fn read_manifest_entry<R: Read>(
+    mut first: tar::Entry<'_, R>,
+) -> Result<ArchiveManifest, ArchiveError> {
+    if first.path().map_err(io_error)?.as_ref() != Path::new("manifest.json")
+        || first.size() > MAX_MANIFEST_BYTES
+    {
+        return Err(ArchiveError::Invalid);
+    }
+    let capacity = usize::try_from(first.size()).map_err(|_error| ArchiveError::Invalid)?;
+    let mut bytes = Vec::with_capacity(capacity);
+    first.read_to_end(&mut bytes).map_err(io_error)?;
+    let manifest: ArchiveManifest =
+        serde_json::from_slice(&bytes).map_err(|_error| ArchiveError::Invalid)?;
+    validate_manifest(&manifest)?;
     Ok(manifest)
 }
 
-pub fn restore_backup(mut request: RestoreRequest) -> Result<ArchiveManifest, ArchiveError> {
+pub fn restore_backup(request: RestoreRequest) -> Result<ArchiveManifest, ArchiveError> {
+    restore_backup_with_progress(request, &mut Progress::new(&mut ignore_progress))
+}
+
+pub fn restore_backup_with_progress(
+    mut request: RestoreRequest,
+    progress: &mut Progress<'_>,
+) -> Result<ArchiveManifest, ArchiveError> {
     let password = request.password.take();
-    let result = restore_backup_inner(&request.input_path, password, &request.destinations);
+    let result = restore_backup_inner(
+        &request.input_path,
+        password,
+        &request.destinations,
+        progress,
+    );
     if result.is_err() {
         for destination in &request.destinations {
             let _ce = clear_directory(&destination.ce_path);
@@ -436,26 +565,16 @@ fn restore_backup_inner(
     input_path: &Path,
     password: Option<String>,
     destinations: &[RestoreDestination],
+    progress: &mut Progress<'_>,
 ) -> Result<ArchiveManifest, ArchiveError> {
     let reader = open_payload(input_path, password)?;
     let decoder = zstd::stream::read::Decoder::new(reader).map_err(io_error)?;
     let mut archive = tar::Archive::new(decoder);
     let (manifest, directories) = {
         let mut entries = archive.entries().map_err(io_error)?;
-        let Some(first) = entries.next() else {
-            return Err(ArchiveError::Invalid);
-        };
-        let mut first = first.map_err(io_error)?;
-        if first.path().map_err(io_error)?.as_ref() != Path::new("manifest.json")
-            || first.size() > MAX_MANIFEST_BYTES
-        {
-            return Err(ArchiveError::Invalid);
-        }
-        let mut manifest_bytes = Vec::with_capacity(first.size() as usize);
-        first.read_to_end(&mut manifest_bytes).map_err(io_error)?;
-        let manifest: ArchiveManifest =
-            serde_json::from_slice(&manifest_bytes).map_err(|_error| ArchiveError::Invalid)?;
-        validate_manifest(&manifest)?;
+        let first = entries.next().ok_or(ArchiveError::Invalid)?;
+        let manifest = read_manifest_entry(first.map_err(io_error)?)?;
+        progress.set_total(manifest.logical_size);
         let destination_map = destinations
             .iter()
             .map(|destination| (destination.archive_account_id.as_str(), destination))
@@ -476,7 +595,11 @@ fn restore_backup_inner(
         let expected = manifest_entry_index(&manifest);
         let mut seen = BTreeSet::new();
         let mut entry_count = 0_usize;
-        let mut extracted_size = 0_u64;
+        let mut tally = ExtractTally {
+            extracted: 0,
+            declared_total: manifest.logical_size,
+            progress,
+        };
         let mut directories = Vec::new();
         for entry in &mut entries {
             entry_count = entry_count.saturating_add(1);
@@ -505,19 +628,29 @@ fn restore_backup_inner(
                 domain_root,
                 &output,
                 expected_entry,
-                &mut extracted_size,
-                manifest.logical_size,
+                &mut tally,
                 &mut directories,
             )?;
         }
-        if seen.len() != expected.len() || extracted_size != manifest.logical_size {
+        if seen.len() != expected.len() || tally.extracted != manifest.logical_size {
             return Err(ArchiveError::Invalid);
         }
         (manifest, directories)
     };
     validate_archive_end(archive.into_inner())?;
     restore_directory_metadata(directories)?;
+    // One syncfs per staging root replaces an fsync per extracted file; success is only
+    // reported after everything written above is durable.
+    for destination in destinations {
+        sync_filesystem(&destination.ce_path)?;
+        sync_filesystem(&destination.de_path)?;
+    }
     Ok(manifest)
+}
+
+fn sync_filesystem(path: &Path) -> Result<(), ArchiveError> {
+    let directory = File::open(path).map_err(io_error)?;
+    rustix::fs::syncfs(&directory).map_err(|error| io_error(std::io::Error::from(error)))
 }
 
 fn validate_backup_request(request: &BackupRequest) -> Result<(), ArchiveError> {
@@ -555,7 +688,10 @@ fn validate_backup_request(request: &BackupRequest) -> Result<(), ArchiveError> 
     Ok(())
 }
 
-fn build_manifest(request: &BackupRequest) -> Result<ArchiveManifest, ArchiveError> {
+fn build_manifest(
+    request: &BackupRequest,
+    progress: &mut Progress<'_>,
+) -> Result<ArchiveManifest, ArchiveError> {
     let mut accounts = Vec::with_capacity(request.sources.len());
     let mut logical_size = 0_u64;
     let mut excluded = ExcludedStats::default();
@@ -598,6 +734,13 @@ fn build_manifest(request: &BackupRequest) -> Result<ArchiveManifest, ArchiveErr
             ce: ce.manifest,
             de: de.manifest,
         });
+    }
+    // The walk above only stats. Hashing is a separate pass so progress knows its total:
+    // this pass reads every byte once, and writing the archive reads it once more.
+    progress.set_total(logical_size.saturating_mul(2));
+    for (account, source) in accounts.iter_mut().zip(&request.sources) {
+        hash_domain_files(&source.ce_path, &mut account.ce, progress)?;
+        hash_domain_files(&source.de_path, &mut account.de, progress)?;
     }
     let profile = request
         .profile
@@ -649,6 +792,61 @@ impl ExcludedStats {
             .filter(|size| *size <= MAX_LOGICAL_BYTES)
             .ok_or(ArchiveError::Invalid)?;
         Ok(())
+    }
+}
+
+fn hash_domain_files(
+    root: &Path,
+    domain: &mut DomainManifest,
+    progress: &mut Progress<'_>,
+) -> Result<(), ArchiveError> {
+    for entry in &mut domain.entries {
+        if entry.kind != ManifestEntryKind::File {
+            continue;
+        }
+        let file = File::open(safe_join(root, Path::new(&entry.path))?).map_err(io_error)?;
+        let mut reader = HashingReader::new(file.take(entry.size), progress);
+        std::io::copy(&mut reader, &mut std::io::sink()).map_err(io_error)?;
+        let (digest, read) = reader.finish();
+        // A file that changed size after the walk would not match its manifest line.
+        if read != entry.size {
+            return Err(ArchiveError::Invalid);
+        }
+        entry.sha256 = Some(digest);
+    }
+    Ok(())
+}
+
+/// Hashes and counts what passes through, reporting each chunk as progress.
+struct HashingReader<'p, 's, R> {
+    inner: R,
+    hasher: Sha256,
+    read: u64,
+    progress: &'p mut Progress<'s>,
+}
+
+impl<'p, 's, R: Read> HashingReader<'p, 's, R> {
+    fn new(inner: R, progress: &'p mut Progress<'s>) -> Self {
+        Self {
+            inner,
+            hasher: Sha256::new(),
+            read: 0,
+            progress,
+        }
+    }
+
+    fn finish(self) -> (String, u64) {
+        (format!("{:x}", self.hasher.finalize()), self.read)
+    }
+}
+
+impl<R: Read> Read for HashingReader<'_, '_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.hasher.update(&buffer[..read]);
+        self.read = self.read.saturating_add(read as u64);
+        self.progress.advance(read as u64);
+        Ok(read)
     }
 }
 
@@ -761,7 +959,7 @@ fn collect_entries(
                 path: path_text(relative)?,
                 kind: ManifestEntryKind::File,
                 size: metadata.len(),
-                sha256: Some(hash_file(&path)?),
+                sha256: None,
                 link_target: None,
                 mode,
                 mtime_seconds,
@@ -828,6 +1026,7 @@ fn write_compressed_tar<W: Write>(
     writer: W,
     manifest: &ArchiveManifest,
     sources: &[ArchiveSource],
+    progress: &mut Progress<'_>,
 ) -> Result<W, ArchiveError> {
     let encoder = zstd::stream::write::Encoder::new(writer, 3).map_err(io_error)?;
     let mut builder = tar::Builder::new(encoder);
@@ -851,6 +1050,7 @@ fn write_compressed_tar<W: Write>(
             &account.archive_account_id,
             "ce",
             &account.ce,
+            progress,
         )?;
         append_domain(
             &mut builder,
@@ -858,6 +1058,7 @@ fn write_compressed_tar<W: Write>(
             &account.archive_account_id,
             "de",
             &account.de,
+            progress,
         )?;
     }
     builder.finish().map_err(io_error)?;
@@ -871,6 +1072,7 @@ fn append_domain<W: Write>(
     account_id: &str,
     domain: &str,
     manifest: &DomainManifest,
+    progress: &mut Progress<'_>,
 ) -> Result<(), ArchiveError> {
     for entry in &manifest.entries {
         let source = safe_join(root, Path::new(&entry.path))?;
@@ -906,16 +1108,23 @@ fn append_domain<W: Write>(
                     .map_err(io_error)?;
             }
             ManifestEntryKind::File => {
-                if metadata.len() != entry.size || hash_file(&source)? != entry.sha256_value()? {
+                if metadata.len() != entry.size {
                     return Err(ArchiveError::Invalid);
                 }
                 header.set_entry_type(tar::EntryType::Regular);
                 header.set_size(entry.size);
                 header.set_cksum();
+                // Hash while streaming instead of re-reading the file before appending it.
+                // A mismatch fails the whole archive, which is still an unpublished temp file.
                 let file = File::open(source).map_err(io_error)?;
+                let mut reader = HashingReader::new(file.take(entry.size), progress);
                 builder
-                    .append_data(&mut header, archive_path, file)
+                    .append_data(&mut header, archive_path, &mut reader)
                     .map_err(io_error)?;
+                let (digest, read) = reader.finish();
+                if read != entry.size || digest != entry.sha256_value()? {
+                    return Err(ArchiveError::Invalid);
+                }
             }
             ManifestEntryKind::Symlink => {
                 let target = fs::read_link(&source).map_err(io_error)?;
@@ -1268,13 +1477,18 @@ fn parse_archive_data_path(path: &Path) -> Result<(&str, &str, PathBuf), Archive
     Ok((parts[1], parts[2], parts[3..].iter().collect::<PathBuf>()))
 }
 
+struct ExtractTally<'a, 'b> {
+    extracted: u64,
+    declared_total: u64,
+    progress: &'a mut Progress<'b>,
+}
+
 fn extract_entry<R: Read>(
     entry: &mut tar::Entry<'_, R>,
     domain_root: &Path,
     output: &Path,
     expected: &ManifestEntry,
-    extracted_size: &mut u64,
-    declared_total: u64,
+    tally: &mut ExtractTally<'_, '_>,
     directories: &mut Vec<(PathBuf, u32, u64)>,
 ) -> Result<(), ArchiveError> {
     validate_archive_header(entry, expected)?;
@@ -1291,9 +1505,10 @@ fn extract_entry<R: Read>(
             directories.push((output.to_path_buf(), expected.mode, expected.mtime_seconds));
         }
         ManifestEntryKind::File => {
-            *extracted_size = extracted_size
+            tally.extracted = tally
+                .extracted
                 .checked_add(expected.size)
-                .filter(|size| *size <= declared_total)
+                .filter(|size| *size <= tally.declared_total)
                 .ok_or(ArchiveError::Invalid)?;
             let mut file = OpenOptions::new()
                 .write(true)
@@ -1314,8 +1529,8 @@ fn extract_entry<R: Read>(
                 file.write_all(&buffer[..read]).map_err(io_error)?;
                 hasher.update(&buffer[..read]);
                 remaining -= read as u64;
+                tally.progress.advance(read as u64);
             }
-            file.sync_all().map_err(io_error)?;
             fs::set_permissions(output, fs::Permissions::from_mode(expected.mode))
                 .map_err(io_error)?;
             let digest = format!("{:x}", hasher.finalize());
@@ -1346,51 +1561,6 @@ fn extract_entry<R: Read>(
             FileTime::from_unix_time(expected.mtime_seconds as i64, 0),
         )
         .map_err(io_error)?;
-    }
-    Ok(())
-}
-
-fn validate_archive_entry<R: Read>(
-    entry: &mut tar::Entry<'_, R>,
-    expected: &ManifestEntry,
-    inspected_size: &mut u64,
-    declared_total: u64,
-) -> Result<(), ArchiveError> {
-    validate_archive_header(entry, expected)?;
-    match expected.kind {
-        ManifestEntryKind::File => {
-            *inspected_size = inspected_size
-                .checked_add(expected.size)
-                .filter(|size| *size <= declared_total)
-                .ok_or(ArchiveError::Invalid)?;
-            let mut hasher = Sha256::new();
-            let mut remaining = expected.size;
-            let mut buffer = [0_u8; 64 * 1024];
-            while remaining != 0 {
-                let requested = usize::try_from(remaining.min(buffer.len() as u64))
-                    .map_err(|_error| ArchiveError::Invalid)?;
-                let read = entry.read(&mut buffer[..requested]).map_err(io_error)?;
-                if read == 0 {
-                    return Err(ArchiveError::Invalid);
-                }
-                hasher.update(&buffer[..read]);
-                remaining -= read as u64;
-            }
-            if format!("{:x}", hasher.finalize()) != expected.sha256_value()? {
-                return Err(ArchiveError::Invalid);
-            }
-        }
-        ManifestEntryKind::Directory => {}
-        ManifestEntryKind::Symlink => {
-            let target = entry
-                .link_name()
-                .map_err(io_error)?
-                .ok_or(ArchiveError::Invalid)?
-                .into_owned();
-            if path_text(&target)? != expected.link_target_value()? {
-                return Err(ArchiveError::Invalid);
-            }
-        }
     }
     Ok(())
 }
@@ -1466,20 +1636,6 @@ impl ManifestEntry {
     fn link_target_value(&self) -> Result<&str, ArchiveError> {
         self.link_target.as_deref().ok_or(ArchiveError::Invalid)
     }
-}
-
-fn hash_file(path: &Path) -> Result<String, ArchiveError> {
-    let mut file = File::open(path).map_err(io_error)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer).map_err(io_error)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn validate_archive_id(value: &str) -> Result<(), ArchiveError> {
@@ -1898,7 +2054,7 @@ mod tests {
         ));
         let bytes = fs::read(&output).unwrap();
         fs::write(&output, &bytes[..bytes.len() / 2]).unwrap();
-        assert!(inspect_backup(&output, Some("correct horse battery staple".to_owned()),).is_err());
+        // The preview only reads the manifest; the full restore below must reject the body.
         let ce = root.path().join("restore/ce");
         let de = root.path().join("restore/de");
         fs::create_dir_all(&ce).unwrap();
@@ -1929,9 +2085,131 @@ mod tests {
     }
 
     #[test]
+    fn helper_summary_keeps_counts_and_digest_without_the_entry_list() {
+        let root = tempfile::tempdir().unwrap();
+        let request = request(root.path(), false);
+        let output = request.output_path.clone();
+        let manifest = create_backup(request).unwrap();
+
+        let summary = manifest.summary().unwrap();
+        let account = &manifest.accounts[0];
+        assert_eq!(
+            summary.accounts[0].ce.entry_count,
+            account.ce.entries.len() as u64
+        );
+        assert_eq!(
+            summary.accounts[0].de.entry_count,
+            account.de.entries.len() as u64
+        );
+        assert_eq!(summary.logical_size, manifest.logical_size);
+        assert_eq!(
+            inspect_backup(&output, None).unwrap().summary().unwrap(),
+            summary
+        );
+        let json = serde_json::to_string(&HelperResponse::Manifest {
+            manifest: Box::new(summary),
+        })
+        .unwrap();
+        assert!(!json.contains("\"entries\""));
+        assert!(json.contains("\"manifest_sha256\""));
+    }
+
+    #[test]
+    fn progress_reports_both_backup_passes_and_the_restore() {
+        let root = tempfile::tempdir().unwrap();
+        let request = request(root.path(), false);
+        let output = request.output_path.clone();
+        let mut backup_reports = Vec::new();
+        let mut sink = |done, total| backup_reports.push((done, total));
+        let manifest =
+            create_backup_with_progress(request, None, &mut Progress::new(&mut sink)).unwrap();
+
+        assert!(manifest.logical_size > 0);
+        assert_eq!(
+            backup_reports.last(),
+            Some(&(manifest.logical_size * 2, manifest.logical_size * 2))
+        );
+        assert!(backup_reports.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+
+        let ce = root.path().join("restore/ce");
+        let de = root.path().join("restore/de");
+        fs::create_dir_all(&ce).unwrap();
+        fs::create_dir_all(&de).unwrap();
+        let mut restore_reports = Vec::new();
+        let mut sink = |done, total| restore_reports.push((done, total));
+        restore_backup_with_progress(
+            RestoreRequest {
+                input_path: output,
+                password: None,
+                destinations: vec![RestoreDestination {
+                    archive_account_id: "account-0".to_owned(),
+                    ce_path: ce,
+                    de_path: de,
+                }],
+            },
+            &mut Progress::new(&mut sink),
+        )
+        .unwrap();
+        assert_eq!(
+            restore_reports.last(),
+            Some(&(manifest.logical_size, manifest.logical_size))
+        );
+    }
+
+    #[test]
+    fn an_account_with_tens_of_thousands_of_files_round_trips() {
+        let root = tempfile::tempdir().unwrap();
+        let mut request = request(root.path(), false);
+        let images = request.sources[0]
+            .ce_path
+            .join("MicroMsg/0123456789abcdef0123456789abcdef/image2");
+        // The old 4 MiB manifest limit rejected about 16,000 files with paths like these.
+        for index in 0..30_000_u32 {
+            let directory = images.join(format!("{:02x}", index / 128));
+            if index % 128 == 0 {
+                fs::create_dir_all(&directory).unwrap();
+            }
+            fs::write(
+                directory.join(format!("th_{index:032x}")),
+                index.to_le_bytes(),
+            )
+            .unwrap();
+        }
+        request.password = None;
+        let output = request.output_path.clone();
+        let manifest = create_backup(request).unwrap();
+        assert!(serde_json::to_vec(&manifest).unwrap().len() > 4 * 1024 * 1024);
+
+        let ce = root.path().join("restore/ce");
+        let de = root.path().join("restore/de");
+        fs::create_dir_all(&ce).unwrap();
+        fs::create_dir_all(&de).unwrap();
+        restore_backup(RestoreRequest {
+            input_path: output,
+            password: None,
+            destinations: vec![RestoreDestination {
+                archive_account_id: "account-0".to_owned(),
+                ce_path: ce.clone(),
+                de_path: de,
+            }],
+        })
+        .unwrap();
+        let last = ce.join(format!(
+            "MicroMsg/0123456789abcdef0123456789abcdef/image2/{:02x}/th_{:032x}",
+            29_999_u32 / 128,
+            29_999_u32
+        ));
+        assert_eq!(fs::read(last).unwrap(), 29_999_u32.to_le_bytes());
+    }
+
+    #[test]
     fn archive_scope_requires_a_complete_active_account_and_base_contract() {
         let root = tempfile::tempdir().unwrap();
-        let mut manifest = build_manifest(&request(root.path(), false)).unwrap();
+        let mut manifest = build_manifest(
+            &request(root.path(), false),
+            &mut Progress::new(&mut ignore_progress),
+        )
+        .unwrap();
         manifest.active_account_id = None;
         assert!(validate_manifest(&manifest).is_err());
 

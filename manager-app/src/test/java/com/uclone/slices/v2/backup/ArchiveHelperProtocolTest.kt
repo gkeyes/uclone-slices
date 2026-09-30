@@ -93,7 +93,7 @@ class ArchiveHelperProtocolTest {
 
         val decoded = assertIs<ArchiveHelperResult.Success>(
             ArchiveHelperProtocol.decode(
-                """{"manifest":{"format_version":2,"package":"com.tencent.tmgp.dfm","signing_kind":"lineage","signing_sha256":["${"a".repeat(64)}"],"app_version":"1.201.37114.81","app_version_code":2019,"android_version":"17","device":"device","created_at_millis":1,"scope":"account","active_account_id":"base","launch_after_reboot":false,"logical_size":7,"accounts":[],"backup_type":"profiled_account","profile":{"id":"delta-force-cn-account-v1","revision":1,"rules_digest":"${"b".repeat(64)}","excluded_entries":42,"excluded_logical_size":8000000000}}}""",
+                """{"manifest":{"format_version":2,"package":"com.tencent.tmgp.dfm","signing_kind":"lineage","signing_sha256":["${"a".repeat(64)}"],"app_version":"1.201.37114.81","app_version_code":2019,"android_version":"17","device":"device","created_at_millis":1,"scope":"account","active_account_id":"base","launch_after_reboot":false,"logical_size":7,"accounts":[],"backup_type":"profiled_account","profile":{"id":"delta-force-cn-account-v1","revision":1,"rules_digest":"${"b".repeat(64)}","excluded_entries":42,"excluded_logical_size":8000000000},"manifest_sha256":"${"c".repeat(64)}"}}""",
             ),
         )
         assertEquals(2, decoded.manifest.formatVersion)
@@ -103,9 +103,38 @@ class ArchiveHelperProtocolTest {
     }
 
     @Test
+    fun progressLinesAreSeparatedFromTheResponse() {
+        assertEquals(
+            5L to 10L,
+            ArchiveHelperProtocol.decodeProgress("""{"progress":{"done":5,"total":10}}"""),
+        )
+        assertEquals(null, ArchiveHelperProtocol.decodeProgress("""{"error":{"code":"x"}}"""))
+        assertEquals(null, ArchiveHelperProtocol.decodeProgress("not json"))
+    }
+
+    @Test
+    fun archiveHeaderIsReadWithoutCopyingTheDocument() {
+        val magic = "UCSBKP01".toByteArray(Charsets.US_ASCII)
+        assertEquals(
+            ArchiveHeader.Valid(encrypted = true),
+            archiveHeader(magic + byteArrayOf(1), 9),
+        )
+        assertEquals(
+            ArchiveHeader.Valid(encrypted = false),
+            archiveHeader(magic + byteArrayOf(0), 9),
+        )
+        assertEquals(ArchiveHeader.Incompatible, archiveHeader(magic + byteArrayOf(2), 9))
+        assertEquals(ArchiveHeader.Invalid, archiveHeader(magic + byteArrayOf(1), 8))
+        assertEquals(
+            ArchiveHeader.Invalid,
+            archiveHeader("NOTABACK".toByteArray(Charsets.US_ASCII) + byteArrayOf(0), 9),
+        )
+    }
+
+    @Test
     fun helperManifestAndErrorsDecodeWithoutCompatibilityAliases() {
         val manifest = """
-            {"manifest":{"format_version":1,"package":"com.example.app","signing_kind":"lineage","signing_sha256":["${"a".repeat(64)}"],"app_version":"1","android_version":"17","device":"device","created_at_millis":1,"scope":"account","active_account_id":"base","launch_after_reboot":false,"logical_size":7,"accounts":[{"archive_account_id":"base","name":"系统原始空间","kind":"base","source_slot":"base","ce":{"state":"data","logical_size":7,"entries":[{"path":"files/a","kind":"file","size":7,"sha256":"${"b".repeat(64)}","link_target":null,"mode":384,"mtime_seconds":1}]},"de":{"state":"empty","logical_size":0,"entries":[]}}]}}
+            {"manifest":{"format_version":1,"package":"com.example.app","signing_kind":"lineage","signing_sha256":["${"a".repeat(64)}"],"app_version":"1","android_version":"17","device":"device","created_at_millis":1,"scope":"account","active_account_id":"base","launch_after_reboot":false,"logical_size":7,"accounts":[{"archive_account_id":"base","name":"系统原始空间","kind":"base","source_slot":"base","ce":{"state":"data","logical_size":7,"entry_count":1},"de":{"state":"empty","logical_size":0,"entry_count":0}}],"manifest_sha256":"${"c".repeat(64)}"}}
         """.trimIndent()
         val decoded = assertIs<ArchiveHelperResult.Success>(
             ArchiveHelperProtocol.decode(manifest),
@@ -115,6 +144,7 @@ class ArchiveHelperProtocolTest {
         assertEquals(SigningKind.Lineage, decoded.manifest.signingKind)
         assertEquals(7, decoded.manifest.logicalSize)
         assertEquals(1, decoded.manifest.accounts.single().ce.entryCount)
+        assertEquals("c".repeat(64), decoded.manifest.manifestSha256)
         assertEquals(
             ArchiveHelperResult.Failure("backup_auth_failed"),
             ArchiveHelperProtocol.decode(

@@ -58,8 +58,13 @@ internal enum class BackupJobKind {
 
 internal sealed interface BackupJobState {
     data object Idle : BackupJobState
-    data class Running(val kind: BackupJobKind, val completed: Int = 0, val total: Int = 0) :
-        BackupJobState
+    data class Running(
+        val kind: BackupJobKind,
+        val completed: Int = 0,
+        val total: Int = 0,
+        val bytesDone: Long = 0,
+        val bytesTotal: Long = 0,
+    ) : BackupJobState
     data class PasswordRequired(val sourceUri: String, val wrongPassword: Boolean) : BackupJobState
     data class Preview(
         val sessionId: String,
@@ -127,6 +132,26 @@ internal object BackupRestoreJobRegistry {
     fun reset() {
         mutableState.value = BackupJobState.Idle
     }
+
+    /**
+     * Deletes archives a previous Manager process left in its cache (it may have been killed
+     * mid-backup, and an unencrypted archive holds account data). Only runs while this process
+     * has no job, pending job or restore session that could still own a file there.
+     */
+    fun sweepStaleCache(context: Context) {
+        synchronized(lock) {
+            if (
+                mutableState.value is BackupJobState.Running ||
+                pending.isNotEmpty() ||
+                sessions.isNotEmpty()
+            ) {
+                return
+            }
+            File(context.cacheDir, CACHE_DIRECTORY).listFiles()?.forEach { it.delete() }
+        }
+    }
+
+    const val CACHE_DIRECTORY = "backup-restore"
 
     private fun BackupRestoreJob.kind(): BackupJobKind = when (this) {
         is BackupRestoreJob.Backup -> BackupJobKind.Backup

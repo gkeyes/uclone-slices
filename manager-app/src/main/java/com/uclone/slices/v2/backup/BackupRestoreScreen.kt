@@ -17,6 +17,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -666,7 +667,22 @@ private fun RunningContent(state: BackupRestoreUiState, contentPadding: PaddingV
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 18.dp),
         )
-        if (running != null && running.total > 0) {
+        if (running != null && running.bytesTotal > 0) {
+            val fraction = (running.bytesDone.toDouble() / running.bytesTotal)
+                .coerceIn(0.0, 1.0)
+                .toFloat()
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 14.dp),
+            )
+            Text(
+                stringResource(R.string.data_progress, (fraction * 100).toInt()),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        } else if (running != null && running.total > 0) {
             Text(
                 stringResource(R.string.restore_progress, running.completed, running.total),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,

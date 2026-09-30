@@ -4,8 +4,9 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::{Component, Path, PathBuf};
 
 use uclone_slices_runtime::archive::{
-    ArchiveError, HelperRequest, HelperResponse, create_backup_for_owner, inspect_backup,
-    read_control_frame, restore_backup, write_response,
+    ArchiveError, ArchiveManifest, HelperRequest, HelperResponse, Progress,
+    create_backup_with_progress, inspect_backup, read_control_frame, restore_backup_with_progress,
+    write_response,
 };
 
 const MANAGER_PACKAGE: &str = "com.uclone.slices.v2";
@@ -49,20 +50,20 @@ fn run() -> Result<HelperResponse, ArchiveError> {
                     &source.de_path,
                 )?;
             }
-            create_backup_for_owner(*request, manager_uid, manager_gid).map(|manifest| {
-                HelperResponse::Manifest {
-                    manifest: Box::new(manifest),
-                }
-            })
+            let mut sink = write_progress;
+            let manifest = create_backup_with_progress(
+                *request,
+                Some((manager_uid, manager_gid)),
+                &mut Progress::new(&mut sink),
+            )?;
+            summary_response(&manifest)
         }
         HelperRequest::Inspect {
             input_path,
             password,
         } => {
             validate_manager_cache_path(&input_path, true)?;
-            inspect_backup(&input_path, password).map(|manifest| HelperResponse::Manifest {
-                manifest: Box::new(manifest),
-            })
+            summary_response(&inspect_backup(&input_path, password)?)
         }
         HelperRequest::Restore(request) => {
             validate_manager_cache_path(&request.input_path, true)?;
@@ -70,11 +71,27 @@ fn run() -> Result<HelperResponse, ArchiveError> {
                 validate_transfer_destination(&destination.ce_path, true)?;
                 validate_transfer_destination(&destination.de_path, false)?;
             }
-            restore_backup(request).map(|manifest| HelperResponse::Manifest {
-                manifest: Box::new(manifest),
-            })
+            let mut sink = write_progress;
+            let manifest = restore_backup_with_progress(request, &mut Progress::new(&mut sink))?;
+            summary_response(&manifest)
         }
     }
+}
+
+fn summary_response(manifest: &ArchiveManifest) -> Result<HelperResponse, ArchiveError> {
+    Ok(HelperResponse::Manifest {
+        manifest: Box::new(manifest.summary()?),
+    })
+}
+
+/// One `{"progress":…}` line per whole percent, before the single response line.
+fn write_progress(done: u64, total: u64) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(
+        stdout,
+        "{{\"progress\":{{\"done\":{done},\"total\":{total}}}}}"
+    );
+    let _ = stdout.flush();
 }
 
 fn reject_arguments() -> Result<(), ArchiveError> {

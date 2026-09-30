@@ -15,16 +15,23 @@ internal class RootArchiveHelper(
         ProcessBuilder("su", "-c", command).start()
     },
 ) {
-    suspend fun backup(request: BackupArchiveRequest): ArchiveHelperResult =
-        execute(ArchiveHelperProtocol.encodeBackup(request))
+    suspend fun backup(
+        request: BackupArchiveRequest,
+        onProgress: (done: Long, total: Long) -> Unit = { _, _ -> },
+    ): ArchiveHelperResult = execute(ArchiveHelperProtocol.encodeBackup(request), onProgress)
 
     suspend fun inspect(inputPath: String, password: CharArray?): ArchiveHelperResult =
-        execute(ArchiveHelperProtocol.encodeInspect(inputPath, password))
+        execute(ArchiveHelperProtocol.encodeInspect(inputPath, password)) { _, _ -> }
 
-    suspend fun restore(request: RestoreArchiveRequest): ArchiveHelperResult =
-        execute(ArchiveHelperProtocol.encodeRestore(request))
+    suspend fun restore(
+        request: RestoreArchiveRequest,
+        onProgress: (done: Long, total: Long) -> Unit = { _, _ -> },
+    ): ArchiveHelperResult = execute(ArchiveHelperProtocol.encodeRestore(request), onProgress)
 
-    private suspend fun execute(control: ByteArray): ArchiveHelperResult =
+    private suspend fun execute(
+        control: ByteArray,
+        onProgress: (done: Long, total: Long) -> Unit,
+    ): ArchiveHelperResult =
         runInterruptible(Dispatchers.IO) {
             try {
                 if (!installVerifiedHelper()) return@runInterruptible ArchiveHelperResult.TransportFailure
@@ -39,7 +46,17 @@ internal class RootArchiveHelper(
                     }
                     control.fill(0)
                     val response = process.inputStream.bufferedReader().use { reader ->
-                        reader.readLine()?.take(MAX_RESPONSE_CHARS + 1)
+                        var result: String? = null
+                        while (true) {
+                            val line = reader.readLine()?.take(MAX_RESPONSE_CHARS + 1) ?: break
+                            val progress = ArchiveHelperProtocol.decodeProgress(line)
+                            if (progress == null) {
+                                result = line
+                                break
+                            }
+                            onProgress(progress.first, progress.second)
+                        }
+                        result
                     }
                     val exitCode = process.waitFor()
                     stderrReader.join()

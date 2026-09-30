@@ -55,6 +55,8 @@ internal data class ArchiveManifest(
     val accounts: List<ArchiveAccount>,
     val backupType: String?,
     val profile: ArchiveProfileManifest?,
+    /** SHA-256 of the full manifest inside the archive; the helper returns only this summary. */
+    val manifestSha256: String = "",
 )
 
 internal sealed interface ArchiveHelperResult {
@@ -174,6 +176,12 @@ internal object ArchiveHelperProtocol {
         .toString()
         .toByteArray(Charsets.UTF_8)
 
+    /** Returns `(done, total)` for a helper progress line, or null for any other line. */
+    fun decodeProgress(line: String): Pair<Long, Long>? = runCatching {
+        val progress = JSONObject(line).optJSONObject("progress") ?: return null
+        progress.getLong("done") to progress.getLong("total")
+    }.getOrNull()
+
     fun decode(frame: String): ArchiveHelperResult = runCatching {
         val root = JSONObject(frame)
         root.optJSONObject("error")?.let { error ->
@@ -225,11 +233,12 @@ internal object ArchiveHelperProtocol {
                 excludedLogicalSize = profile.getLong("excluded_logical_size"),
             )
         },
+        manifestSha256 = json.getString("manifest_sha256"),
     )
 
     private fun parseDomain(json: JSONObject): ArchiveDomainSummary = ArchiveDomainSummary(
         logicalSize = json.getLong("logical_size"),
-        entryCount = json.getJSONArray("entries").length(),
+        entryCount = json.getInt("entry_count"),
     )
 
     private fun JSONArray.strings(): List<String> =

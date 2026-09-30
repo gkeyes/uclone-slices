@@ -54,6 +54,7 @@ internal class BackupRestoreService : Service() {
                 applicationContext,
                 RootRuntimeClient(),
                 RootArchiveHelper(applicationContext),
+                onBytesProgress = ::showProgress,
             )
             try {
                 engine.run(job)
@@ -82,14 +83,21 @@ internal class BackupRestoreService : Service() {
         stopSelf(startId)
     }
 
-    private fun startForegroundNow() {
+    private fun showProgress(percent: Int) {
+        startForegroundNow(percent)
+    }
+
+    private fun startForegroundNow(percent: Int? = null) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_storage)
             .setContentTitle(getString(R.string.backup_restore_notification_title))
-            .setContentText(getString(R.string.backup_restore_notification_text))
+            .setContentText(
+                percent?.let { getString(R.string.backup_restore_notification_percent, it) }
+                    ?: getString(R.string.backup_restore_notification_text),
+            )
             .setOngoing(true)
             .setOnlyAlertOnce(true)
-            .setProgress(0, 0, true)
+            .setProgress(100, percent ?: 0, percent == null)
             .build()
         ServiceCompat.startForeground(
             this,
@@ -122,7 +130,15 @@ internal class BackupRestoreEngine(
     private val context: android.content.Context,
     private val runtime: RuntimeClient,
     private val helper: RootArchiveHelper,
+    private val onBytesProgress: (percent: Int) -> Unit = {},
 ) {
+    private fun publishBytes(kind: BackupJobKind, done: Long, total: Long) {
+        BackupRestoreJobRegistry.publish(
+            BackupJobState.Running(kind, bytesDone = done, bytesTotal = total),
+        )
+        if (total > 0) onBytesProgress(((done * 100) / total).toInt())
+    }
+
     suspend fun run(job: BackupRestoreJob) {
         when (job) {
             is BackupRestoreJob.Backup -> performBackup(job)
@@ -179,7 +195,7 @@ internal class BackupRestoreEngine(
                     sources = lease.sources,
                     profile = job.profile,
                 ),
-            )
+            ) { done, total -> publishBytes(BackupJobKind.Backup, done, total) }
             result = when (helperResult) {
                 is ArchiveHelperResult.Success -> {
                     copyToDocument(outputFile, destination)
@@ -214,6 +230,28 @@ internal class BackupRestoreEngine(
         var input: File? = null
         var retainPassword = false
         try {
+            // Read the 9-byte header from the document first: an encrypted archive opened
+            // without a password goes straight to the password page instead of being copied
+            // into the cache only to be deleted again.
+            when (val header = readArchiveHeader(Uri.parse(job.sourceUri))) {
+                ArchiveHeader.Invalid -> {
+                    BackupRestoreJobRegistry.publish(BackupJobState.Failure("backup_invalid"))
+                    return
+                }
+                ArchiveHeader.Incompatible -> {
+                    BackupRestoreJobRegistry.publish(BackupJobState.Failure("backup_incompatible"))
+                    return
+                }
+                is ArchiveHeader.Valid -> if (header.encrypted && job.password == null) {
+                    BackupRestoreJobRegistry.publish(
+                        BackupJobState.PasswordRequired(
+                            sourceUri = job.sourceUri,
+                            wrongPassword = false,
+                        ),
+                    )
+                    return
+                }
+            }
             val inputFile = cacheFile("restore-${job.id}.ucsbackup", create = true)
             input = inputFile
             copyFromDocument(Uri.parse(job.sourceUri), inputFile)
@@ -329,7 +367,7 @@ internal class BackupRestoreEngine(
                         password = session.password,
                         staging = lease.staging,
                     ),
-                )
+                ) { done, total -> publishBytes(BackupJobKind.Restore, done, total) }
             ) {
                 is ArchiveHelperResult.Failure -> {
                     BackupRestoreJobRegistry.publish(BackupJobState.Failure(extracted.code))
@@ -425,8 +463,22 @@ internal class BackupRestoreEngine(
         else -> "operation_failed"
     }
 
+    private fun readArchiveHeader(uri: Uri): ArchiveHeader {
+        val header = ByteArray(ARCHIVE_HEADER_BYTES)
+        val read = context.contentResolver.openInputStream(uri)?.use { input ->
+            var total = 0
+            while (total < header.size) {
+                val count = input.read(header, total, header.size - total)
+                if (count < 0) break
+                total += count
+            }
+            total
+        } ?: throw IOException("document unavailable")
+        return archiveHeader(header, read)
+    }
+
     private fun cacheFile(name: String, create: Boolean): File {
-        val directory = File(context.cacheDir, "backup-restore")
+        val directory = File(context.cacheDir, BackupRestoreJobRegistry.CACHE_DIRECTORY)
         if (!directory.exists() && !directory.mkdir()) throw IOException("cache unavailable")
         directory.setReadable(false, false)
         directory.setWritable(false, false)
@@ -483,7 +535,27 @@ internal class BackupRestoreEngine(
 
     private companion object {
         const val RESTORE_MARGIN = 64L * 1024 * 1024
+        const val ARCHIVE_HEADER_BYTES = 9
     }
+}
+
+internal sealed interface ArchiveHeader {
+    data object Invalid : ArchiveHeader
+    data object Incompatible : ArchiveHeader
+    data class Valid(val encrypted: Boolean) : ArchiveHeader
+}
+
+private val ARCHIVE_MAGIC = "UCSBKP01".toByteArray(Charsets.US_ASCII)
+
+/** Mirrors the helper's header rules: 8-byte magic, then flags with only bit 0 (encrypted). */
+internal fun archiveHeader(header: ByteArray, length: Int): ArchiveHeader {
+    if (length < ARCHIVE_MAGIC.size + 1) return ArchiveHeader.Invalid
+    if (!header.copyOfRange(0, ARCHIVE_MAGIC.size).contentEquals(ARCHIVE_MAGIC)) {
+        return ArchiveHeader.Invalid
+    }
+    val flags = header[ARCHIVE_MAGIC.size].toInt() and 0xff
+    if (flags and 0xfe != 0) return ArchiveHeader.Incompatible
+    return ArchiveHeader.Valid(encrypted = flags and 1 != 0)
 }
 
 internal fun backupFinalizationCommand(
