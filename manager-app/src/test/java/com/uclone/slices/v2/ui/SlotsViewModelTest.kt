@@ -697,7 +697,7 @@ class SlotsViewModelTest {
     }
 
     @Test
-    fun openingAConfiguredAppShowsItsPageBeforeTheRuntimeReadReturns() = runBlocking {
+    fun openingAConfiguredAppShowsItsPageBeforeTheRuntimeReadReturns() = runBlocking<Unit> {
         val client = BlockingGetPackageRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
 
@@ -713,7 +713,7 @@ class SlotsViewModelTest {
     }
 
     @Test
-    fun quickActivationShowsProgressOnTheTappedSpaceInsteadOfADialog() = runBlocking {
+    fun quickActivationShowsProgressOnTheTappedSpaceInsteadOfADialog() = runBlocking<Unit> {
         val client = BlockingQuickRuntimeClient()
         val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
 
