@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.uclone.slices.v2.R
 
@@ -67,7 +68,62 @@ internal fun RuntimeStatusScreen(
                 onClick = { onIntent(UiIntent.Refresh) },
                 enabled = !state.busy,
                 modifier = Modifier.fillMaxWidth(),
+                primary = state.operationsAllowed,
             )
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                SlicesActionButton(
+                    text = stringResource(R.string.restart_runtime),
+                    onClick = { onIntent(UiIntent.RestartRuntime) },
+                    enabled = !state.busy,
+                    modifier = Modifier.fillMaxWidth(),
+                    primary = !state.operationsAllowed,
+                )
+                Text(
+                    text = stringResource(R.string.restart_runtime_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        item {
+            RuntimeLogCard(
+                log = state.runtimeLog,
+                onLoad = { onIntent(UiIntent.LoadRuntimeLog) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RuntimeLogCard(log: String?, onLoad: () -> Unit) {
+    SlicesPanel(
+        modifier = Modifier.fillMaxWidth(),
+        cornerRadius = 18.dp,
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.runtime_log),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                SlicesTextAction(
+                    text = stringResource(R.string.load_runtime_log),
+                    onClick = onLoad,
+                    primary = true,
+                )
+            }
+            if (log != null) {
+                Text(
+                    text = log.ifBlank { stringResource(R.string.runtime_log_empty) },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+            }
         }
     }
 }

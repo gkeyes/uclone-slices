@@ -1,7 +1,6 @@
 <resources>
     <string name="app_name">UClone Slices</string>
     <string name="spaces_title">数据空间</string>
-    <string name="spaces_subtitle">为应用创建独立数据环境，按需切换使用状态</string>
     <string name="refresh">刷新</string>
     <string name="retry">重试</string>
     <string name="dismiss">知道了</string>
@@ -186,6 +185,13 @@
     <string name="unavailable">不可用</string>
     <string name="refresh_status">刷新状态</string>
     <string name="reconnect">重新连接</string>
+    <string name="restart_runtime">重启 Runtime</string>
+    <string name="restart_runtime_hint">仅在连接不上或版本不一致时使用；正常运行的 Runtime 不会被打断。</string>
+    <string name="runtime_log">最近日志</string>
+    <string name="load_runtime_log">查看日志</string>
+    <string name="runtime_log_empty">暂无日志</string>
+    <string name="search">搜索</string>
+    <string name="environment_status">运行环境状态</string>
 
     <string name="operation_refreshing">正在刷新空间状态</string>
     <string name="operation_preparing_configuration">正在读取应用信息</string>
@@ -199,6 +205,7 @@
     <string name="operation_unenrolling">正在取消“%1$s”的配置</string>
     <string name="operation_saving_reboot_launch">正在保存重启启动设置</string>
     <string name="operation_rebinding">正在无损重新绑定应用配置</string>
+    <string name="operation_restarting_runtime">正在重启 Runtime</string>
     <string name="operation_wait_hint">完成前请保持当前页面</string>
 
     <string name="error_local_apps">读取本地应用失败，请重试</string>
@@ -210,6 +217,10 @@
     <string name="error_identity_protected">旧分空间已保护，当前应用身份不兼容，无法安全接管</string>
     <string name="error_signing_unavailable">无法读取应用签名，旧分空间保持不动</string>
     <string name="error_runtime_version_mismatch">Manager 与 Runtime 版本不一致；当前仅可查看，请先升级模块</string>
+    <string name="error_account_io_busy">该应用正在备份或恢复，完成后再操作</string>
+    <string name="error_storage_insufficient">存储空间不足，未做任何改动</string>
+    <string name="error_runtime_restart_failed">Runtime 没有启动成功，可查看日志或重启手机</string>
+    <string name="success_runtime_restarted">Runtime 已重新连接</string>
     <string name="success_configured">应用已配置</string>
     <string name="success_rebound">已保留分空间并完成重新绑定，应用未启动</string>
     <string name="success_created">已创建“%1$s”</string>

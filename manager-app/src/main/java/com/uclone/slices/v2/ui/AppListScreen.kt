@@ -12,15 +12,18 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,6 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,12 +54,15 @@ internal fun AppListScreen(
     onIntent: (UiIntent) -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
     val packageByName = remember(state.packages) {
         state.packages.associateBy(PackageSnapshot::packageName)
     }
     val managedApps = remember(state.installedApps, state.packages, query) {
         buildAppSections(state.installedApps, state.packages, query).managed
     }
+    val runtimeHealthy = state.runtimeReady && state.runtimeCompatible
+    val activating = state.operation as? OperationUiState.ActivatingSpace
 
     LazyColumn(
         modifier = Modifier
@@ -66,43 +73,33 @@ internal fun AppListScreen(
     ) {
         item {
             HomeHeader(
+                runtimeHealthy = runtimeHealthy,
                 refreshing = state.operation is OperationUiState.Refreshing,
+                busy = state.busy,
+                backupEnabled = !state.busy && state.operationsAllowed,
+                onStatus = { onIntent(UiIntent.OpenRuntimeStatus) },
+                onSearch = {
+                    searchOpen = !searchOpen
+                    if (!searchOpen) query = ""
+                },
+                onAdd = { onIntent(UiIntent.OpenAddApps) },
+                onBackup = { onIntent(UiIntent.OpenBackupRestore()) },
                 onRefresh = { onIntent(UiIntent.Refresh) },
             )
         }
-        item {
-            RuntimeStatusCard(
-                runtimeReady = state.runtimeReady,
-                runtimeCompatible = state.runtimeCompatible,
-                busy = state.busy,
-                enabled = !state.busy,
-                onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
-            )
+        // A healthy Runtime is a dot in the header; only a problem takes a whole card.
+        if (!runtimeHealthy && state.initialLoadComplete) {
+            item {
+                RuntimeStatusCard(
+                    runtimeReady = state.runtimeReady,
+                    runtimeCompatible = state.runtimeCompatible,
+                    busy = state.busy,
+                    enabled = !state.busy,
+                    onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
+                )
+            }
         }
-        item {
-            SlicesActionButton(
-                text = stringResource(R.string.add_app),
-                onClick = { onIntent(UiIntent.OpenAddApps) },
-                enabled = !state.busy,
-                modifier = Modifier.fillMaxWidth(),
-                primary = false,
-                icon = painterResource(R.drawable.ic_add),
-            )
-        }
-        item {
-            SlicesActionButton(
-                text = stringResource(R.string.backup_restore_action),
-                onClick = { onIntent(UiIntent.OpenBackupRestore()) },
-                enabled = !state.busy && state.operationsAllowed,
-                modifier = Modifier.fillMaxWidth(),
-                primary = false,
-                icon = painterResource(R.drawable.ic_backup),
-            )
-        }
-
-        if (!state.initialLoadComplete) {
-            item { LoadingAppsMessage() }
-        } else {
+        if (searchOpen || query.isNotEmpty()) {
             item {
                 SlicesSearchField(
                     value = query,
@@ -112,11 +109,14 @@ internal fun AppListScreen(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+        }
+
+        if (!state.initialLoadComplete) {
+            item { LoadingAppsMessage() }
+        } else {
             item {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -159,6 +159,8 @@ internal fun AppListScreen(
                         enabled = !state.busy && state.runtimeReady,
                         operationsEnabled = !state.busy && state.operationsAllowed,
                         accountsExpanded = state.configuredAccountsExpanded,
+                        activatingPackage = activating?.packageName,
+                        activatingSlot = activating?.slotId,
                         onOpen = { onIntent(UiIntent.OpenPackage(it)) },
                         onActivate = { packageName, slotId ->
                             onIntent(UiIntent.QuickActivateSlot(packageName, slotId))
@@ -179,23 +181,60 @@ internal fun AppListScreen(
 
 @Composable
 private fun HomeHeader(
+    runtimeHealthy: Boolean,
     refreshing: Boolean,
+    busy: Boolean,
+    backupEnabled: Boolean,
+    onStatus: () -> Unit,
+    onSearch: () -> Unit,
+    onAdd: () -> Unit,
+    onBackup: () -> Unit,
     onRefresh: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .clip(MaterialTheme.shapes.small)
+                .clickable(enabled = !busy, onClick = onStatus),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 text = stringResource(R.string.spaces_title),
                 style = MaterialTheme.typography.headlineMedium,
+                maxLines = 1,
             )
-            Text(
-                text = stringResource(R.string.spaces_subtitle),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
+            Surface(
+                modifier = Modifier
+                    .padding(start = 10.dp)
+                    .size(10.dp),
+                shape = CircleShape,
+                color = if (runtimeHealthy) SlicesSuccess else SlicesWarning,
+                content = {},
+            )
+        }
+        IconButton(onClick = onSearch) {
+            Icon(
+                painter = painterResource(R.drawable.ic_search),
+                contentDescription = stringResource(R.string.search),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        IconButton(onClick = onAdd, enabled = !busy) {
+            Icon(
+                painter = painterResource(R.drawable.ic_add),
+                contentDescription = stringResource(R.string.add_app),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+        IconButton(onClick = onBackup, enabled = backupEnabled) {
+            Icon(
+                painter = painterResource(R.drawable.ic_backup),
+                contentDescription = stringResource(R.string.backup_restore_action),
+                tint = MaterialTheme.colorScheme.primary,
             )
         }
         if (refreshing) {
@@ -206,7 +245,7 @@ private fun HomeHeader(
                 strokeWidth = 2.dp,
             )
         } else {
-            IconButton(onClick = onRefresh) {
+            IconButton(onClick = onRefresh, enabled = !busy) {
                 Icon(
                     painter = painterResource(R.drawable.ic_refresh),
                     contentDescription = stringResource(R.string.refresh),
@@ -224,6 +263,8 @@ private fun ManagedAppsCard(
     enabled: Boolean,
     operationsEnabled: Boolean,
     accountsExpanded: Boolean,
+    activatingPackage: String?,
+    activatingSlot: String?,
     onOpen: (String) -> Unit,
     onActivate: (String, String) -> Unit,
     onSetLaunchAfterReboot: (String, Boolean) -> Unit,
@@ -434,6 +475,8 @@ private fun ManagedAppsCard(
                                     onClick = { onActivate(app.packageName, slot.id) },
                                     enabled = operationsEnabled &&
                                         snapshot.bindingState == BindingState.Ready,
+                                    loading = activatingPackage == app.packageName &&
+                                        activatingSlot == slot.id,
                                 )
                             }
                         }

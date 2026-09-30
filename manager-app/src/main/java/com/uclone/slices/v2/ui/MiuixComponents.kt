@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -81,6 +82,7 @@ internal fun SlicesActionButton(
     danger: Boolean = false,
     icon: Painter? = null,
     compact: Boolean = false,
+    loading: Boolean = false,
 ) {
     val buttonColor = when {
         danger -> MaterialTheme.colorScheme.error
@@ -113,14 +115,23 @@ internal fun SlicesActionButton(
             },
         ),
     ) {
-        icon?.let {
-            MiuixIcon(
-                painter = it,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(20.dp),
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                color = contentColor,
+                strokeWidth = 2.dp,
             )
             Spacer(Modifier.width(8.dp))
+        } else {
+            icon?.let {
+                MiuixIcon(
+                    painter = it,
+                    contentDescription = null,
+                    tint = contentColor,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(8.dp))
+            }
         }
         MiuixText(
             text = text,
@@ -312,8 +323,11 @@ internal fun SlicesSlotButton(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    loading: Boolean = false,
 ) {
     val contentColor = when {
+        loading && selected -> Color.White
+        loading -> MiuixTheme.colorScheme.onSecondaryVariant
         !enabled -> MiuixTheme.colorScheme.onSurfaceVariantSummary
         selected -> Color.White
         else -> MiuixTheme.colorScheme.onSecondaryVariant
@@ -331,14 +345,23 @@ internal fun SlicesSlotButton(
             disabledColor = MiuixTheme.colorScheme.disabledSecondaryVariant,
         ),
     ) {
-        icon?.let {
-            MiuixIcon(
-                painter = it,
-                contentDescription = null,
-                tint = contentColor,
-                modifier = Modifier.size(18.dp),
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                color = contentColor,
+                strokeWidth = 2.dp,
             )
             Spacer(Modifier.width(7.dp))
+        } else {
+            icon?.let {
+                MiuixIcon(
+                    painter = it,
+                    contentDescription = null,
+                    tint = contentColor,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(7.dp))
+            }
         }
         MiuixText(
             text = text,

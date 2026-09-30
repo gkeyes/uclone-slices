@@ -199,7 +199,7 @@ internal fun SlicesScreen(
         )
     }
 
-    if (state.busy && state.operation !is OperationUiState.Refreshing) {
+    if (state.operation.blocksScreen) {
         OperationDialog(state.operation)
     }
 }
@@ -576,6 +576,8 @@ private fun OperationDialog(operation: OperationUiState) {
             stringResource(R.string.operation_saving_reboot_launch)
         is OperationUiState.RebindingConfiguration ->
             stringResource(R.string.operation_rebinding)
+        OperationUiState.RestartingRuntime ->
+            stringResource(R.string.operation_restarting_runtime)
     }
     val show = remember(operation) { mutableStateOf(true) }
     SuperDialog(
@@ -846,7 +848,8 @@ private fun FloatingNoticeCard(
 }
 
 private fun isSuccessNotice(notice: UiNotice): Boolean =
-    notice is UiNotice.ConfigurationCompleted ||
+    notice is UiNotice.RuntimeRestarted ||
+        notice is UiNotice.ConfigurationCompleted ||
         notice is UiNotice.ConfigurationRebound ||
         notice is UiNotice.SpaceCreated ||
         notice is UiNotice.SpaceActivated ||
@@ -880,6 +883,10 @@ private fun noticeMessage(notice: UiNotice): String = when (notice) {
     UiNotice.IdentityProtected -> stringResource(R.string.error_identity_protected)
     UiNotice.SigningUnavailable -> stringResource(R.string.error_signing_unavailable)
     UiNotice.RuntimeVersionMismatch -> stringResource(R.string.error_runtime_version_mismatch)
+    UiNotice.AccountIoBusy -> stringResource(R.string.error_account_io_busy)
+    UiNotice.StorageInsufficient -> stringResource(R.string.error_storage_insufficient)
+    UiNotice.RuntimeRestartFailed -> stringResource(R.string.error_runtime_restart_failed)
+    UiNotice.RuntimeRestarted -> stringResource(R.string.success_runtime_restarted)
     UiNotice.ConfigurationCompleted -> stringResource(R.string.success_configured)
     UiNotice.ConfigurationRebound -> stringResource(R.string.success_rebound)
     is UiNotice.SpaceCreated -> stringResource(R.string.success_created, notice.name)

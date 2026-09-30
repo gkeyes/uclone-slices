@@ -8,6 +8,7 @@ import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeCommand
+import com.uclone.slices.v2.runtime.RuntimeMaintenance
 import com.uclone.slices.v2.runtime.RuntimeReply
 import com.uclone.slices.v2.runtime.SeedMode
 import com.uclone.slices.v2.runtime.SigningIdentity
@@ -677,6 +678,128 @@ class SlotsViewModelTest {
         assertEquals(UiNotice.RuntimeUnavailable, viewModel.state.value.notice)
     }
 
+    @Test
+    fun busyAndStorageErrorsExplainThemselves() {
+        mapOf(
+            ErrorCode.IoBusy to UiNotice.AccountIoBusy,
+            ErrorCode.InsufficientStorage to UiNotice.StorageInsufficient,
+        ).forEach { (code, notice) ->
+            val client = FakeRuntimeClient()
+            val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+            configureApp(viewModel)
+            client.nextReply = RuntimeReply.Error(code)
+
+            viewModel.onIntent(UiIntent.CreateSlot("Work"))
+
+            assertEquals(notice, viewModel.state.value.notice)
+            assertTrue(viewModel.state.value.runtimeReady)
+        }
+    }
+
+    @Test
+    fun openingAConfiguredAppShowsItsPageBeforeTheRuntimeReadReturns() = runBlocking {
+        val client = BlockingGetPackageRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        client.getStarted.await()
+
+        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
+        assertEquals("com.example.app", viewModel.state.value.selected?.packageName)
+        assertFalse(viewModel.state.value.operation.blocksScreen)
+        client.releaseGet.complete(Unit)
+        assertEquals("slot-1", viewModel.state.value.selected?.activeSlot)
+        assertFalse(viewModel.state.value.busy)
+    }
+
+    @Test
+    fun quickActivationShowsProgressOnTheTappedSpaceInsteadOfADialog() = runBlocking {
+        val client = BlockingQuickRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
+        client.activationStarted.await()
+
+        val operation = assertIs<OperationUiState.ActivatingSpace>(viewModel.state.value.operation)
+        assertEquals("slot-1", operation.slotId)
+        assertFalse(operation.blocksScreen)
+        client.releaseActivation.complete(Unit)
+    }
+
+    @Test
+    fun configuredAccountsStartExpanded() {
+        val viewModel = SlotsViewModel(FakeRuntimeClient(), appSource, Dispatchers.Unconfined)
+
+        assertTrue(viewModel.state.value.configuredAccountsExpanded)
+    }
+
+    @Test
+    fun restartingTheRuntimeReconnectsAndReportsTheOutcome() {
+        val client = FakeRuntimeClient()
+        val maintenance = FakeRuntimeMaintenance(restarts = true)
+        val viewModel = SlotsViewModel(
+            client,
+            appSource,
+            Dispatchers.Unconfined,
+            MemoryManagerUiPreferences(),
+            maintenance,
+        )
+        client.nextReply = RuntimeReply.TransportFailure
+        viewModel.onIntent(UiIntent.Refresh)
+        assertFalse(viewModel.state.value.runtimeReady)
+
+        viewModel.onIntent(UiIntent.RestartRuntime)
+
+        assertEquals(1, maintenance.restartCalls)
+        assertTrue(viewModel.state.value.runtimeReady)
+        assertEquals(UiNotice.RuntimeRestarted, viewModel.state.value.notice)
+
+        val failingClient = FakeRuntimeClient()
+        val failing = SlotsViewModel(
+            failingClient,
+            appSource,
+            Dispatchers.Unconfined,
+            MemoryManagerUiPreferences(),
+            FakeRuntimeMaintenance(restarts = false),
+        )
+        failingClient.nextReply = RuntimeReply.TransportFailure
+        failing.onIntent(UiIntent.RestartRuntime)
+        assertEquals(UiNotice.RuntimeRestartFailed, failing.state.value.notice)
+    }
+
+    @Test
+    fun returningToTheManagerOnlyReconnectsWhenTheRuntimeWasUnavailable() {
+        val client = FakeRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val commandsWhileHealthy = client.commands.toList()
+
+        viewModel.onIntent(UiIntent.AppResumed)
+        assertEquals(commandsWhileHealthy, client.commands)
+
+        client.nextReply = RuntimeReply.TransportFailure
+        viewModel.onIntent(UiIntent.Refresh)
+        assertFalse(viewModel.state.value.runtimeReady)
+        viewModel.onIntent(UiIntent.AppResumed)
+
+        assertTrue(viewModel.state.value.runtimeReady)
+        assertEquals(RuntimeCommand.ListPackages, client.commands.last())
+    }
+
+    @Test
+    fun runtimeLogIsLoadedOnRequest() {
+        val viewModel = SlotsViewModel(
+            FakeRuntimeClient(),
+            appSource,
+            Dispatchers.Unconfined,
+            MemoryManagerUiPreferences(),
+            FakeRuntimeMaintenance(restarts = true, log = "ucloned start"),
+        )
+
+        viewModel.onIntent(UiIntent.LoadRuntimeLog)
+
+        assertEquals("ucloned start", viewModel.state.value.runtimeLog)
+    }
+
     private fun configureApp(viewModel: SlotsViewModel) {
         viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
         viewModel.onIntent(UiIntent.ConfirmConfigureApp)
@@ -914,4 +1037,34 @@ private class BlockingQuickRuntimeClient : RuntimeClient {
             RuntimeCommand.ListAccountIoStatus,
             -> RuntimeReply.Error(ErrorCode.InvalidRequest)
         }
+}
+
+private class FakeRuntimeMaintenance(
+    private val restarts: Boolean,
+    private val log: String? = null,
+) : RuntimeMaintenance {
+    var restartCalls = 0
+
+    override suspend fun restartRuntime(): Boolean {
+        restartCalls += 1
+        return restarts
+    }
+
+    override suspend fun readLogTail(): String? = log
+}
+
+private class BlockingGetPackageRuntimeClient : FakeRuntimeClient(
+    initialPackages = listOf(packageSnapshot()),
+) {
+    val getStarted = CompletableDeferred<Unit>()
+    val releaseGet = CompletableDeferred<Unit>()
+
+    override suspend fun execute(command: RuntimeCommand): RuntimeReply {
+        if (command is RuntimeCommand.GetPackage) {
+            snapshot = snapshot.copy(activeSlot = "slot-1")
+            getStarted.complete(Unit)
+            releaseGet.await()
+        }
+        return super.execute(command)
+    }
 }

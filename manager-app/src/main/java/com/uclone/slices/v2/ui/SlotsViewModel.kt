@@ -11,7 +11,9 @@ import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.RuntimeClient
+import com.uclone.slices.v2.runtime.NoRuntimeMaintenance
 import com.uclone.slices.v2.runtime.RuntimeCommand
+import com.uclone.slices.v2.runtime.RuntimeMaintenance
 import com.uclone.slices.v2.runtime.RuntimeReply
 import com.uclone.slices.v2.runtime.SeedMode
 import kotlinx.coroutines.CoroutineDispatcher
@@ -46,6 +48,7 @@ sealed interface OperationUiState {
         val packageName: String,
         val spaceName: String,
         val switched: Boolean,
+        val slotId: String = "",
     ) : OperationUiState
     data class RenamingSpace(
         val packageName: String,
@@ -61,7 +64,31 @@ sealed interface OperationUiState {
     ) : OperationUiState
     data class SavingRebootLaunch(val packageName: String) : OperationUiState
     data class RebindingConfiguration(val packageName: String) : OperationUiState
+    data object RestartingRuntime : OperationUiState
 }
+
+/**
+ * Only long or destructive operations cover the screen. Switching, renaming, toggles and
+ * opening a page show their progress where they were started.
+ */
+internal val OperationUiState.blocksScreen: Boolean
+    get() = when (this) {
+        is OperationUiState.PreparingConfiguration,
+        is OperationUiState.Configuring,
+        is OperationUiState.CreatingSpace,
+        is OperationUiState.DeletingSpace,
+        is OperationUiState.UnenrollingApp,
+        is OperationUiState.RebindingConfiguration,
+        OperationUiState.RestartingRuntime,
+        -> true
+        OperationUiState.Idle,
+        OperationUiState.Refreshing,
+        is OperationUiState.OpeningPackage,
+        is OperationUiState.ActivatingSpace,
+        is OperationUiState.RenamingSpace,
+        is OperationUiState.SavingRebootLaunch,
+        -> false
+    }
 
 sealed interface UiNotice {
     data object LocalAppsUnavailable : UiNotice
@@ -73,6 +100,10 @@ sealed interface UiNotice {
     data object IdentityProtected : UiNotice
     data object SigningUnavailable : UiNotice
     data object RuntimeVersionMismatch : UiNotice
+    data object AccountIoBusy : UiNotice
+    data object StorageInsufficient : UiNotice
+    data object RuntimeRestartFailed : UiNotice
+    data object RuntimeRestarted : UiNotice
     data object ConfigurationCompleted : UiNotice
     data object ConfigurationRebound : UiNotice
     data class SpaceCreated(val name: String) : UiNotice
@@ -118,7 +149,7 @@ data class SlotsUiState(
     val runtimeCompatible: Boolean = false,
     val buildId: String = "",
     val initialLoadComplete: Boolean = false,
-    val configuredAccountsExpanded: Boolean = false,
+    val configuredAccountsExpanded: Boolean = true,
     val installedApps: List<InstalledApp> = emptyList(),
     val appCatalogLoading: Boolean = false,
     val appCatalogLoaded: Boolean = false,
@@ -132,6 +163,7 @@ data class SlotsUiState(
     val pendingRename: RenameSpaceUi? = null,
     val pendingDelete: DeleteSpaceUi? = null,
     val pendingUnenroll: UnenrollAppUi? = null,
+    val runtimeLog: String? = null,
 ) {
     val busy: Boolean
         get() = operation !is OperationUiState.Idle
@@ -141,6 +173,9 @@ data class SlotsUiState(
 
 sealed interface UiIntent {
     data object Refresh : UiIntent
+    data object AppResumed : UiIntent
+    data object RestartRuntime : UiIntent
+    data object LoadRuntimeLog : UiIntent
     data object OpenAddApps : UiIntent
     data object OpenRuntimeStatus : UiIntent
     data class OpenBackupRestore(
@@ -183,6 +218,7 @@ internal class SlotsViewModel(
     private val installedApps: InstalledAppsSource,
     dispatcher: CoroutineDispatcher,
     private val uiPreferences: ManagerUiPreferences = MemoryManagerUiPreferences(),
+    private val maintenance: RuntimeMaintenance = NoRuntimeMaintenance(),
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableState = MutableStateFlow(
@@ -201,6 +237,34 @@ internal class SlotsViewModel(
     fun onIntent(intent: UiIntent) {
         when (intent) {
             UiIntent.Refresh -> runOperation(OperationUiState.Refreshing) { refresh() }
+            UiIntent.AppResumed -> {
+                // Coming back to the Manager only reconnects when the Runtime was unreachable,
+                // so a quick tap after returning is never swallowed by a routine refresh.
+                val snapshot = state.value
+                if (snapshot.initialLoadComplete && !snapshot.runtimeReady) {
+                    runOperation(OperationUiState.Refreshing) { refresh() }
+                }
+            }
+            UiIntent.RestartRuntime -> runOperation(OperationUiState.RestartingRuntime) {
+                val restarted = maintenance.restartRuntime()
+                refresh()
+                val current = state.value
+                mutableState.update {
+                    it.copy(
+                        notice = when {
+                            current.runtimeReady && current.runtimeCompatible ->
+                                UiNotice.RuntimeRestarted
+                            !restarted || !current.runtimeReady -> UiNotice.RuntimeRestartFailed
+                            else -> it.notice
+                        },
+                        runtimeLog = null,
+                    )
+                }
+            }
+            UiIntent.LoadRuntimeLog -> scope.launch {
+                val log = maintenance.readLogTail()
+                mutableState.update { it.copy(runtimeLog = log.orEmpty()) }
+            }
             UiIntent.OpenAddApps -> openAddApps()
             UiIntent.OpenRuntimeStatus -> navigateTo(ManagerDestination.RuntimeStatus)
             is UiIntent.OpenBackupRestore -> {
@@ -420,6 +484,17 @@ internal class SlotsViewModel(
             mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
             return
         }
+        if (snapshot.busy) return
+        // Open the page from the home snapshot right away; the Runtime read that follows only
+        // refreshes it in place.
+        mutableState.update {
+            it.copy(
+                selected = configured,
+                destination = ManagerDestination.PackageDetails,
+                seed = SeedMode.Blank,
+                notice = null,
+            )
+        }
         runOperation(OperationUiState.OpeningPackage(packageName)) {
             applyOpenPackageReply(
                 reply = client.execute(RuntimeCommand.GetPackage(packageName)),
@@ -490,7 +565,7 @@ internal class SlotsViewModel(
             ?: slotId
         val switched = selected.activeSlot != slotId
         runOperation(
-            OperationUiState.ActivatingSpace(selected.packageName, targetName, switched),
+            OperationUiState.ActivatingSpace(selected.packageName, targetName, switched, slotId),
         ) {
             applyPackageReply(
                 client.execute(RuntimeCommand.ActivateSlot(selected.packageName, slotId)),
@@ -520,7 +595,9 @@ internal class SlotsViewModel(
         }
         val targetName = spaceDisplayName(target)
         val switched = packageSnapshot.activeSlot != slotId
-        runOperation(OperationUiState.ActivatingSpace(packageName, targetName, switched)) {
+        runOperation(
+            OperationUiState.ActivatingSpace(packageName, targetName, switched, slotId),
+        ) {
             applyHomePackageReply(
                 client.execute(RuntimeCommand.ActivateSlot(packageName, slotId)),
                 successNotice = UiNotice.SpaceActivated(targetName, switched),
@@ -1108,11 +1185,11 @@ internal class SlotsViewModel(
             ErrorCode.StateConflict -> UiNotice.StateChanged
             ErrorCode.IdentityMismatch -> UiNotice.IdentityProtected
             ErrorCode.OperationFailed -> UiNotice.OperationFailed
-            ErrorCode.IoBusy -> UiNotice.StateChanged
+            ErrorCode.IoBusy -> UiNotice.AccountIoBusy
+            ErrorCode.InsufficientStorage -> UiNotice.StorageInsufficient
             ErrorCode.BackupInvalid,
             ErrorCode.BackupPasswordRequired,
             ErrorCode.BackupAuthFailed,
-            ErrorCode.InsufficientStorage,
             ErrorCode.BackupIncompatible,
             -> UiNotice.OperationFailed
         }

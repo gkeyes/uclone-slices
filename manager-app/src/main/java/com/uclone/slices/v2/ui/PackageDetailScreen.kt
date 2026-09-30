@@ -63,6 +63,9 @@ internal fun PackageDetailScreen(
     val otherSlots = packageSnapshot.slots
         .filterNot { it.id == packageSnapshot.activeSlot }
         .sortedBy { if (it.id == BASE_SLOT_ID) 0 else 1 }
+    val activatingSlot = (state.operation as? OperationUiState.ActivatingSpace)
+        ?.takeIf { it.packageName == packageSnapshot.packageName }
+        ?.slotId
 
     LazyColumn(
         modifier = Modifier
@@ -86,6 +89,7 @@ internal fun PackageDetailScreen(
                 installedApp = installedApp,
                 activeSlot = activeSlot,
                 enabled = !state.busy && operationsEnabled,
+                launching = activatingSlot == packageSnapshot.activeSlot,
                 onLaunch = {
                     onIntent(UiIntent.ActivateSlot(packageSnapshot.activeSlot))
                 },
@@ -143,6 +147,7 @@ internal fun PackageDetailScreen(
                 OtherSpaceCard(
                     slot = slot,
                     enabled = !state.busy && operationsEnabled,
+                    switching = activatingSlot == slot.id,
                     onActivate = { onIntent(UiIntent.ActivateSlot(slot.id)) },
                     onBackup = {
                         onIntent(UiIntent.OpenBackupRestore(packageSnapshot.packageName, slot.id))
@@ -225,6 +230,7 @@ private fun CurrentSpaceCard(
     installedApp: InstalledApp?,
     activeSlot: SlotSnapshot?,
     enabled: Boolean,
+    launching: Boolean,
     onLaunch: () -> Unit,
     onBackup: (() -> Unit)?,
     onRename: (() -> Unit)?,
@@ -300,6 +306,7 @@ private fun CurrentSpaceCard(
                 text = stringResource(R.string.launch_app),
                 onClick = onLaunch,
                 enabled = enabled,
+                loading = launching,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 18.dp),
@@ -312,6 +319,7 @@ private fun CurrentSpaceCard(
 private fun OtherSpaceCard(
     slot: SlotSnapshot,
     enabled: Boolean,
+    switching: Boolean,
     onActivate: () -> Unit,
     onBackup: () -> Unit,
     onRename: (() -> Unit)?,
@@ -367,6 +375,7 @@ private fun OtherSpaceCard(
                 text = stringResource(R.string.switch_and_launch),
                 onClick = onActivate,
                 enabled = enabled,
+                loading = switching,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 14.dp),

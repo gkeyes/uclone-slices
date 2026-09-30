@@ -12,7 +12,7 @@ internal class SharedPreferencesManagerUiPreferences(
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
     override var configuredAccountsExpanded: Boolean
-        get() = preferences.getBoolean(EXPANDED_KEY, false)
+        get() = preferences.getBoolean(EXPANDED_KEY, true)
         set(value) {
             preferences.edit().putBoolean(EXPANDED_KEY, value).commit()
         }
@@ -24,5 +24,5 @@ internal class SharedPreferencesManagerUiPreferences(
 }
 
 internal class MemoryManagerUiPreferences(
-    override var configuredAccountsExpanded: Boolean = false,
+    override var configuredAccountsExpanded: Boolean = true,
 ) : ManagerUiPreferences
