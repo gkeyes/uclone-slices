@@ -71,5 +71,6 @@
 | UI 的 8 dp 网格间距 | Material 布局网格，仅影响首个真实入口的排版，不进入业务或协议 | Android lint、assemble |
 | 首页当前空间高亮色 `#D83B50` | 用户明确要求当前账号使用西瓜红；只影响首页 Chip 的真实当前快照展示 | Manager 真机截图、Android lint、assemble |
 | GitHub Action commit SHA | 旧版 CI 中已使用的 v3/v4 action 固定提交 | CI workflow |
+| `actions/download-artifact` `d3f86a1…` | 2026-10-01 `git ls-remote` 解析的 `v4`（= `v4.3.0`）提交，与已固定的 upload-artifact v4 同代；只在 `v*` 标签的发布 job 中读取同一次运行已验证的产物 | CI workflow |
 
 `tools/check-decision-alignment.sh` 只检查重复声明是否一致：发布版本、versionCode、Rust 工具链、Manager minSdk 与 Rust Android API。它不设置文件长度、执行次数或覆盖率阈值。

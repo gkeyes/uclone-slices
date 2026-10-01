@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: ["main", "codex/**", "claude/**"]
+    # A v* tag is pushed only after the user confirms the candidate; it is the only path
+    # that publishes a GitHub Release, and it publishes the bytes this run verified.
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -128,3 +131,40 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+  release:
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: docs/releases
+
+      - name: Download verified delivery
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: uclone-slices-v2-0.2.3-${{ github.sha }}
+          path: ${{ runner.temp }}/uclone-slices-delivery
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          DELIVERY: ${{ runner.temp }}/uclone-slices-delivery
+        run: |
+          test "$TAG" = "v0.2.3"
+          NOTES="docs/releases/$TAG.md"
+          test -s "$NOTES"
+          (cd "$DELIVERY" && sha256sum -c SHA256SUMS.txt)
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --latest \
+            --title "UClone Slices V2 $TAG" \
+            --notes-file "$NOTES" \
+            "$DELIVERY"/*.apk "$DELIVERY"/*.zip "$DELIVERY"/SHA256SUMS.txt
