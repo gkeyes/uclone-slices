@@ -64,6 +64,8 @@
 | Base alias 成对挂载检测、固定根复制与 `restore-started` 回滚标记 | 正常事务通过 alias 修改未暴露的真实 Base；bind alias 不能接收来自 Runtime 暂存根的子项重命名，因此正向替换和回滚都保留源树并复制到固定根。重启后 bind mount 消失时改用未挂载的真实 Base；部分复制可重试，完整回滚先原子退役再清理 | mountinfo 精确路径、rename 禁入、CE/DE 补偿、部分复制重试与真机临时 bind-alias `cp -a` 测试 |
 | MIUIX `0.7.2` | 用户明确指定 MIUIX 设计语言；该版本使用 Kotlin 2.2.x，能够保持项目既有 Kotlin 2.2.0 工具链，避免为 UI 升级引入构建系统迁移 | Manager compile、unit、lint、assemble 与真机界面验收 |
 | 弹出菜单、开关、进度、输入框与分割线只用 MIUIX 组件，Material 3 仅保留文本/图标/主题桥接 | 用户明确指定 MIUIX 设计语言，并指出首页卡片菜单仍是 Material 下拉与开关；菜单统一走 MIUIX `ListPopup` + `DropdownImpl`，开关项改为勾选项 | `MiuixComponentPolicyTest` 扫描 Manager 源码 import，真机菜单/备份页截图验收 |
+| 主题根与 `SlicesPanel` 提供 Material `LocalContentColor`（MIUIX `onSurface` / 卡片 `onSurfaceContainer`） | 真机深色模式截图显示首页标题等未显式着色的 Material `Text` 为黑字；Material 3 默认内容色为黑色，MIUIX 容器不设置它 | `MiuixComponentPolicyTest`，真机深/浅色截图验收 |
+| 深色状态绿 `#3CB97F` / 容器 `#16382A`；窗口底色浅色 `#F7F7F8`、深色 `#000000` | 浅色绿 `#16885A` 在 MIUIX 深色卡片 `#242424` 上对比度仅 3.5:1（低于 WCAG 文本 4.5:1），新值为 6.2:1、在自身容器上 5.2:1；窗口底色与 MIUIX `surface` 页面底色一致，避免启动和导航栏处色差 | 对比度计算，真机深/浅色截图验收 |
 | Manager `windowSoftInputMode=adjustResize` | 真机 `dumpsys window` 证实默认 `adjustPan` 会与 MIUIX `SuperDialog` 自带的 `imePadding()` 叠加，导致删除确认弹窗在键盘出现时被双重上移 | 输入“删除”时的真机窗口属性与弹窗位置验收 |
 | Manager Release 证书 `3a98013499c588855ac936d884d9e55497f72827c91ca01e50cf9ca4fc290648` | 2026-08-23 从目标机当前可覆盖安装的 0.1.8 Manager 只读提取；CI 必须使用固定 Release keystore | `verify-release-signing.sh`、`apksigner verify --print-certs` 与 `adb install -r` |
 | UI 的 8 dp 网格间距 | Material 布局网格，仅影响首个真实入口的排版，不进入业务或协议 | Android lint、assemble |

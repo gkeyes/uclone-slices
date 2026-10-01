@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.LocalContentColor as MaterialLocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +65,12 @@ internal fun SlicesPanel(
         color = color,
         contentColor = MiuixTheme.colorScheme.onSurfaceContainer,
     )
+    // Material Text/Icon inside the card follow the card's content colour too.
+    val panelContent: @Composable ColumnScope.() -> Unit = {
+        CompositionLocalProvider(MaterialLocalContentColor provides colors.contentColor) {
+            content()
+        }
+    }
     if (enabled && onClick != null) {
         MiuixCard(
             modifier = modifier,
@@ -72,7 +80,7 @@ internal fun SlicesPanel(
             pressFeedbackType = PressFeedbackType.Sink,
             showIndication = true,
             onClick = onClick,
-            content = content,
+            content = panelContent,
         )
     } else {
         MiuixCard(
@@ -80,7 +88,7 @@ internal fun SlicesPanel(
             cornerRadius = cornerRadius,
             insideMargin = insideMargin,
             colors = colors,
-            content = content,
+            content = panelContent,
         )
     }
 }

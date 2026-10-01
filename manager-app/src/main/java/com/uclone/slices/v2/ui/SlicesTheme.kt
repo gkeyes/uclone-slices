@@ -2,12 +2,15 @@ package com.uclone.slices.v2.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme as materialDarkColorScheme
 import androidx.compose.material3.lightColorScheme as materialLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -17,8 +20,19 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme as miuixDarkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme as miuixLightColorScheme
 
-internal val SlicesSuccess = Color(0xFF16885A)
-internal val SlicesSuccessContainer = Color(0xFFE3F5EC)
+// Status green per theme. The light green is only 3.5:1 on the MIUIX dark card (#242424),
+// under the 4.5:1 WCAG text minimum; the dark green measures 6.2:1 there and 5.2:1 on its
+// dark container.
+internal val SlicesSuccess: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = if (isSystemInDarkTheme()) Color(0xFF3CB97F) else Color(0xFF16885A)
+
+internal val SlicesSuccessContainer: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = if (isSystemInDarkTheme()) Color(0xFF16382A) else Color(0xFFE3F5EC)
+
 internal val SlicesWarning = Color(0xFFE18428)
 internal val SlicesWatermelon = Color(0xFFD83B50)
 private val SlicesBlue = Color(0xFF3482FF)
@@ -155,7 +169,15 @@ internal fun SlicesTheme(content: @Composable () -> Unit) {
             colorScheme = if (darkTheme) DarkMaterialColors else LightMaterialColors,
             typography = SlicesTypography,
             shapes = SlicesShapes,
-            content = content,
-        )
+        ) {
+            // Material 3 Text and Icon take their default colour from LocalContentColor, which is
+            // black unless a Material Surface sets it. Screens sit on MIUIX containers that only
+            // set MIUIX's own content colour, so without this every Text without an explicit
+            // colour stays black in dark mode.
+            CompositionLocalProvider(
+                LocalContentColor provides MiuixTheme.colorScheme.onSurface,
+                content = content,
+            )
+        }
     }
 }
