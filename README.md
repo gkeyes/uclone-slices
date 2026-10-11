@@ -5,7 +5,7 @@
 
 UClone Slices V2 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前版本为 **v0.2.3**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 稳定协议 ID 仍为 `0.2.2`：0.2.3 未改变 wire，但 Runtime 修复需要同时刷入 0.2.3 模块。
+当前版本为 **v0.2.4**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 稳定协议 ID 仍为 `0.2.2`：0.2.3 未改变 wire，但 Runtime 修复需要同时刷入 0.2.3 模块。
 
 ## 功能
 
@@ -35,8 +35,8 @@ UClone Slices V2 是一款适用于 Root Android / KernelSU 设备的多账号�
 
 Release 产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
 
-1. `uclone-slices-v2-manager-0.2.3-<sha>.apk`
-2. `uclone-slices-v2-kernelsu-0.2.3-<sha>.zip`
+1. `uclone-slices-v2-manager-0.2.4-<sha>.apk`
+2. `uclone-slices-v2-kernelsu-0.2.4-<sha>.zip`
 3. `SHA256SUMS.txt`
 
 安装步骤：

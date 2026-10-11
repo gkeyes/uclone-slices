@@ -3,7 +3,7 @@ name: Validate V2
 on:
   pull_request:
   push:
-    branches: ["main", "codex/**", "claude/**", "ui-refresh-v2"]
+    branches: ["main", "codex/**", "claude/**"]
     # A v* tag is pushed only after the user confirms the candidate; it is the only path
     # that publishes a GitHub Release, and it publishes the bytes this run verified.
     tags: ["v*"]
@@ -119,14 +119,14 @@ jobs:
         run: |
           DELIVERY="$RUNNER_TEMP/uclone-slices-delivery"
           mkdir -p "$DELIVERY"
-          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.2.3-${GITHUB_SHA}.apk"
-          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.2.3-${GITHUB_SHA}.zip"
+          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.2.4-${GITHUB_SHA}.apk"
+          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.2.4-${GITHUB_SHA}.zip"
           (cd "$DELIVERY" && sha256sum ./*.apk ./*.zip > SHA256SUMS.txt)
 
-      - name: Upload 0.2.3 candidate delivery
+      - name: Upload 0.2.4 candidate delivery
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: uclone-slices-v2-0.2.3-${{ github.sha }}
+          name: uclone-slices-v2-0.2.4-${{ github.sha }}
           path: ${{ runner.temp }}/uclone-slices-delivery
           if-no-files-found: error
           retention-days: 7
@@ -148,7 +148,7 @@ jobs:
       - name: Download verified delivery
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: uclone-slices-v2-0.2.3-${{ github.sha }}
+          name: uclone-slices-v2-0.2.4-${{ github.sha }}
           path: ${{ runner.temp }}/uclone-slices-delivery
 
       - name: Publish GitHub Release
@@ -157,7 +157,7 @@ jobs:
           TAG: ${{ github.ref_name }}
           DELIVERY: ${{ runner.temp }}/uclone-slices-delivery
         run: |
-          test "$TAG" = "v0.2.3"
+          test "$TAG" = "v0.2.4"
           NOTES="docs/releases/$TAG.md"
           test -s "$NOTES"
           (cd "$DELIVERY" && sha256sum -c SHA256SUMS.txt)
