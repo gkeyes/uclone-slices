@@ -1,36 +1,23 @@
 package com.uclone.slices.v2.ui
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.extra.SuperArrow
 
 @Composable
 internal fun AddAppScreen(
@@ -42,191 +29,117 @@ internal fun AddAppScreen(
     val availableApps = remember(state.installedApps, state.packages, query) {
         buildAppSections(state.installedApps, state.packages, query).other
     }
+    val play = rememberStaggerPlay("add_app")
+    val enabled = state.operationsAllowed && !state.busy
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding),
-        contentPadding = PaddingValues(start = 20.dp, top = 12.dp, end = 20.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    // Long list: rows are separate lazy items joined into one card, so spacing is explicit.
+    ManagerScreen(
+        title = stringResource(R.string.add_app),
+        contentPadding = contentPadding,
+        onBack = { onIntent(UiIntent.NavigateBack) },
+        itemSpacing = 0.dp,
     ) {
-        item {
-            ScreenHeader(
-                title = stringResource(R.string.add_app),
-                subtitle = stringResource(R.string.add_app_subtitle),
-                onBack = { onIntent(UiIntent.NavigateBack) },
+        item(key = "subtitle") {
+            Footnote(
+                text = stringResource(R.string.add_app_subtitle),
+                modifier = Modifier.padding(bottom = Space.sm),
             )
         }
         if (!state.operationsAllowed) {
-            item {
+            item(key = "runtime_status") {
                 RuntimeStatusCard(
                     runtimeReady = state.runtimeReady,
                     runtimeCompatible = state.runtimeCompatible,
                     busy = state.busy,
                     enabled = !state.busy,
                     onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
+                    modifier = Modifier
+                        .animateItem()
+                        .padding(bottom = Space.sm),
                 )
             }
         }
-        item {
+        item(key = "search") {
             SlicesSearchField(
                 value = query,
                 onValueChange = { query = it },
                 label = stringResource(R.string.search_available_apps),
-                iconRes = R.drawable.ic_search,
-                modifier = Modifier.fillMaxWidth(),
+                clearDescription = stringResource(R.string.cancel),
+                modifier = Modifier
+                    .staggerIn(0, play)
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.gutter),
             )
         }
-        item {
-            Text(
+        item(key = "available_header") {
+            SectionHeader(
                 text = stringResource(R.string.available_apps),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier
+                    .staggerIn(1, play)
+                    .padding(top = Space.xs, bottom = Space.xs),
             )
         }
-        if (state.appCatalogLoading) {
-            item {
-                LoadingAvailableApps()
+        when {
+            state.appCatalogLoading -> item(key = "loading") {
+                GroupCard(modifier = Modifier.animateItem()) {
+                    LoadingState(title = stringResource(R.string.loading_apps))
+                }
             }
-        } else if (availableApps.isEmpty()) {
-            item {
-                EmptyAvailableApps(hasQuery = query.isNotBlank())
+            availableApps.isEmpty() -> item(key = "empty") {
+                val hasQuery = query.isNotBlank()
+                GroupCard(modifier = Modifier.animateItem()) {
+                    EmptyState(
+                        title = if (hasQuery) {
+                            stringResource(R.string.no_search_results)
+                        } else {
+                            stringResource(R.string.no_available_apps)
+                        },
+                        message = if (hasQuery) {
+                            stringResource(R.string.try_another_search)
+                        } else {
+                            stringResource(R.string.no_available_apps_description)
+                        },
+                        icon = painterResource(if (hasQuery) R.drawable.ic_search else R.drawable.ic_add),
+                    )
+                }
             }
-        } else {
-            item {
-                AvailableAppsCard(
-                    apps = availableApps,
-                    enabled = state.operationsAllowed && !state.busy,
-                    onConfigure = { onIntent(UiIntent.RequestConfigureApp(it)) },
+            else -> itemsIndexed(
+                items = availableApps,
+                key = { _, app -> "available:${app.packageName}" },
+                contentType = { _, _ -> "available_app" },
+            ) { index, app ->
+                AvailableAppRow(
+                    app = app,
+                    first = index == 0,
+                    last = index == availableApps.lastIndex,
+                    enabled = enabled,
+                    onConfigure = { onIntent(UiIntent.RequestConfigureApp(app.packageName)) },
+                    modifier = Modifier
+                        .animateItem()
+                        .staggerIn(index + 2, play),
                 )
             }
         }
+        item(key = "bottom_gap") { Spacer(Modifier.height(Space.sm)) }
     }
 }
 
 @Composable
-internal fun ScreenHeader(
-    title: String,
-    subtitle: String? = null,
-    onBack: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(
-                painter = painterResource(R.drawable.ic_arrow_back),
-                contentDescription = stringResource(R.string.back),
-            )
-        }
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 4.dp),
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            subtitle?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun AvailableAppsCard(
-    apps: List<InstalledApp>,
+private fun AvailableAppRow(
+    app: InstalledApp,
+    first: Boolean,
+    last: Boolean,
     enabled: Boolean,
-    onConfigure: (String) -> Unit,
+    onConfigure: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 18.dp,
-    ) {
-        apps.forEachIndexed { index, app ->
-            SuperArrow(
-                title = app.label,
-                summary = "${app.packageName}\n${stringResource(R.string.not_configured)}",
-                leftAction = {
-                    Row {
-                        AppIcon(app.label, app.icon, 48.dp)
-                        Spacer(Modifier.width(14.dp))
-                    }
-                },
-                enabled = enabled,
-                onClick = { onConfigure(app.packageName) },
-                modifier = Modifier.fillMaxWidth(),
-                insideMargin = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            )
-            if (index < apps.lastIndex) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(start = 80.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun EmptyAvailableApps(hasQuery: Boolean) {
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 18.dp,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 36.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = if (hasQuery) {
-                    stringResource(R.string.no_search_results)
-                } else {
-                    stringResource(R.string.no_available_apps)
-                },
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = if (hasQuery) {
-                    stringResource(R.string.try_another_search)
-                } else {
-                    stringResource(R.string.no_available_apps_description)
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-
-@Composable
-private fun LoadingAvailableApps() {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 36.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        SlicesSpinner(size = 26.dp, strokeWidth = 3.dp)
-        Text(
-            text = stringResource(R.string.loading_apps),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+    GroupedItem(first = first, last = last, modifier = modifier) {
+        ListRow(
+            title = app.label,
+            summary = "${app.packageName}\n${stringResource(R.string.not_configured)}",
+            leading = { AppIcon(app.label, app.icon, 40.dp) },
+            onClick = onConfigure,
+            enabled = enabled,
         )
     }
 }

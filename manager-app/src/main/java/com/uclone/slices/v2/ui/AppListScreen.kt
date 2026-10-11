@@ -1,30 +1,25 @@
 package com.uclone.slices.v2.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,16 +27,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.PackageSnapshot
-import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.Text
 
 @Composable
 internal fun AppListScreen(
@@ -59,450 +57,394 @@ internal fun AppListScreen(
     }
     val runtimeHealthy = state.runtimeReady && state.runtimeCompatible
     val activating = state.operation as? OperationUiState.ActivatingSpace
+    val refreshing = state.operation is OperationUiState.Refreshing
+    val play = rememberStaggerPlay("home")
+    val enabled = !state.busy && state.runtimeReady
+    val operationsEnabled = !state.busy && state.operationsAllowed
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding),
-        contentPadding = PaddingValues(start = 20.dp, top = 16.dp, end = 20.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item {
-            HomeHeader(
-                runtimeHealthy = runtimeHealthy,
-                refreshing = state.operation is OperationUiState.Refreshing,
-                busy = state.busy,
-                backupEnabled = !state.busy && state.operationsAllowed,
-                onStatus = { onIntent(UiIntent.OpenRuntimeStatus) },
-                onSearch = {
+    ManagerScreen(
+        title = stringResource(R.string.spaces_title),
+        contentPadding = contentPadding,
+        titleAccessory = {
+            RuntimeHealthDot(
+                healthy = runtimeHealthy,
+                enabled = !state.busy,
+                onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
+            )
+        },
+        actions = {
+            TopBarIconButton(
+                painter = painterResource(R.drawable.ic_search),
+                contentDescription = stringResource(R.string.search),
+                onClick = {
                     searchOpen = !searchOpen
                     if (!searchOpen) query = ""
                 },
-                onAdd = { onIntent(UiIntent.OpenAddApps) },
-                onBackup = { onIntent(UiIntent.OpenBackupRestore()) },
-                onRefresh = { onIntent(UiIntent.Refresh) },
+                tint = if (searchOpen) Accent else TextSecondary,
             )
-        }
-        // A healthy Runtime is a dot in the header; only a problem takes a whole card.
+            TopBarIconButton(
+                painter = painterResource(R.drawable.ic_add),
+                contentDescription = stringResource(R.string.add_app),
+                onClick = { onIntent(UiIntent.OpenAddApps) },
+                enabled = !state.busy,
+            )
+            TopBarIconButton(
+                painter = painterResource(R.drawable.ic_backup),
+                contentDescription = stringResource(R.string.backup_restore_action),
+                onClick = { onIntent(UiIntent.OpenBackupRestore()) },
+                enabled = !state.busy && state.operationsAllowed,
+            )
+            if (refreshing) {
+                Box(Modifier.size(Space.touchTarget), contentAlignment = Alignment.Center) {
+                    SlicesSpinner(size = 22.dp)
+                }
+            } else {
+                TopBarIconButton(
+                    painter = painterResource(R.drawable.ic_refresh),
+                    contentDescription = stringResource(R.string.refresh),
+                    onClick = { onIntent(UiIntent.Refresh) },
+                    enabled = !state.busy,
+                )
+            }
+        },
+    ) {
+        // A healthy Runtime is a dot next to the title; only a problem takes a whole card.
         if (!runtimeHealthy && state.initialLoadComplete) {
-            item {
+            item(key = "runtime_status") {
                 RuntimeStatusCard(
                     runtimeReady = state.runtimeReady,
                     runtimeCompatible = state.runtimeCompatible,
                     busy = state.busy,
                     enabled = !state.busy,
                     onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
         if (searchOpen || query.isNotEmpty()) {
-            item {
+            item(key = "search") {
                 SlicesSearchField(
                     value = query,
                     onValueChange = { query = it },
                     label = stringResource(R.string.search_configured_apps),
-                    iconRes = R.drawable.ic_search,
-                    modifier = Modifier.fillMaxWidth(),
+                    clearDescription = stringResource(R.string.cancel),
+                    modifier = Modifier
+                        .animateItem()
+                        .fillMaxWidth()
+                        .padding(horizontal = Space.gutter),
                 )
             }
         }
 
         if (!state.initialLoadComplete) {
-            item { LoadingAppsMessage() }
+            item(key = "loading") {
+                LoadingState(
+                    title = stringResource(R.string.loading_apps),
+                    modifier = Modifier.animateItem(),
+                )
+            }
         } else {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = stringResource(R.string.configured_apps),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (managedApps.isNotEmpty()) {
-                        SlicesHeaderButton(
-                            text = stringResource(
-                                if (state.configuredAccountsExpanded) {
-                                    R.string.collapse_accounts
-                                } else {
-                                    R.string.expand_accounts
+            item(key = "configured_header") {
+                SectionHeader(
+                    text = stringResource(R.string.configured_apps),
+                    modifier = Modifier
+                        .animateItem()
+                        .staggerIn(0, play),
+                    trailing = if (managedApps.isNotEmpty()) {
+                        {
+                            ExpandToggle(
+                                expanded = state.configuredAccountsExpanded,
+                                onToggle = {
+                                    onIntent(
+                                        UiIntent.SetConfiguredAccountsExpanded(
+                                            !state.configuredAccountsExpanded,
+                                        ),
+                                    )
                                 },
-                            ),
-                            onClick = {
-                                onIntent(
-                                    UiIntent.SetConfiguredAccountsExpanded(
-                                        !state.configuredAccountsExpanded,
-                                    ),
-                                )
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                )
+            }
+
+            if (managedApps.isEmpty()) {
+                item(key = "empty") {
+                    GroupCard(modifier = Modifier.animateItem()) {
+                        EmptyState(
+                            title = if (query.isNotBlank()) {
+                                stringResource(R.string.no_search_results)
+                            } else {
+                                stringResource(R.string.no_configured_apps)
                             },
+                            message = if (query.isNotBlank()) {
+                                stringResource(R.string.try_another_search)
+                            } else {
+                                stringResource(R.string.no_configured_apps_description)
+                            },
+                            icon = painterResource(
+                                if (query.isNotBlank()) R.drawable.ic_search else R.drawable.ic_space_cube,
+                            ),
+                        )
+                    }
+                }
+            } else {
+                managedApps.forEachIndexed { index, app ->
+                    val snapshot = packageByName.getValue(app.packageName)
+                    item(key = "app:${app.packageName}") {
+                        ManagedAppCard(
+                            app = app,
+                            snapshot = snapshot,
+                            enabled = enabled,
+                            operationsEnabled = operationsEnabled,
+                            accountsExpanded = state.configuredAccountsExpanded,
+                            activatingSlot = activating
+                                ?.takeIf { it.packageName == app.packageName }
+                                ?.slotId,
+                            onOpen = { onIntent(UiIntent.OpenPackage(app.packageName)) },
+                            onActivate = { slotId ->
+                                onIntent(UiIntent.QuickActivateSlot(app.packageName, slotId))
+                            },
+                            onSetLaunchAfterReboot = { value ->
+                                onIntent(UiIntent.SetLaunchAfterReboot(app.packageName, value))
+                            },
+                            onBackup = {
+                                onIntent(UiIntent.OpenBackupRestore(app.packageName, null))
+                            },
+                            onUnenroll = { onIntent(UiIntent.RequestUnenrollApp(app.packageName)) },
+                            modifier = Modifier
+                                .animateItem()
+                                .staggerIn(index + 1, play),
                         )
                     }
                 }
             }
-
-            if (managedApps.isEmpty()) {
-                item {
-                    EmptyConfiguredApps(
-                        hasQuery = query.isNotBlank(),
-                    )
-                }
-            } else {
-                item {
-                    ManagedAppsCard(
-                        apps = managedApps,
-                        packageByName = packageByName,
-                        enabled = !state.busy && state.runtimeReady,
-                        operationsEnabled = !state.busy && state.operationsAllowed,
-                        accountsExpanded = state.configuredAccountsExpanded,
-                        activatingPackage = activating?.packageName,
-                        activatingSlot = activating?.slotId,
-                        onOpen = { onIntent(UiIntent.OpenPackage(it)) },
-                        onActivate = { packageName, slotId ->
-                            onIntent(UiIntent.QuickActivateSlot(packageName, slotId))
-                        },
-                        onSetLaunchAfterReboot = { packageName, enabled ->
-                            onIntent(UiIntent.SetLaunchAfterReboot(packageName, enabled))
-                        },
-                        onBackup = {
-                            onIntent(UiIntent.OpenBackupRestore(it, null))
-                        },
-                        onUnenroll = { onIntent(UiIntent.RequestUnenrollApp(it)) },
-                    )
-                }
-            }
         }
     }
 }
 
+/** Runtime health next to the large title: a tonal dot with a 48dp touch target. */
 @Composable
-private fun HomeHeader(
-    runtimeHealthy: Boolean,
-    refreshing: Boolean,
-    busy: Boolean,
-    backupEnabled: Boolean,
-    onStatus: () -> Unit,
-    onSearch: () -> Unit,
-    onAdd: () -> Unit,
-    onBackup: () -> Unit,
-    onRefresh: () -> Unit,
+private fun RuntimeHealthDot(
+    healthy: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
+    val description = stringResource(R.string.runtime_status_title)
+    Box(
+        modifier = Modifier
+            .size(Space.touchTarget)
+            .pressFeedback(enabled, Motion.PressedScale, CircleShape)
+            .clip(CircleShape)
+            .clickable(
+                enabled = enabled,
+                role = Role.Button,
+                onClickLabel = description,
+                interactionSource = null,
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
     ) {
-        Row(
+        StatusDot(if (healthy) Tone.Success else Tone.Warning, size = 12.dp)
+    }
+}
+
+/** Expand / collapse all account chips; the chevron rotates 180 degrees on the spatial spring. */
+@Composable
+private fun ExpandToggle(expanded: Boolean, onToggle: () -> Unit) {
+    val reduced = rememberReducedMotion()
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 270f else 90f,
+        animationSpec = if (reduced) snap() else Motion.spatial(),
+        label = "expand-chevron",
+    )
+    Row(
+        modifier = Modifier
+            .pressFeedback(true, Motion.PressedScale, androidx.compose.foundation.shape.RoundedCornerShape(Radius.chip))
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(Radius.chip))
+            .clickable(
+                role = Role.Button,
+                interactionSource = null,
+                indication = null,
+                onClick = onToggle,
+            )
+            .padding(horizontal = Space.sm, vertical = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Space.xxs),
+    ) {
+        Text(
+            text = stringResource(if (expanded) R.string.collapse_accounts else R.string.expand_accounts),
+            color = Accent,
+            fontSize = TypeScale.sectionHeader,
+            fontWeight = FontWeight.Medium,
+        )
+        Icon(
+            painter = painterResource(R.drawable.ic_chevron_right),
+            contentDescription = null,
+            tint = Accent,
             modifier = Modifier
-                .weight(1f)
-                .clip(MaterialTheme.shapes.small)
-                .clickable(enabled = !busy, onClick = onStatus),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(R.string.spaces_title),
-                style = MaterialTheme.typography.headlineMedium,
-                maxLines = 1,
-            )
-            Surface(
-                modifier = Modifier
-                    .padding(start = 10.dp)
-                    .size(10.dp),
-                shape = CircleShape,
-                color = if (runtimeHealthy) SlicesSuccess else SlicesWarning,
-                content = {},
-            )
-        }
-        IconButton(onClick = onSearch) {
-            Icon(
-                painter = painterResource(R.drawable.ic_search),
-                contentDescription = stringResource(R.string.search),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        IconButton(onClick = onAdd, enabled = !busy) {
-            Icon(
-                painter = painterResource(R.drawable.ic_add),
-                contentDescription = stringResource(R.string.add_app),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-        }
-        IconButton(onClick = onBackup, enabled = backupEnabled) {
-            Icon(
-                painter = painterResource(R.drawable.ic_backup),
-                contentDescription = stringResource(R.string.backup_restore_action),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-        }
-        if (refreshing) {
-            SlicesSpinner(
-                size = 22.dp,
-                modifier = Modifier.padding(12.dp),
-            )
-        } else {
-            IconButton(onClick = onRefresh, enabled = !busy) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_refresh),
-                    contentDescription = stringResource(R.string.refresh),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
+                .size(16.dp)
+                .graphicsLayer { rotationZ = rotation },
+        )
     }
 }
 
 @Composable
-private fun ManagedAppsCard(
-    apps: List<InstalledApp>,
-    packageByName: Map<String, PackageSnapshot>,
+private fun ManagedAppCard(
+    app: InstalledApp,
+    snapshot: PackageSnapshot,
     enabled: Boolean,
     operationsEnabled: Boolean,
     accountsExpanded: Boolean,
-    activatingPackage: String?,
     activatingSlot: String?,
-    onOpen: (String) -> Unit,
-    onActivate: (String, String) -> Unit,
-    onSetLaunchAfterReboot: (String, Boolean) -> Unit,
-    onBackup: (String) -> Unit,
-    onUnenroll: (String) -> Unit,
+    onOpen: () -> Unit,
+    onActivate: (String) -> Unit,
+    onSetLaunchAfterReboot: (Boolean) -> Unit,
+    onBackup: () -> Unit,
+    onUnenroll: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        apps.forEach { app ->
-            key(app.packageName) {
-                val snapshot = packageByName.getValue(app.packageName)
-                SlicesPanel(
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = enabled,
-                    onClick = { onOpen(app.packageName) },
+    val reduced = rememberReducedMotion()
+    val ready = snapshot.bindingState == BindingState.Ready
+    GroupCard(
+        modifier = modifier,
+        enabled = enabled,
+        onClick = onOpen,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = Space.md, top = Space.sm, end = Space.xxs, bottom = Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            AppIcon(app.label, app.icon, 52.dp)
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = app.label,
+                    color = if (enabled) TextPrimary else TextSecondary,
+                    fontSize = TypeScale.headline,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = app.packageName,
+                    color = TextTertiary,
+                    fontSize = TypeScale.caption,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(
-                                start = 16.dp,
-                                top = 14.dp,
-                                end = 4.dp,
-                                bottom = if (accountsExpanded) 0.dp else 14.dp,
+                    Icon(
+                        painter = painterResource(R.drawable.ic_space_cube),
+                        contentDescription = null,
+                        tint = Accent,
+                        modifier = Modifier.size(15.dp),
+                    )
+                    androidx.compose.animation.AnimatedContent(
+                        targetState = stringResource(
+                            R.string.configured_app_summary,
+                            independentSpaceCount(snapshot),
+                            activeSlotDisplayName(snapshot),
+                        ),
+                        transitionSpec = fadeThrough(),
+                        label = "app-summary",
+                    ) { summary ->
+                        Text(
+                            text = summary,
+                            color = Accent,
+                            fontSize = TypeScale.caption,
+                            style = Tabular,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                if (!ready) {
+                    StatusChip(
+                        text = stringResource(
+                            when (snapshot.bindingState) {
+                                BindingState.LegacyConfirmationRequired ->
+                                    R.string.binding_confirmation_required
+                                BindingState.LegacyUnbound,
+                                BindingState.RebindRequired,
+                                -> R.string.binding_recovery_pending
+                                BindingState.Ready -> R.string.binding_ready
+                            },
+                        ),
+                        tone = Tone.Warning,
+                        modifier = Modifier.padding(top = Space.xxs),
+                    )
+                }
+            }
+            val launchAfterRebootText = stringResource(R.string.launch_after_reboot_action)
+            val backupAllText = stringResource(R.string.backup_all_accounts_action)
+            val unenrollText = stringResource(R.string.unenroll_app_action)
+            SlicesOverflowMenu(
+                items = buildList {
+                    if (ready) {
+                        add(
+                            SlicesMenuItem(
+                                text = launchAfterRebootText,
+                                checked = snapshot.launchAfterReboot,
+                                onClick = { onSetLaunchAfterReboot(!snapshot.launchAfterReboot) },
                             ),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        AppIcon(app.label, app.icon, 58.dp)
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(start = 12.dp),
-                        ) {
-                            Box(modifier = Modifier.fillMaxWidth()) {
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Text(
-                                        text = app.label,
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            lineHeight = 20.sp,
-                                        ),
-                                        color = if (enabled) {
-                                            MaterialTheme.colorScheme.onSurface
-                                        } else {
-                                            MaterialTheme.colorScheme.onSurfaceVariant
-                                        },
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(end = 48.dp),
-                                    )
-                                    Text(
-                                        text = app.packageName,
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            lineHeight = 16.sp,
-                                        ),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.padding(end = 48.dp),
-                                    )
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(top = 1.dp, end = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.ic_space_cube),
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(17.dp),
-                                        )
-                                        Text(
-                                            text = stringResource(
-                                                R.string.configured_app_summary,
-                                                independentSpaceCount(snapshot),
-                                                activeSlotDisplayName(snapshot),
-                                            ),
-                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                lineHeight = 16.sp,
-                                            ),
-                                            color = MaterialTheme.colorScheme.primary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .padding(start = 7.dp),
-                                        )
-                                    }
-                                    if (snapshot.bindingState != BindingState.Ready) {
-                                        Text(
-                                            text = stringResource(
-                                                when (snapshot.bindingState) {
-                                                    BindingState.LegacyConfirmationRequired ->
-                                                        R.string.binding_confirmation_required
-                                                    BindingState.LegacyUnbound,
-                                                    BindingState.RebindRequired,
-                                                    -> R.string.binding_recovery_pending
-                                                    BindingState.Ready ->
-                                                        R.string.binding_ready
-                                                },
-                                            ),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = SlicesWarning,
-                                            modifier = Modifier.padding(top = 2.dp),
-                                        )
-                                    }
-                                }
-                                val ready = snapshot.bindingState == BindingState.Ready
-                                val launchAfterRebootText =
-                                    stringResource(R.string.launch_after_reboot_action)
-                                val backupAllText =
-                                    stringResource(R.string.backup_all_accounts_action)
-                                val unenrollText = stringResource(R.string.unenroll_app_action)
-                                SlicesOverflowMenu(
-                                    items = buildList {
-                                        if (ready) {
-                                            add(
-                                                SlicesMenuItem(
-                                                    text = launchAfterRebootText,
-                                                    checked = snapshot.launchAfterReboot,
-                                                    onClick = {
-                                                        onSetLaunchAfterReboot(
-                                                            app.packageName,
-                                                            !snapshot.launchAfterReboot,
-                                                        )
-                                                    },
-                                                ),
-                                            )
-                                            add(
-                                                SlicesMenuItem(
-                                                    text = backupAllText,
-                                                    onClick = { onBackup(app.packageName) },
-                                                ),
-                                            )
-                                        }
-                                        add(
-                                            SlicesMenuItem(
-                                                text = unenrollText,
-                                                danger = true,
-                                                onClick = { onUnenroll(app.packageName) },
-                                            ),
-                                        )
-                                    },
-                                    contentDescription = stringResource(
-                                        R.string.configured_app_actions,
-                                    ),
-                                    enabled = operationsEnabled,
-                                    modifier = Modifier.align(Alignment.TopEnd),
-                                )
-                            }
-                        }
+                        )
+                        add(SlicesMenuItem(text = backupAllText, onClick = onBackup))
                     }
-                    AnimatedVisibility(
-                        visible = accountsExpanded,
-                        enter = expandVertically() + fadeIn(),
-                        exit = shrinkVertically() + fadeOut(),
-                    ) {
-                        FlowRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 12.dp, top = 14.dp, end = 12.dp, bottom = 10.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            quickSwitchSlots(snapshot).forEach { slot ->
-                                val selected = snapshot.activeSlot == slot.id
-                                SlicesSlotButton(
-                                    text = if (slot.id == BASE_SLOT_ID) {
-                                        stringResource(R.string.original_space)
-                                    } else {
-                                        spaceDisplayName(slot)
-                                    },
-                                    icon = painterResource(
-                                        if (slot.id == BASE_SLOT_ID) {
-                                            R.drawable.ic_layers
-                                        } else {
-                                            R.drawable.ic_phone
-                                        },
-                                    ),
-                                    selected = selected,
-                                    onClick = { onActivate(app.packageName, slot.id) },
-                                    enabled = operationsEnabled &&
-                                        snapshot.bindingState == BindingState.Ready,
-                                    loading = activatingPackage == app.packageName &&
-                                        activatingSlot == slot.id,
-                                )
-                            }
-                        }
-                    }
+                    add(SlicesMenuItem(text = unenrollText, danger = true, onClick = onUnenroll))
+                },
+                contentDescription = stringResource(R.string.configured_app_actions),
+                enabled = operationsEnabled,
+                modifier = Modifier.align(Alignment.Top),
+            )
+        }
+        AnimatedVisibility(
+            visible = accountsExpanded,
+            enter = if (reduced) {
+                androidx.compose.animation.EnterTransition.None
+            } else {
+                expandVertically(Motion.size) + fadeIn(Motion.effects())
+            },
+            exit = if (reduced) {
+                androidx.compose.animation.ExitTransition.None
+            } else {
+                shrinkVertically(Motion.size) + fadeOut(Motion.effects())
+            },
+        ) {
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = Space.md, end = Space.md, bottom = Space.md),
+                horizontalArrangement = Arrangement.spacedBy(Space.xs),
+                verticalArrangement = Arrangement.spacedBy(Space.xs),
+            ) {
+                quickSwitchSlots(snapshot).forEach { slot ->
+                    SlicesSlotButton(
+                        text = if (slot.id == BASE_SLOT_ID) {
+                            stringResource(R.string.original_space)
+                        } else {
+                            spaceDisplayName(slot)
+                        },
+                        icon = painterResource(
+                            if (slot.id == BASE_SLOT_ID) R.drawable.ic_layers else R.drawable.ic_phone,
+                        ),
+                        selected = snapshot.activeSlot == slot.id,
+                        onClick = { onActivate(slot.id) },
+                        enabled = operationsEnabled && ready,
+                        loading = activatingSlot == slot.id,
+                    )
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun EmptyConfiguredApps(
-    hasQuery: Boolean,
-) {
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 18.dp,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 32.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                text = if (hasQuery) {
-                    stringResource(R.string.no_search_results)
-                } else {
-                    stringResource(R.string.no_configured_apps)
-                },
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = if (hasQuery) {
-                    stringResource(R.string.try_another_search)
-                } else {
-                    stringResource(R.string.no_configured_apps_description)
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun LoadingAppsMessage() {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        SlicesSpinner(size = 28.dp, strokeWidth = 3.dp)
-        Text(
-            text = stringResource(R.string.loading_apps),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

@@ -1,5 +1,6 @@
 package com.uclone.slices.v2.ui
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalContentColor
@@ -10,7 +11,8 @@ import androidx.compose.material3.darkColorScheme as materialDarkColorScheme
 import androidx.compose.material3.lightColorScheme as materialLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -20,91 +22,114 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme as miuixDarkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme as miuixLightColorScheme
 
-// Status green per theme. The light green is only 3.5:1 on the MIUIX dark card (#242424),
-// under the 4.5:1 WCAG text minimum; the dark green measures 6.2:1 there and 5.2:1 on its
-// dark container.
-internal val SlicesSuccess: Color
-    @Composable
-    @ReadOnlyComposable
-    get() = if (isSystemInDarkTheme()) Color(0xFF3CB97F) else Color(0xFF16885A)
+// Spec fallback accent when the platform has no dynamic colour (Android 11 and below).
+private val FallbackAccentLight = Color(0xFF3478F6)
+private val FallbackAccentDark = Color(0xFF5A93FF)
 
-internal val SlicesSuccessContainer: Color
-    @Composable
-    @ReadOnlyComposable
-    get() = if (isSystemInDarkTheme()) Color(0xFF16382A) else Color(0xFFE3F5EC)
+private data class AccentPair(val accent: Color, val onAccent: Color)
 
-internal val SlicesWarning = Color(0xFFE18428)
-internal val SlicesWatermelon = Color(0xFFD83B50)
-private val SlicesBlue = Color(0xFF3482FF)
+/** Android 12+ dynamic accent (system_accent1 tone 40 / 80), otherwise the spec fallback. */
+@Composable
+private fun rememberAccent(dark: Boolean): AccentPair {
+    val context = LocalContext.current
+    return remember(context, dark) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (dark) {
+                AccentPair(
+                    Color(context.getColor(android.R.color.system_accent1_200)),
+                    Color(context.getColor(android.R.color.system_accent1_800)),
+                )
+            } else {
+                AccentPair(Color(context.getColor(android.R.color.system_accent1_600)), Color.White)
+            }
+        } else if (dark) {
+            AccentPair(FallbackAccentDark, Color.White)
+        } else {
+            AccentPair(FallbackAccentLight, Color.White)
+        }
+    }
+}
 
-private val LightMaterialColors = materialLightColorScheme(
-    primary = SlicesBlue,
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFE8F1FF),
-    onPrimaryContainer = Color(0xFF14345D),
-    secondary = Color(0xFF60647B),
+private fun lightMaterialColors(accent: AccentPair) = materialLightColorScheme(
+    primary = accent.accent,
+    onPrimary = accent.onAccent,
+    primaryContainer = Color(0xFFE5EEFD),
+    onPrimaryContainer = Color(0xFF1A57C9),
+    secondary = Color(0xFF4A4F57),
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFFECECF0),
-    onSecondaryContainer = Color(0xFF252735),
-    background = Color(0xFFF7F7F8),
+    secondaryContainer = Color(0xFFEEF0F3),
+    onSecondaryContainer = Color(0xFF4A4F57),
+    background = Color(0xFFF5F6F8),
     onBackground = Color(0xFF1C1D23),
     surface = Color.White,
     onSurface = Color(0xFF1C1D23),
-    surfaceVariant = Color(0xFFF1F1F3),
-    onSurfaceVariant = Color(0xFF666A78),
+    surfaceVariant = Color(0xFFEEF0F3),
+    onSurfaceVariant = Color(0xFF5C606A),
     outline = Color(0xFFD2D2D6),
     outlineVariant = Color(0xFFE6E6E9),
-    error = Color(0xFFE94634),
+    error = Color(0xFFB3261E),
     onError = Color.White,
-    errorContainer = Color(0xFFFFECE9),
-    onErrorContainer = Color(0xFF6A1710),
+    errorContainer = Color(0xFFFCE8E8),
+    onErrorContainer = Color(0xFFB3261E),
 )
 
-private val DarkMaterialColors = materialDarkColorScheme(
-    primary = Color(0xFF5A9AFF),
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFF183A67),
-    onPrimaryContainer = Color(0xFFD8E8FF),
-    secondary = Color(0xFFBEC2D8),
-    onSecondary = Color(0xFF292C3B),
-    secondaryContainer = Color(0xFF35363B),
-    onSecondaryContainer = Color(0xFFF0F0F4),
-    background = Color(0xFF111113),
+private fun darkMaterialColors(accent: AccentPair) = materialDarkColorScheme(
+    primary = accent.accent,
+    onPrimary = accent.onAccent,
+    primaryContainer = Color(0xFF172947),
+    onPrimaryContainer = Color(0xFFA9C5FA),
+    secondary = Color(0xFFC4C8CF),
+    onSecondary = Color(0xFF26282D),
+    secondaryContainer = Color(0xFF26282D),
+    onSecondaryContainer = Color(0xFFC4C8CF),
+    background = Color.Black,
     onBackground = Color(0xFFF1F1F3),
-    surface = Color(0xFF1C1C1E),
+    surface = Color(0xFF16171A),
     onSurface = Color(0xFFF1F1F3),
-    surfaceVariant = Color(0xFF2A2A2D),
+    surfaceVariant = Color(0xFF212226),
     onSurfaceVariant = Color(0xFFB4B4BC),
     outline = Color(0xFF525257),
     outlineVariant = Color(0xFF353539),
-    error = Color(0xFFFF6257),
-    onError = Color.White,
-    errorContainer = Color(0xFF461A16),
-    onErrorContainer = Color(0xFFFFDAD5),
+    error = Color(0xFFF4A7A3),
+    onError = Color(0xFF3B1A1A),
+    errorContainer = Color(0xFF3B1A1A),
+    onErrorContainer = Color(0xFFF4A7A3),
 )
 
-private val LightMiuixColors = miuixLightColorScheme(
-    primary = SlicesBlue,
-    onPrimary = Color.White,
-    primaryVariant = SlicesBlue,
-    onPrimaryVariant = Color(0xFFD8E8FF),
-    error = Color(0xFFE94634),
-    errorContainer = Color(0xFFFFECE9),
-    background = Color.White,
-    surface = Color(0xFFF7F7F8),
+// Miuix page / card levels are mapped onto the spec surfaces so Miuix popups, fields and
+// switches sit on the same values as the custom components.
+private fun lightMiuixColors(accent: AccentPair) = miuixLightColorScheme(
+    primary = accent.accent,
+    onPrimary = accent.onAccent,
+    primaryVariant = accent.accent,
+    onPrimaryVariant = Color(0xFFE5EEFD),
+    error = Color(0xFFB3261E),
+    errorContainer = Color(0xFFFCE8E8),
+    background = Color(0xFFF5F6F8),
+    surface = Color(0xFFF5F6F8),
     surfaceVariant = Color.White,
     surfaceContainer = Color.White,
-    surfaceContainerHigh = Color(0xFFECECEE),
-    surfaceContainerHighest = Color(0xFFE4E4E7),
+    surfaceContainerHigh = Color(0xFFEEF0F3),
+    surfaceContainerHighest = Color(0xFFE4E5E9),
     outline = Color(0xFFD2D2D6),
-    dividerLine = Color(0xFFE6E6E9),
+    dividerLine = Color(0x14000000),
+    windowDimming = Color.Black.copy(alpha = .32f),
 )
 
-private val DarkMiuixColors = miuixDarkColorScheme(
-    primary = Color(0xFF5A9AFF),
-    primaryVariant = Color(0xFF4D91FF),
-    error = Color(0xFFFF6257),
-    errorContainer = Color(0xFF461A16),
+private fun darkMiuixColors(accent: AccentPair) = miuixDarkColorScheme(
+    primary = accent.accent,
+    onPrimary = accent.onAccent,
+    primaryVariant = accent.accent,
+    error = Color(0xFFF4A7A3),
+    errorContainer = Color(0xFF3B1A1A),
+    background = Color.Black,
+    surface = Color.Black,
+    surfaceVariant = Color(0xFF16171A),
+    surfaceContainer = Color(0xFF16171A),
+    surfaceContainerHigh = Color(0xFF212226),
+    surfaceContainerHighest = Color(0xFF2A2B30),
+    dividerLine = Color(0x1AFFFFFF),
+    windowDimming = Color.Black.copy(alpha = .50f),
 )
 
 private val SlicesTypography = Typography(
@@ -154,19 +179,26 @@ private val SlicesTypography = Typography(
 )
 
 private val SlicesShapes = Shapes(
-    small = RoundedCornerShape(12.dp),
+    small = RoundedCornerShape(10.dp),
     medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(20.dp),
+    large = RoundedCornerShape(24.dp),
 )
 
 @Composable
 internal fun SlicesTheme(content: @Composable () -> Unit) {
     val darkTheme = isSystemInDarkTheme()
+    val accent = rememberAccent(darkTheme)
+    val miuixColors = remember(darkTheme, accent) {
+        if (darkTheme) darkMiuixColors(accent) else lightMiuixColors(accent)
+    }
+    val materialColors = remember(darkTheme, accent) {
+        if (darkTheme) darkMaterialColors(accent) else lightMaterialColors(accent)
+    }
     MiuixTheme(
-        colors = if (darkTheme) DarkMiuixColors else LightMiuixColors,
+        colors = miuixColors,
     ) {
         MaterialTheme(
-            colorScheme = if (darkTheme) DarkMaterialColors else LightMaterialColors,
+            colorScheme = materialColors,
             typography = SlicesTypography,
             shapes = SlicesShapes,
         ) {

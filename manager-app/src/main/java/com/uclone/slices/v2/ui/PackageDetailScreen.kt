@@ -1,6 +1,8 @@
 package com.uclone.slices.v2.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,36 +11,30 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.SeedMode
 import com.uclone.slices.v2.runtime.SlotSnapshot
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.extra.SuperBottomSheet
+import kotlinx.coroutines.delay
+import top.yukonga.miuix.kmp.basic.Text
 
 @Composable
 internal fun PackageDetailScreen(
@@ -63,110 +59,117 @@ internal fun PackageDetailScreen(
     val activatingSlot = (state.operation as? OperationUiState.ActivatingSpace)
         ?.takeIf { it.packageName == packageSnapshot.packageName }
         ?.slotId
+    val play = rememberStaggerPlay("package_detail")
+    val actionsEnabled = !state.busy && operationsEnabled
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding),
-        contentPadding = PaddingValues(start = 20.dp, top = 12.dp, end = 20.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item {
-            DetailHeader(
-                appLabel = appLabel,
-                onBack = { onIntent(UiIntent.NavigateBack) },
-                onRefresh = { onIntent(UiIntent.Refresh) },
-                enabled = !state.busy,
-            )
-        }
-        item {
-            CurrentSpaceCard(
-                appLabel = appLabel,
-                packageName = packageSnapshot.packageName,
-                installedApp = installedApp,
-                activeSlot = activeSlot,
-                enabled = !state.busy && operationsEnabled,
-                launching = activatingSlot == packageSnapshot.activeSlot,
-                onLaunch = {
-                    onIntent(UiIntent.ActivateSlot(packageSnapshot.activeSlot))
-                },
-                onBackup = activeSlot?.let { slot ->
-                    {
-                        onIntent(
-                            UiIntent.OpenBackupRestore(packageSnapshot.packageName, slot.id),
+    Box(Modifier.fillMaxSize()) {
+        ManagerScreen(
+            title = appLabel,
+            contentPadding = contentPadding,
+            onBack = { onIntent(UiIntent.NavigateBack) },
+            backEnabled = !state.busy,
+            backDescription = stringResource(R.string.back_to_apps),
+            actions = {
+                TopBarIconButton(
+                    painter = painterResource(R.drawable.ic_refresh),
+                    contentDescription = stringResource(R.string.refresh),
+                    onClick = { onIntent(UiIntent.Refresh) },
+                    enabled = !state.busy,
+                )
+            },
+        ) {
+            item(key = "current") {
+                CurrentSpaceCard(
+                    appLabel = appLabel,
+                    packageName = packageSnapshot.packageName,
+                    installedApp = installedApp,
+                    activeSlot = activeSlot,
+                    enabled = actionsEnabled,
+                    launching = activatingSlot == packageSnapshot.activeSlot,
+                    onLaunch = {
+                        onIntent(UiIntent.ActivateSlot(packageSnapshot.activeSlot))
+                    },
+                    onBackup = activeSlot?.let { slot ->
+                        {
+                            onIntent(
+                                UiIntent.OpenBackupRestore(packageSnapshot.packageName, slot.id),
+                            )
+                        }
+                    },
+                    onRename = activeSlot
+                        ?.takeUnless { it.id == BASE_SLOT_ID }
+                        ?.let { slot ->
+                            { onIntent(UiIntent.RequestRenameSlot(slot.id)) }
+                        },
+                    modifier = Modifier.staggerIn(0, play),
+                )
+            }
+            item(key = "other_header") {
+                SectionHeader(
+                    text = stringResource(R.string.other_spaces) + " · " + stringResource(
+                        R.string.independent_space_count,
+                        independentSpaceCount(packageSnapshot),
+                    ),
+                    modifier = Modifier
+                        .animateItem()
+                        .staggerIn(1, play),
+                    trailing = {
+                        AppButton(
+                            text = stringResource(R.string.create_space_short),
+                            onClick = { createSheetVisible = true },
+                            enabled = actionsEnabled,
+                            kind = ButtonKind.Secondary,
+                            compact = true,
+                            icon = painterResource(R.drawable.ic_add),
+                        )
+                    },
+                )
+            }
+            if (otherSlots.isEmpty()) {
+                item(key = "no_other") {
+                    GroupCard(
+                        modifier = Modifier
+                            .animateItem()
+                            .staggerIn(2, play),
+                    ) {
+                        EmptyState(
+                            title = stringResource(R.string.no_other_spaces),
+                            message = stringResource(R.string.no_other_spaces_description),
+                            icon = painterResource(R.drawable.ic_storage),
                         )
                     }
-                },
-                onRename = activeSlot
-                    ?.takeUnless { it.id == BASE_SLOT_ID }
-                    ?.let { slot ->
-                        { onIntent(UiIntent.RequestRenameSlot(slot.id)) }
-                    },
-            )
-        }
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.other_spaces),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
-                        text = stringResource(
-                            R.string.independent_space_count,
-                            independentSpaceCount(packageSnapshot),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                }
+            } else {
+                items(otherSlots, key = { "slot:${it.id}" }) { slot ->
+                    OtherSpaceCard(
+                        slot = slot,
+                        enabled = actionsEnabled,
+                        switching = activatingSlot == slot.id,
+                        onActivate = { onIntent(UiIntent.ActivateSlot(slot.id)) },
+                        onBackup = {
+                            onIntent(UiIntent.OpenBackupRestore(packageSnapshot.packageName, slot.id))
+                        },
+                        onRename = if (slot.id == BASE_SLOT_ID) {
+                            null
+                        } else {
+                            { onIntent(UiIntent.RequestRenameSlot(slot.id)) }
+                        },
+                        onDelete = if (slot.id == BASE_SLOT_ID) {
+                            null
+                        } else {
+                            { onIntent(UiIntent.RequestDeleteSlot(slot.id)) }
+                        },
+                        modifier = Modifier
+                            .animateItem()
+                            .staggerIn(2 + otherSlots.indexOf(slot), play),
                     )
                 }
-                SlicesActionButton(
-                    text = stringResource(R.string.create_space_short),
-                    onClick = { createSheetVisible = true },
-                    enabled = !state.busy && operationsEnabled,
-                    primary = false,
-                    compact = true,
-                    icon = painterResource(R.drawable.ic_add),
-                )
             }
         }
-        if (otherSlots.isEmpty()) {
-            item {
-                NoOtherSpacesCard()
-            }
-        } else {
-            items(otherSlots, key = SlotSnapshot::id) { slot ->
-                OtherSpaceCard(
-                    slot = slot,
-                    enabled = !state.busy && operationsEnabled,
-                    switching = activatingSlot == slot.id,
-                    onActivate = { onIntent(UiIntent.ActivateSlot(slot.id)) },
-                    onBackup = {
-                        onIntent(UiIntent.OpenBackupRestore(packageSnapshot.packageName, slot.id))
-                    },
-                    onRename = if (slot.id == BASE_SLOT_ID) {
-                        null
-                    } else {
-                        { onIntent(UiIntent.RequestRenameSlot(slot.id)) }
-                    },
-                    onDelete = if (slot.id == BASE_SLOT_ID) {
-                        null
-                    } else {
-                        { onIntent(UiIntent.RequestDeleteSlot(slot.id)) }
-                    },
-                )
-            }
-        }
-    }
 
-    if (createSheetVisible) {
         CreateSpaceSheet(
-            state = state,
+            visible = createSheetVisible,
+            seed = state.seed,
             canCloneBase = packageSnapshot.activeSlot == BASE_SLOT_ID,
             onDismiss = { createSheetVisible = false },
             onIntent = onIntent,
@@ -175,48 +178,6 @@ internal fun PackageDetailScreen(
                 onIntent(UiIntent.CreateSlot(name))
             },
         )
-    }
-}
-
-@Composable
-private fun DetailHeader(
-    appLabel: String,
-    onBack: () -> Unit,
-    onRefresh: () -> Unit,
-    enabled: Boolean,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(
-            enabled = enabled,
-            onClick = onBack,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_arrow_back),
-                contentDescription = stringResource(R.string.back_to_apps),
-            )
-        }
-        Text(
-            text = appLabel,
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 4.dp),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        IconButton(
-            enabled = enabled,
-            onClick = onRefresh,
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_refresh),
-                contentDescription = stringResource(R.string.refresh),
-                tint = MaterialTheme.colorScheme.primary,
-            )
-        }
     }
 }
 
@@ -231,83 +192,77 @@ private fun CurrentSpaceCard(
     onLaunch: () -> Unit,
     onBackup: (() -> Unit)?,
     onRename: (() -> Unit)?,
+    modifier: Modifier = Modifier,
 ) {
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(18.dp)) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AppIcon(appLabel, installedApp?.icon, 58.dp)
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = appLabel,
-                        style = MaterialTheme.typography.titleLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = packageName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                onBackup?.let {
-                    SpaceActionsMenu(
-                        enabled = enabled,
-                        onBackup = it,
-                        onRename = onRename,
-                        onDelete = null,
-                    )
-                }
-            }
-            HorizontalDivider(
-                modifier = Modifier.padding(vertical = 16.dp),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    modifier = Modifier.size(10.dp),
-                    shape = RoundedCornerShape(5.dp),
-                    color = SlicesSuccess,
-                    content = {},
+    GroupCard(modifier = modifier, padded = true) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AppIcon(appLabel, installedApp?.icon, 56.dp)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = appLabel,
+                    color = TextPrimary,
+                    fontSize = TypeScale.headline,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = stringResource(R.string.currently_using),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = SlicesSuccess,
-                    modifier = Modifier.padding(start = 8.dp),
+                    text = packageName,
+                    color = TextTertiary,
+                    fontSize = TypeScale.caption,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(
-                text = activeSlot?.let(::spaceDisplayName)
-                    ?: stringResource(R.string.unknown_space),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.padding(top = 8.dp),
-            )
-            Text(
-                text = if (activeSlot?.id == BASE_SLOT_ID) {
-                    stringResource(R.string.system_space_description)
-                } else {
-                    stringResource(R.string.independent_space_description)
-                },
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-            SlicesActionButton(
-                text = stringResource(R.string.launch_app),
-                onClick = onLaunch,
-                enabled = enabled,
-                loading = launching,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 18.dp),
-            )
+            onBackup?.let {
+                SpaceActionsMenu(
+                    enabled = enabled,
+                    onBackup = it,
+                    onRename = onRename,
+                    onDelete = null,
+                )
+            }
         }
+        Spacer(Modifier.height(Space.md))
+        StatusChip(text = stringResource(R.string.currently_using), tone = Tone.Success)
+        AnimatedContent(
+            targetState = activeSlot,
+            transitionSpec = fadeThrough(),
+            label = "current-space",
+        ) { slot ->
+            Column {
+                Text(
+                    text = slot?.let(::spaceDisplayName) ?: stringResource(R.string.unknown_space),
+                    color = TextPrimary,
+                    fontSize = TypeScale.title,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = Space.xs),
+                )
+                Text(
+                    text = if (slot?.id == BASE_SLOT_ID) {
+                        stringResource(R.string.system_space_description)
+                    } else {
+                        stringResource(R.string.independent_space_description)
+                    },
+                    color = TextSecondary,
+                    fontSize = TypeScale.subhead,
+                    lineHeight = 20.sp,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+        AppButton(
+            text = stringResource(R.string.launch_app),
+            onClick = onLaunch,
+            enabled = enabled,
+            loading = launching,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = Space.md),
+        )
     }
 }
 
@@ -320,64 +275,40 @@ private fun OtherSpaceCard(
     onBackup: () -> Unit,
     onRename: (() -> Unit)?,
     onDelete: (() -> Unit)?,
+    modifier: Modifier = Modifier,
 ) {
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 18.dp,
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    modifier = Modifier.size(42.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_storage),
-                        contentDescription = null,
-                        modifier = Modifier.padding(10.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(start = 12.dp),
-                ) {
-                    Text(
-                        text = spaceDisplayName(slot),
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = if (slot.id == BASE_SLOT_ID) {
-                            stringResource(R.string.system_space_description)
-                        } else {
-                            stringResource(R.string.independent_space_description)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+    GroupCard(modifier = modifier) {
+        ListRow(
+            title = spaceDisplayName(slot),
+            summary = if (slot.id == BASE_SLOT_ID) {
+                stringResource(R.string.system_space_description)
+            } else {
+                stringResource(R.string.independent_space_description)
+            },
+            icon = painterResource(
+                if (slot.id == BASE_SLOT_ID) R.drawable.ic_layers else R.drawable.ic_storage,
+            ),
+            iconTone = if (slot.id == BASE_SLOT_ID) Tone.Neutral else Tone.Info,
+            trailing = {
                 SpaceActionsMenu(
                     enabled = enabled,
                     onBackup = onBackup,
                     onRename = onRename,
                     onDelete = onDelete,
                 )
-            }
-            SlicesActionButton(
-                text = stringResource(R.string.switch_and_launch),
-                onClick = onActivate,
-                enabled = enabled,
-                loading = switching,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 14.dp),
-                primary = false,
-            )
-        }
+            },
+            summaryMaxLines = 2,
+        )
+        AppButton(
+            text = stringResource(R.string.switch_and_launch),
+            onClick = onActivate,
+            enabled = enabled,
+            loading = switching,
+            kind = ButtonKind.Secondary,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = Space.md, end = Space.md, top = Space.xxs, bottom = Space.sm),
+        )
     }
 }
 
@@ -403,106 +334,78 @@ private fun SpaceActionsMenu(
 }
 
 @Composable
-private fun NoOtherSpacesCard() {
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 18.dp,
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp, vertical = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = stringResource(R.string.no_other_spaces),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = stringResource(R.string.no_other_spaces_description),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-    }
-}
-
-@Composable
 private fun CreateSpaceSheet(
-    state: SlotsUiState,
+    visible: Boolean,
+    seed: SeedMode,
     canCloneBase: Boolean,
     onDismiss: () -> Unit,
     onIntent: (UiIntent) -> Unit,
     onCreate: (String) -> Unit,
 ) {
-    val show = remember { mutableStateOf(true) }
     var slotName by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue())
     }
-    SuperBottomSheet(
-        show = show,
+    // Each opening starts with an empty name, as when the sheet was recreated per opening.
+    LaunchedEffect(visible) {
+        if (!visible) {
+            delay(SheetResetDelayMs)
+            slotName = TextFieldValue()
+        }
+    }
+    BottomSheet(
+        visible = visible,
+        onDismiss = onDismiss,
         title = stringResource(R.string.create_space),
-        onDismissRequest = {
-            show.value = false
-            onDismiss()
-        },
+        summary = stringResource(R.string.create_space_description),
     ) {
-        Column(
+        SlicesInputField(
+            value = slotName,
+            onValueChange = { slotName = it },
+            label = stringResource(R.string.space_name),
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Text(
-                text = stringResource(R.string.create_space_description),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            SlicesInputField(
-                value = slotName,
-                onValueChange = { slotName = it },
-                label = stringResource(R.string.space_name),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                text = stringResource(R.string.initial_data),
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SlicesSlotButton(
-                    text = stringResource(R.string.blank_space),
-                    selected = state.seed == SeedMode.Blank,
-                    enabled = true,
-                    onClick = { onIntent(UiIntent.SeedChanged(SeedMode.Blank)) },
-                    modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = stringResource(R.string.initial_data),
+            color = TextSecondary,
+            fontSize = TypeScale.sectionHeader,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(start = Space.xxs, top = Space.md, bottom = Space.xs),
+        )
+        Segmented(
+            options = listOf(
+                stringResource(R.string.blank_space),
+                stringResource(R.string.clone_system_space),
+            ),
+            selected = if (seed == SeedMode.CloneBase) 1 else 0,
+            onSelect = { index ->
+                onIntent(
+                    UiIntent.SeedChanged(if (index == 1) SeedMode.CloneBase else SeedMode.Blank),
                 )
-                SlicesSlotButton(
-                    text = stringResource(R.string.clone_system_space),
-                    selected = state.seed == SeedMode.CloneBase,
-                    enabled = canCloneBase,
-                    onClick = { onIntent(UiIntent.SeedChanged(SeedMode.CloneBase)) },
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            },
+            enabled = { index -> index == 0 || canCloneBase },
+        )
+        AnimatedContent(canCloneBase, transitionSpec = fadeThrough(), label = "clone-hint") { clone ->
             Text(
-                text = if (canCloneBase) {
+                text = if (clone) {
                     stringResource(R.string.clone_system_space_hint)
                 } else {
                     stringResource(R.string.clone_system_space_unavailable)
                 },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(4.dp))
-            SlicesActionButton(
-                text = stringResource(R.string.create),
-                onClick = {
-                    show.value = false
-                    onCreate(slotName.text)
-                },
-                enabled = slotName.text.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
+                color = TextSecondary,
+                fontSize = TypeScale.caption,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(start = Space.xxs, end = Space.xxs, top = Space.xs),
             )
         }
+        AppButton(
+            text = stringResource(R.string.create),
+            onClick = { if (visible) onCreate(slotName.text) },
+            enabled = slotName.text.isNotBlank(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = Space.lg),
+        )
     }
 }
+
+private const val SheetResetDelayMs = 260L

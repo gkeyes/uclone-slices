@@ -1,59 +1,54 @@
 package com.uclone.slices.v2.ui
 
-import android.graphics.drawable.Drawable
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import androidx.core.graphics.drawable.toBitmap
 import com.uclone.slices.v2.R
+import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.backup.BackupRestoreScreen
 import com.uclone.slices.v2.backup.BackupRestoreUiState
 import com.uclone.slices.v2.backup.BackupUiIntent
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Surface as MiuixSurface
-import top.yukonga.miuix.kmp.extra.SuperDialog
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.basic.Text
 
 @Composable
 internal fun SlicesScreen(
@@ -70,69 +65,128 @@ internal fun SlicesScreen(
     ) {
         onIntent(UiIntent.NavigateBack)
     }
+    val reduced = rememberReducedMotion()
+    val pageOffset = with(LocalDensity.current) { Motion.PageOffset.roundToPx() }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
-            containerColor = MiuixTheme.colorScheme.surface,
+            containerColor = Surfaces.page,
         ) { contentPadding ->
             AnimatedContent(
-            targetState = state.destination,
-            transitionSpec = {
-                val forward = targetState != ManagerDestination.Spaces
-                val enterOffset: (Int) -> Int = { width ->
-                    if (forward) width / 5 else -width / 5
-                }
-                val exitOffset: (Int) -> Int = { width ->
-                    if (forward) -width / 8 else width / 8
-                }
-                (
-                    slideInHorizontally(tween(220), enterOffset) +
-                        fadeIn(tween(180))
-                    ) togetherWith (
-                    slideOutHorizontally(tween(180), exitOffset) +
-                        fadeOut(tween(140))
+                targetState = state.destination,
+                transitionSpec = {
+                    sharedAxisX(
+                        forward = targetState.depth() >= initialState.depth(),
+                        offsetPx = pageOffset,
+                        reduced = reduced,
                     )
-            },
-            label = "manager_destination",
-            modifier = Modifier.fillMaxSize(),
-        ) { destination ->
-            when (destination) {
-                ManagerDestination.Spaces -> AppListScreen(
-                    state = state,
-                    contentPadding = contentPadding,
-                    onIntent = onIntent,
-                )
-                ManagerDestination.AddApp -> AddAppScreen(
-                    state = state,
-                    contentPadding = contentPadding,
-                    onIntent = onIntent,
-                )
-                ManagerDestination.PackageDetails -> state.selected?.let { selected ->
-                    PackageDetailScreen(
+                },
+                label = "manager_destination",
+                modifier = Modifier.fillMaxSize(),
+            ) { destination ->
+                when (destination) {
+                    ManagerDestination.Spaces -> AppListScreen(
                         state = state,
-                        packageSnapshot = selected,
-                        installedApp = state.installedApps.firstOrNull {
-                            it.packageName == selected.packageName
-                        },
+                        contentPadding = contentPadding,
+                        onIntent = onIntent,
+                    )
+                    ManagerDestination.AddApp -> AddAppScreen(
+                        state = state,
+                        contentPadding = contentPadding,
+                        onIntent = onIntent,
+                    )
+                    ManagerDestination.PackageDetails -> state.selected?.let { selected ->
+                        PackageDetailScreen(
+                            state = state,
+                            packageSnapshot = selected,
+                            installedApp = state.installedApps.firstOrNull {
+                                it.packageName == selected.packageName
+                            },
+                            contentPadding = contentPadding,
+                            onIntent = onIntent,
+                        )
+                    }
+                    ManagerDestination.BackupRestore -> BackupRestoreScreen(
+                        state = backupState,
+                        slotsState = state,
+                        contentPadding = contentPadding,
+                        onBack = { onIntent(UiIntent.NavigateBack) },
+                        onIntent = onBackupIntent,
+                        suggestedBackupName = suggestedBackupName,
+                    )
+                    ManagerDestination.RuntimeStatus -> RuntimeStatusScreen(
+                        state = state,
                         contentPadding = contentPadding,
                         onIntent = onIntent,
                     )
                 }
-                ManagerDestination.BackupRestore -> BackupRestoreScreen(
-                    state = backupState,
-                    slotsState = state,
-                    contentPadding = contentPadding,
-                    onBack = { onIntent(UiIntent.NavigateBack) },
-                    onIntent = onBackupIntent,
-                    suggestedBackupName = suggestedBackupName,
-                )
-                ManagerDestination.RuntimeStatus -> RuntimeStatusScreen(
-                    state = state,
-                    contentPadding = contentPadding,
-                    onIntent = onIntent,
-                )
             }
         }
+
+        val configuring = rememberRetained(state.pendingConfigurationPackage)
+        if (configuring != null) {
+            ConfigureAppSheet(
+                visible = state.pendingConfigurationPackage != null,
+                packageName = configuring,
+                installedApp = state.installedApps.firstOrNull { it.packageName == configuring },
+                onConfirm = { onIntent(UiIntent.ConfirmConfigureApp) },
+                onDismiss = { onIntent(UiIntent.DismissConfigureApp) },
+            )
+        }
+
+        val recovery = rememberRetained(state.registrationRecovery)
+        if (recovery != null) {
+            RegistrationRecoverySheet(
+                visible = state.registrationRecovery != null,
+                recovery = recovery,
+                onConfirmationChanged = {
+                    onIntent(UiIntent.RegistrationRecoveryConfirmationChanged(it))
+                },
+                onConfirm = { onIntent(UiIntent.ConfirmRegistrationRecovery) },
+                onDismiss = { onIntent(UiIntent.DismissRegistrationRecovery) },
+            )
+        }
+
+        val rename = rememberRetained(state.pendingRename)
+        if (rename != null) {
+            RenameSpaceSheet(
+                visible = state.pendingRename != null,
+                rename = rename,
+                onNameChanged = { onIntent(UiIntent.RenameSlotNameChanged(it)) },
+                onConfirm = { onIntent(UiIntent.ConfirmRenameSlot) },
+                onDismiss = { onIntent(UiIntent.DismissRenameSlot) },
+            )
+        }
+
+        val deletion = rememberRetained(state.pendingDelete)
+        if (deletion != null) {
+            DeleteSpaceSheet(
+                visible = state.pendingDelete != null,
+                deletion = deletion,
+                onConfirm = { onIntent(UiIntent.ConfirmDeleteSlot) },
+                onDismiss = { onIntent(UiIntent.DismissDeleteSlot) },
+            )
+        }
+
+        val unenrollment = rememberRetained(state.pendingUnenroll)
+        if (unenrollment != null) {
+            UnenrollAppSheet(
+                visible = state.pendingUnenroll != null,
+                unenrollment = unenrollment,
+                onConfirmationChanged = {
+                    onIntent(UiIntent.UnenrollConfirmationChanged(it))
+                },
+                onConfirm = { onIntent(UiIntent.ConfirmUnenrollApp) },
+                onDismiss = { onIntent(UiIntent.DismissUnenrollApp) },
+            )
+        }
+
+        val blocking = rememberRetained(state.operation.takeIf { it.blocksScreen })
+        if (blocking != null) {
+            OperationDialog(
+                visible = state.operation.blocksScreen,
+                operation = blocking,
+            )
         }
 
         NoticeHost(
@@ -142,84 +196,36 @@ internal fun SlicesScreen(
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(start = 12.dp, top = 8.dp, end = 12.dp)
+                .padding(start = Space.sm, top = Space.xs, end = Space.sm)
                 .zIndex(10f),
         )
     }
+}
 
-    state.pendingConfigurationPackage?.let { packageName ->
-        val installedApp = state.installedApps.firstOrNull {
-            it.packageName == packageName
-        }
-        ConfigureAppDialog(
-            appLabel = installedApp?.label ?: packageName,
-            packageName = packageName,
-            onConfirm = { onIntent(UiIntent.ConfirmConfigureApp) },
-            onDismiss = { onIntent(UiIntent.DismissConfigureApp) },
-        )
-    }
-
-    state.registrationRecovery?.let { recovery ->
-        RegistrationRecoveryDialog(
-            recovery = recovery,
-            onConfirmationChanged = {
-                onIntent(UiIntent.RegistrationRecoveryConfirmationChanged(it))
-            },
-            onConfirm = { onIntent(UiIntent.ConfirmRegistrationRecovery) },
-            onDismiss = { onIntent(UiIntent.DismissRegistrationRecovery) },
-        )
-    }
-
-    state.pendingRename?.let { rename ->
-        RenameSpaceDialog(
-            rename = rename,
-            onNameChanged = { onIntent(UiIntent.RenameSlotNameChanged(it)) },
-            onConfirm = { onIntent(UiIntent.ConfirmRenameSlot) },
-            onDismiss = { onIntent(UiIntent.DismissRenameSlot) },
-        )
-    }
-
-    state.pendingDelete?.let { deletion ->
-        DeleteSpaceDialog(
-            deletion = deletion,
-            onConfirm = { onIntent(UiIntent.ConfirmDeleteSlot) },
-            onDismiss = { onIntent(UiIntent.DismissDeleteSlot) },
-        )
-    }
-
-    state.pendingUnenroll?.let { unenrollment ->
-        UnenrollAppDialog(
-            unenrollment = unenrollment,
-            onConfirmationChanged = {
-                onIntent(UiIntent.UnenrollConfirmationChanged(it))
-            },
-            onConfirm = { onIntent(UiIntent.ConfirmUnenrollApp) },
-            onDismiss = { onIntent(UiIntent.DismissUnenrollApp) },
-        )
-    }
-
-    if (state.operation.blocksScreen) {
-        OperationDialog(state.operation)
-    }
+/** Navigation depth: forward pushes slide in from the end, back slides the other way. */
+private fun ManagerDestination.depth(): Int = when (this) {
+    ManagerDestination.Spaces -> 0
+    ManagerDestination.AddApp,
+    ManagerDestination.RuntimeStatus,
+    ManagerDestination.PackageDetails,
+    -> 1
+    ManagerDestination.BackupRestore -> 2
 }
 
 @Composable
-private fun RenameSpaceDialog(
+private fun RenameSpaceSheet(
+    visible: Boolean,
     rename: RenameSpaceUi,
     onNameChanged: (String) -> Unit,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val normalized = rename.name.trim()
-    val show = remember(rename.packageName, rename.slotId) { mutableStateOf(true) }
-    SuperDialog(
-        show = show,
+    BottomSheet(
+        visible = visible,
+        onDismiss = onDismiss,
         title = stringResource(R.string.rename_space_title),
         summary = stringResource(R.string.rename_space_hint),
-        onDismissRequest = {
-            show.value = false
-            onDismiss()
-        },
     ) {
         SlicesInputField(
             value = rename.name,
@@ -227,99 +233,50 @@ private fun RenameSpaceDialog(
             label = stringResource(R.string.space_name),
             modifier = Modifier.fillMaxWidth(),
         )
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            SlicesTextAction(
-                text = stringResource(R.string.cancel),
-                onClick = {
-                    show.value = false
-                    onDismiss()
-                },
-                modifier = Modifier.weight(1f),
-            )
-            SlicesTextAction(
-                text = stringResource(R.string.save),
-                onClick = {
-                    show.value = false
-                    onConfirm()
-                },
-                enabled = normalized.isNotEmpty() && normalized != rename.originalName,
-                primary = true,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        SheetActions(
+            cancelText = stringResource(R.string.cancel),
+            confirmText = stringResource(R.string.save),
+            onCancel = { if (visible) onDismiss() },
+            onConfirm = { if (visible) onConfirm() },
+            confirmEnabled = normalized.isNotEmpty() && normalized != rename.originalName,
+        )
     }
 }
 
 @Composable
-private fun DeleteSpaceDialog(
+private fun DeleteSpaceSheet(
+    visible: Boolean,
     deletion: DeleteSpaceUi,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val show = remember(deletion.packageName, deletion.slotId) { mutableStateOf(true) }
-    SuperDialog(
-        show = show,
+    BottomSheet(
+        visible = visible,
+        onDismiss = onDismiss,
         title = stringResource(R.string.delete_space_title),
-        onDismissRequest = {
-            show.value = false
-            onDismiss()
-        },
+        summary = stringResource(R.string.delete_space_message, deletion.name),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                text = stringResource(R.string.delete_space_message, deletion.name),
+        Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Banner(
+                text = stringResource(R.string.delete_space_data_warning),
+                tone = Tone.Danger,
+                gutter = false,
             )
-            SlicesPanel(
-                insideMargin = androidx.compose.foundation.layout.PaddingValues(12.dp),
-                cornerRadius = 14.dp,
-                color = MaterialTheme.colorScheme.errorContainer,
-            ) {
-                Text(
-                    text = stringResource(R.string.delete_space_data_warning),
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            Text(
-                text = stringResource(R.string.delete_space_current_preserved),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            SheetNote(stringResource(R.string.delete_space_current_preserved))
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 18.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            SlicesTextAction(
-                text = stringResource(R.string.cancel),
-                onClick = {
-                    show.value = false
-                    onDismiss()
-                },
-                modifier = Modifier.weight(1f),
-            )
-            SlicesTextAction(
-                text = stringResource(R.string.delete_space_confirm),
-                onClick = {
-                    show.value = false
-                    onConfirm()
-                },
-                danger = true,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        SheetActions(
+            cancelText = stringResource(R.string.cancel),
+            confirmText = stringResource(R.string.delete_space_confirm),
+            onCancel = { if (visible) onDismiss() },
+            onConfirm = { if (visible) onConfirm() },
+            destructive = true,
+        )
     }
 }
 
 @Composable
-private fun UnenrollAppDialog(
+private fun UnenrollAppSheet(
+    visible: Boolean,
     unenrollment: UnenrollAppUi,
     onConfirmationChanged: (Boolean) -> Unit,
     onConfirm: () -> Unit,
@@ -333,135 +290,100 @@ private fun UnenrollAppDialog(
             unenrollment.affectedSpaces.joinToString("、"),
         )
     }
-    val show = remember(unenrollment.packageName) { mutableStateOf(true) }
-    SuperDialog(
-        show = show,
+    BottomSheet(
+        visible = visible,
+        onDismiss = onDismiss,
         title = stringResource(R.string.unenroll_app_title),
         summary = stringResource(
             R.string.unenroll_app_message,
             unenrollment.appLabel,
             unenrollment.packageName,
         ),
-        insideMargin = DpSize(22.dp, 16.dp),
-        onDismissRequest = {
-            show.value = false
-            onDismiss()
-        },
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SlicesPanel(
-                insideMargin = androidx.compose.foundation.layout.PaddingValues(10.dp),
-                cornerRadius = 12.dp,
-                color = MaterialTheme.colorScheme.errorContainer,
-            ) {
-                Text(
-                    text = affectedSummary,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Text(
-                text = stringResource(R.string.unenroll_base_preserved),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            SlicesConfirmationToggle(
-                checked = unenrollment.confirmed,
-                onCheckedChange = onConfirmationChanged,
-                text = stringResource(
+        Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Banner(text = affectedSummary, tone = Tone.Danger, gutter = false)
+            SheetNote(stringResource(R.string.unenroll_base_preserved))
+            SwitchRow(
+                title = stringResource(
                     if (unenrollment.affectedSpaces.isEmpty()) {
                         R.string.unenroll_confirmation_toggle_no_spaces
                     } else {
                         R.string.unenroll_confirmation_toggle
                     },
                 ),
-                textColor = MaterialTheme.colorScheme.error,
+                checked = unenrollment.confirmed,
+                onCheckedChange = { if (visible) onConfirmationChanged(it) },
+                titleColor = Tone.Danger.onContainer(),
+                horizontalPadding = Space.xxs,
             )
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            SlicesTextAction(
-                text = stringResource(R.string.cancel),
-                onClick = {
-                    show.value = false
-                    onDismiss()
-                },
-                modifier = Modifier.weight(1f),
-            )
-            SlicesTextAction(
-                text = stringResource(R.string.unenroll_confirm),
-                onClick = {
-                    show.value = false
-                    onConfirm()
-                },
-                enabled = unenrollment.confirmed,
-                danger = true,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        SheetActions(
+            cancelText = stringResource(R.string.cancel),
+            confirmText = stringResource(R.string.unenroll_confirm),
+            onCancel = { if (visible) onDismiss() },
+            onConfirm = { if (visible) onConfirm() },
+            confirmEnabled = unenrollment.confirmed,
+            destructive = true,
+        )
     }
 }
 
 @Composable
-private fun ConfigureAppDialog(
-    appLabel: String,
+private fun ConfigureAppSheet(
+    visible: Boolean,
     packageName: String,
+    installedApp: InstalledApp?,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val show = remember(packageName) { mutableStateOf(true) }
-    SuperDialog(
-        show = show,
+    val appLabel = installedApp?.label ?: packageName
+    BottomSheet(
+        visible = visible,
+        onDismiss = onDismiss,
         title = stringResource(R.string.configure_app_title),
-        summary = packageName,
-        onDismissRequest = {
-            show.value = false
-            onDismiss()
-        },
     ) {
-        Text(
-            text = appLabel,
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Text(
-            text = stringResource(R.string.configure_app_message),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp),
-        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 18.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                .clip(RoundedCornerShape(Radius.row))
+                .background(Surfaces.control)
+                .padding(Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
-            SlicesTextAction(
-                text = stringResource(R.string.cancel),
-                onClick = {
-                    show.value = false
-                    onDismiss()
-                },
-                modifier = Modifier.weight(1f),
-            )
-            SlicesTextAction(
-                text = stringResource(R.string.configure_app),
-                onClick = {
-                    show.value = false
-                    onConfirm()
-                },
-                primary = true,
-                modifier = Modifier.weight(1f),
-            )
+            AppIcon(appLabel, installedApp?.icon, 44.dp)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = appLabel,
+                    color = TextPrimary,
+                    fontSize = TypeScale.headline,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = packageName,
+                    color = TextSecondary,
+                    fontSize = TypeScale.caption,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
+        Spacer(Modifier.height(Space.sm))
+        SheetNote(stringResource(R.string.configure_app_message))
+        SheetActions(
+            cancelText = stringResource(R.string.cancel),
+            confirmText = stringResource(R.string.configure_app),
+            onCancel = { if (visible) onDismiss() },
+            onConfirm = { if (visible) onConfirm() },
+        )
     }
 }
 
 @Composable
-private fun RegistrationRecoveryDialog(
+private fun RegistrationRecoverySheet(
+    visible: Boolean,
     recovery: RegistrationRecoveryUi,
     onConfirmationChanged: (String) -> Unit,
     onConfirm: () -> Unit,
@@ -475,82 +397,55 @@ private fun RegistrationRecoveryDialog(
             recovery.affectedSpaces.joinToString("、"),
         )
     }
-    val show = remember(recovery.packageName) { mutableStateOf(true) }
-    SuperDialog(
-        show = show,
+    BottomSheet(
+        visible = visible,
+        onDismiss = onDismiss,
         title = stringResource(R.string.rebind_title),
-        onDismissRequest = {
-            show.value = false
-            onDismiss()
-        },
+        summary = stringResource(R.string.rebind_message, recovery.packageName),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                text = stringResource(
-                    R.string.rebind_message,
-                    recovery.packageName,
-                ),
-            )
-            SlicesPanel(
-                insideMargin = androidx.compose.foundation.layout.PaddingValues(12.dp),
-                cornerRadius = 14.dp,
-                color = MaterialTheme.colorScheme.primaryContainer,
-            ) {
-                Text(
-                    text = affectedSummary,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            Text(
-                text = stringResource(R.string.rebind_data_preserved),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+            Banner(text = affectedSummary, tone = Tone.Info, gutter = false)
+            SheetNote(stringResource(R.string.rebind_data_preserved))
             SlicesInputField(
                 value = recovery.confirmation,
-                onValueChange = onConfirmationChanged,
+                onValueChange = { if (visible) onConfirmationChanged(it) },
                 label = stringResource(R.string.rebind_confirmation_label),
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
                 text = stringResource(R.string.rebind_confirmation_hint),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = TextSecondary,
+                fontSize = TypeScale.caption,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(horizontal = Space.xxs),
             )
         }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 18.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            SlicesTextAction(
-                text = stringResource(R.string.cancel),
-                onClick = {
-                    show.value = false
-                    onDismiss()
-                },
-                modifier = Modifier.weight(1f),
-            )
-            SlicesTextAction(
-                text = stringResource(R.string.rebind_confirm),
-                onClick = {
-                    show.value = false
-                    onConfirm()
-                },
-                enabled = recovery.confirmation == BINDING_CONFIRMATION,
-                primary = true,
-                modifier = Modifier.weight(1f),
-            )
-        }
+        SheetActions(
+            cancelText = stringResource(R.string.cancel),
+            confirmText = stringResource(R.string.rebind_confirm),
+            onCancel = { if (visible) onDismiss() },
+            onConfirm = { if (visible) onConfirm() },
+            confirmEnabled = recovery.confirmation == BINDING_CONFIRMATION,
+        )
     }
 }
 
+/** Secondary paragraph inside a sheet. */
 @Composable
-private fun OperationDialog(operation: OperationUiState) {
+private fun SheetNote(text: String) {
+    Text(
+        text = text,
+        color = TextSecondary,
+        fontSize = TypeScale.subhead,
+        lineHeight = 20.sp,
+        modifier = Modifier.padding(horizontal = Space.xxs),
+    )
+}
+
+@Composable
+private fun OperationDialog(visible: Boolean, operation: OperationUiState) {
     val message = when (operation) {
-        OperationUiState.Idle -> return
+        OperationUiState.Idle -> ""
         OperationUiState.Refreshing -> stringResource(R.string.operation_refreshing)
         is OperationUiState.PreparingConfiguration ->
             stringResource(R.string.operation_preparing_configuration)
@@ -578,25 +473,41 @@ private fun OperationDialog(operation: OperationUiState) {
         OperationUiState.RestartingRuntime ->
             stringResource(R.string.operation_restarting_runtime)
     }
-    val show = remember(operation) { mutableStateOf(true) }
-    SuperDialog(
-        show = show,
-        title = message,
-        summary = stringResource(R.string.operation_wait_hint),
-        enableWindowDim = true,
-        onDismissRequest = null,
-    ) {
+    CenterDialog(visible = visible) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp),
+            Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(Tone.Info.container()),
             contentAlignment = Alignment.Center,
         ) {
-            SlicesSpinner(size = 28.dp, strokeWidth = 3.dp)
+            SlicesSpinner(size = 28.dp, color = Tone.Info.onContainer(), strokeWidth = 3.dp)
         }
+        Spacer(Modifier.height(Space.md))
+        AnimatedContent(message, transitionSpec = fadeThrough(), label = "operation-title") {
+            Text(
+                text = it,
+                color = TextPrimary,
+                fontSize = TypeScale.headline,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            )
+        }
+        Spacer(Modifier.height(Space.xs))
+        Text(
+            text = stringResource(R.string.operation_wait_hint),
+            color = TextSecondary,
+            fontSize = TypeScale.subhead,
+            lineHeight = 20.sp,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
+/**
+ * Runtime problem card shown on top of lists while the Runtime is unavailable or incompatible: a
+ * full-width row with a tonal status plate that opens the Runtime page.
+ */
 @Composable
 internal fun RuntimeStatusCard(
     runtimeReady: Boolean,
@@ -606,10 +517,10 @@ internal fun RuntimeStatusCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val accentColor = when {
-        busy -> MaterialTheme.colorScheme.primary
-        runtimeReady && runtimeCompatible -> SlicesSuccess
-        else -> SlicesWarning
+    val tone = when {
+        busy -> Tone.Info
+        runtimeReady && runtimeCompatible -> Tone.Success
+        else -> Tone.Warning
     }
     val title = when {
         busy -> stringResource(R.string.environment_processing)
@@ -624,80 +535,26 @@ internal fun RuntimeStatusCard(
         runtimeReady -> stringResource(R.string.environment_ready_description)
         else -> stringResource(R.string.environment_unavailable_description)
     }
-
-    SlicesPanel(
-        modifier = modifier.fillMaxWidth(),
-        enabled = enabled,
-        onClick = onClick,
-        cornerRadius = 18.dp,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 15.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Surface(
-                modifier = Modifier.size(10.dp),
-                shape = RoundedCornerShape(5.dp),
-                color = accentColor,
-                content = {},
-            )
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 12.dp),
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(
-                painter = painterResource(R.drawable.ic_chevron_right),
-                contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-internal fun AppIcon(
-    label: String,
-    icon: Drawable?,
-    size: Dp,
-    modifier: Modifier = Modifier,
-) {
-    val bitmap = remember(icon) {
-        icon?.toBitmap(width = 128, height = 128)?.asImageBitmap()
-    }
-    if (bitmap != null) {
-        Image(
-            bitmap = bitmap,
-            contentDescription = null,
-            modifier = modifier
-                .size(size)
-                .clip(RoundedCornerShape(size / 4)),
+    GroupCard(modifier = modifier, color = tone.container()) {
+        ListRow(
+            title = title,
+            summary = description,
+            icon = painterResource(R.drawable.ic_layers),
+            iconTone = tone,
+            leading = {
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(Radius.small))
+                        .background(Surfaces.card.copy(alpha = .6f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    StatusDot(tone)
+                }
+            },
+            onClick = onClick,
+            enabled = enabled,
         )
-    } else {
-        Surface(
-            modifier = modifier.size(size),
-            shape = RoundedCornerShape(size / 4),
-            color = MaterialTheme.colorScheme.primaryContainer,
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = label.trim().take(1).ifEmpty { "?" },
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-        }
     }
 }
 
@@ -718,34 +575,22 @@ private fun NoticeHost(
         )
         onIntent(UiIntent.DismissNotice)
     }
+    val reduced = rememberReducedMotion()
 
     AnimatedContent(
         targetState = notice,
         transitionSpec = {
-            (
-                slideInVertically(
-                    animationSpec = spring(
-                        dampingRatio = 0.84f,
-                        stiffness = 520f,
-                    ),
-                    initialOffsetY = { -it - 28 },
-                ) +
-                    fadeIn(tween(150)) +
-                    scaleIn(
-                        animationSpec = tween(220),
-                        initialScale = 0.97f,
-                    )
-                ) togetherWith (
-                slideOutVertically(
-                    animationSpec = tween(180),
-                    targetOffsetY = { -it / 2 },
-                ) +
-                    fadeOut(tween(150)) +
-                    scaleOut(
-                        animationSpec = tween(150),
-                        targetScale = 0.985f,
-                    )
+            if (reduced) {
+                ContentTransform(EnterTransition.None, ExitTransition.None, sizeTransform = null)
+            } else {
+                ContentTransform(
+                    targetContentEnter = slideInVertically(Motion.offset) { -it - 24 } +
+                        fadeIn(Motion.effects()),
+                    initialContentExit = slideOutVertically(Motion.exit()) { -it / 2 } +
+                        fadeOut(Motion.exit()),
+                    sizeTransform = SizeTransform(clip = false) { _, _ -> Motion.size },
                 )
+            }
         },
         contentAlignment = Alignment.TopCenter,
         label = "floating_notice",
@@ -767,77 +612,76 @@ private fun FloatingNoticeCard(
 ) {
     val success = isSuccessNotice(notice)
     val retry = isRetryNotice(notice)
-    val accent = if (success) SlicesSuccess else MaterialTheme.colorScheme.error
-    val accentContainer = if (success) {
-        SlicesSuccessContainer
-    } else {
-        MaterialTheme.colorScheme.errorContainer
-    }
+    val tone = if (success) Tone.Success else Tone.Danger
     val headline = noticeHeadline(notice)
     val supporting = if (notice is UiNotice.SpaceActivated && notice.switched) {
         stringResource(R.string.success_switch_launch_hint)
     } else {
         null
     }
-
-    // Same container as MIUIX list popups: popup surface colour and a soft shadow, no outline.
-    MiuixSurface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(22.dp),
-        color = MiuixTheme.colorScheme.surfaceContainer,
-        contentColor = MiuixTheme.colorScheme.onSurface,
-        shadowElevation = 11.dp,
-    ) {
-        Row(
-            modifier = Modifier.padding(
+    val shape = RoundedCornerShape(Radius.row + Space.xxs)
+    Row(
+        modifier = Modifier
+            .widthIn(max = 560.dp)
+            .fillMaxWidth()
+            .graphicsLayer {
+                shadowElevation = 6.dp.toPx()
+                this.shape = shape
+                clip = true
+            }
+            .background(Surfaces.raised)
+            .border(0.5.dp, Surfaces.hairline, shape)
+            .padding(
                 start = 10.dp,
                 top = 10.dp,
-                end = if (retry) 8.dp else 14.dp,
+                end = if (retry) Space.xxs else 14.dp,
                 bottom = 10.dp,
             ),
-            verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(Radius.small))
+                .background(tone.container()),
+            contentAlignment = Alignment.Center,
         ) {
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = RoundedCornerShape(14.dp),
-                color = accentContainer,
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = if (success) "✓" else "!",
-                        color = accent,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 11.dp),
-            ) {
+            Text(
+                text = if (success) "✓" else "!",
+                color = tone.onContainer(),
+                fontSize = TypeScale.headline,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = Space.sm),
+        ) {
+            Text(
+                text = headline,
+                color = TextPrimary,
+                fontSize = TypeScale.subhead,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 20.sp,
+            )
+            supporting?.let {
                 Text(
-                    text = headline,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                supporting?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp),
-                    )
-                }
-            }
-            if (retry) {
-                SlicesInlineAction(
-                    text = stringResource(R.string.retry),
-                    onClick = { onIntent(UiIntent.Refresh) },
-                    color = accent,
+                    text = it,
+                    color = TextSecondary,
+                    fontSize = TypeScale.caption,
+                    lineHeight = 17.sp,
+                    modifier = Modifier.padding(top = 2.dp),
                 )
             }
+        }
+        if (retry) {
+            AppButton(
+                text = stringResource(R.string.retry),
+                onClick = { onIntent(UiIntent.Refresh) },
+                kind = ButtonKind.Text,
+                compact = true,
+            )
         }
     }
 }

@@ -1,26 +1,23 @@
 package com.uclone.slices.v2.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.uclone.slices.v2.R
+import top.yukonga.miuix.kmp.basic.Text
 
 @Composable
 internal fun RuntimeStatusScreen(
@@ -28,198 +25,174 @@ internal fun RuntimeStatusScreen(
     contentPadding: PaddingValues,
     onIntent: (UiIntent) -> Unit,
 ) {
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(contentPadding),
-        contentPadding = PaddingValues(start = 20.dp, top = 12.dp, end = 20.dp, bottom = 28.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+    val play = rememberStaggerPlay("runtime_status")
+    ManagerScreen(
+        title = stringResource(R.string.runtime_status_title),
+        contentPadding = contentPadding,
+        onBack = { onIntent(UiIntent.NavigateBack) },
     ) {
-        item {
-            ScreenHeader(
-                title = stringResource(R.string.runtime_status_title),
-                subtitle = stringResource(R.string.runtime_status_subtitle),
-                onBack = { onIntent(UiIntent.NavigateBack) },
-            )
+        item(key = "subtitle") {
+            Footnote(stringResource(R.string.runtime_status_subtitle))
         }
-        item {
+        item(key = "overview") {
             RuntimeOverviewCard(
                 runtimeReady = state.runtimeReady,
                 runtimeCompatible = state.runtimeCompatible,
+                modifier = Modifier.staggerIn(0, play),
             )
         }
-        item {
-            Text(
+        item(key = "details_header") {
+            SectionHeader(
                 text = stringResource(R.string.runtime_details),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 8.dp),
+                modifier = Modifier.staggerIn(1, play),
             )
         }
-        item {
-            RuntimeDetailsCard(state)
+        item(key = "details") {
+            GroupCard(modifier = Modifier.staggerIn(2, play)) {
+                ListRow(
+                    title = stringResource(R.string.runtime_connection),
+                    value = if (state.runtimeReady) {
+                        stringResource(R.string.connected)
+                    } else {
+                        stringResource(R.string.disconnected)
+                    },
+                    valueColor = if (state.runtimeReady) {
+                        Tone.Success.onContainer()
+                    } else {
+                        Tone.Warning.onContainer()
+                    },
+                )
+                ListRow(
+                    title = stringResource(R.string.runtime_version),
+                    value = state.buildId.takeIf(String::isNotBlank)
+                        ?: stringResource(R.string.unavailable),
+                    valueColor = TextPrimary,
+                )
+            }
         }
-        item {
-            SlicesActionButton(
-                text = if (state.runtimeReady) {
-                    stringResource(R.string.refresh_status)
-                } else {
-                    stringResource(R.string.reconnect)
-                },
-                onClick = { onIntent(UiIntent.Refresh) },
-                enabled = !state.busy,
-                modifier = Modifier.fillMaxWidth(),
-                primary = state.operationsAllowed,
-            )
-        }
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                SlicesActionButton(
+        item(key = "actions") {
+            Column(
+                modifier = Modifier
+                    .staggerIn(3, play)
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.gutter, vertical = Space.xs),
+                verticalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                AppButton(
+                    text = if (state.runtimeReady) {
+                        stringResource(R.string.refresh_status)
+                    } else {
+                        stringResource(R.string.reconnect)
+                    },
+                    onClick = { onIntent(UiIntent.Refresh) },
+                    enabled = !state.busy,
+                    loading = state.operation is OperationUiState.Refreshing,
+                    icon = painterResource(R.drawable.ic_refresh),
+                    kind = if (state.operationsAllowed) ButtonKind.Primary else ButtonKind.Secondary,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                AppButton(
                     text = stringResource(R.string.restart_runtime),
                     onClick = { onIntent(UiIntent.RestartRuntime) },
                     enabled = !state.busy,
+                    kind = if (state.operationsAllowed) ButtonKind.Secondary else ButtonKind.Primary,
                     modifier = Modifier.fillMaxWidth(),
-                    primary = !state.operationsAllowed,
-                )
-                Text(
-                    text = stringResource(R.string.restart_runtime_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-        item {
-            RuntimeLogCard(
-                log = state.runtimeLog,
-                onLoad = { onIntent(UiIntent.LoadRuntimeLog) },
+        item(key = "restart_hint") {
+            Footnote(stringResource(R.string.restart_runtime_hint))
+        }
+        item(key = "log_header") {
+            SectionHeader(
+                text = stringResource(R.string.runtime_log),
+                trailing = {
+                    AppButton(
+                        text = stringResource(R.string.load_runtime_log),
+                        onClick = { onIntent(UiIntent.LoadRuntimeLog) },
+                        kind = ButtonKind.Text,
+                        compact = true,
+                    )
+                },
             )
         }
-    }
-}
-
-@Composable
-private fun RuntimeLogCard(log: String?, onLoad: () -> Unit) {
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 18.dp,
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(R.string.runtime_log),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                )
-                SlicesTextAction(
-                    text = stringResource(R.string.load_runtime_log),
-                    onClick = onLoad,
-                    primary = true,
-                )
-            }
-            if (log != null) {
-                Text(
-                    text = log.ifBlank { stringResource(R.string.runtime_log_empty) },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 10.dp),
-                )
+        val log = state.runtimeLog
+        if (log != null) {
+            item(key = "log") {
+                GroupCard(padded = true, modifier = Modifier.animateItem()) {
+                    AnimatedContent(log, transitionSpec = fadeThrough(), label = "runtime-log") { text ->
+                        Text(
+                            text = text.ifBlank { stringResource(R.string.runtime_log_empty) },
+                            color = TextSecondary,
+                            fontSize = TypeScale.caption,
+                            lineHeight = 17.sp,
+                            fontFamily = FontFamily.Monospace,
+                        )
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun RuntimeOverviewCard(runtimeReady: Boolean, runtimeCompatible: Boolean) {
-    val ready = runtimeReady && runtimeCompatible
-    val accent = if (ready) SlicesSuccess else SlicesWarning
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(20.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Surface(
-                modifier = Modifier.size(12.dp),
-                shape = RoundedCornerShape(6.dp),
-                color = accent,
-                content = {},
-            )
-            Column {
-                Text(
-                    text = when {
-                        runtimeReady && !runtimeCompatible ->
-                            stringResource(R.string.environment_version_mismatch)
-                        runtimeReady -> stringResource(R.string.environment_ready)
-                        else -> stringResource(R.string.environment_unavailable)
-                    },
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
-                    text = when {
-                        runtimeReady && !runtimeCompatible ->
-                            stringResource(R.string.runtime_version_mismatch_long)
-                        runtimeReady -> stringResource(R.string.runtime_ready_long)
-                        else -> stringResource(R.string.runtime_unavailable_long)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RuntimeDetailsCard(state: SlotsUiState) {
-    SlicesPanel(
-        modifier = Modifier.fillMaxWidth(),
-        cornerRadius = 18.dp,
-    ) {
-        RuntimeDetailRow(
-            label = stringResource(R.string.runtime_connection),
-            value = if (state.runtimeReady) {
-                stringResource(R.string.connected)
-            } else {
-                stringResource(R.string.disconnected)
-            },
-            valueColor = if (state.runtimeReady) SlicesSuccess else SlicesWarning,
-        )
-        HorizontalDivider(
-            modifier = Modifier.padding(start = 16.dp),
-        )
-        RuntimeDetailRow(
-            label = stringResource(R.string.runtime_version),
-            value = state.buildId.takeIf(String::isNotBlank)
-                ?: stringResource(R.string.unavailable),
-            valueColor = MaterialTheme.colorScheme.onSurface,
-        )
-    }
-}
-
-@Composable
-private fun RuntimeDetailRow(
-    label: String,
-    value: String,
-    valueColor: androidx.compose.ui.graphics.Color,
+private fun RuntimeOverviewCard(
+    runtimeReady: Boolean,
+    runtimeCompatible: Boolean,
+    modifier: Modifier = Modifier,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 15.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = valueColor,
-        )
+    val ready = runtimeReady && runtimeCompatible
+    val tone = if (ready) Tone.Success else Tone.Warning
+    val title = when {
+        runtimeReady && !runtimeCompatible -> stringResource(R.string.environment_version_mismatch)
+        runtimeReady -> stringResource(R.string.environment_ready)
+        else -> stringResource(R.string.environment_unavailable)
+    }
+    GroupCard(modifier = modifier, padded = true) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            IconPlate(painterResource(R.drawable.ic_layers), tone, size = 44.dp)
+            AnimatedContent(
+                targetState = title,
+                transitionSpec = fadeThrough(),
+                label = "runtime-title",
+                modifier = Modifier.weight(1f),
+            ) { shown ->
+                Text(
+                    text = shown,
+                    color = TextPrimary,
+                    fontSize = TypeScale.title,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            StatusChip(
+                text = if (runtimeReady) {
+                    stringResource(R.string.connected)
+                } else {
+                    stringResource(R.string.disconnected)
+                },
+                tone = tone,
+            )
+        }
+        AnimatedContent(
+            targetState = when {
+                runtimeReady && !runtimeCompatible ->
+                    stringResource(R.string.runtime_version_mismatch_long)
+                runtimeReady -> stringResource(R.string.runtime_ready_long)
+                else -> stringResource(R.string.runtime_unavailable_long)
+            },
+            transitionSpec = fadeThrough(),
+            label = "runtime-overview",
+        ) { text ->
+            Text(
+                text = text,
+                color = TextSecondary,
+                fontSize = TypeScale.subhead,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(top = Space.sm),
+            )
+        }
     }
 }
