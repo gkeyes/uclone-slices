@@ -104,6 +104,7 @@ class MainActivity : ComponentActivity() {
                     onIntent = dispatchSlotsIntent,
                     onBackupIntent = backupViewModel::onIntent,
                     suggestedBackupName = backupViewModel::suggestedBackupName,
+                    uiPreferences = uiPreferences,
                 )
             }
         }

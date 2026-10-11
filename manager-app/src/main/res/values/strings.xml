@@ -240,4 +240,10 @@
     <string name="rebind_confirmation_label">输入“绑定”以确认</string>
     <string name="rebind_confirmation_hint">仅在确认这是同一个可信应用时继续</string>
     <string name="rebind_confirm">保留分空间并重新绑定</string>
+    <string name="sort_apps">排序</string>
+    <string name="reorder_hint">按住右侧把手拖动，或长按应用，调整首页顺序</string>
+    <string name="drag_to_reorder">拖动排序</string>
+    <string name="move_up">上移</string>
+    <string name="move_down">下移</string>
+    <string name="reorder_actions">排序操作</string>
 </resources>

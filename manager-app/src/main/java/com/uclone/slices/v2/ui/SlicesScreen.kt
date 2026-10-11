@@ -57,6 +57,7 @@ internal fun SlicesScreen(
     onIntent: (UiIntent) -> Unit,
     onBackupIntent: (BackupUiIntent) -> Unit,
     suggestedBackupName: () -> String,
+    uiPreferences: ManagerUiPreferences,
 ) {
     BackHandler(
         enabled = state.destination != ManagerDestination.Spaces &&
@@ -89,6 +90,7 @@ internal fun SlicesScreen(
                         state = state,
                         contentPadding = contentPadding,
                         onIntent = onIntent,
+                        uiPreferences = uiPreferences,
                     )
                     ManagerDestination.AddApp -> AddAppScreen(
                         state = state,
