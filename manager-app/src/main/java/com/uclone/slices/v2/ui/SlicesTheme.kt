@@ -12,7 +12,7 @@ import androidx.compose.material3.lightColorScheme as materialLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -30,25 +30,21 @@ private data class AccentPair(val accent: Color, val onAccent: Color)
 
 /** Android 12+ dynamic accent (system_accent1 tone 40 / 80), otherwise the spec fallback. */
 @Composable
-private fun rememberAccent(dark: Boolean): AccentPair {
-    val context = LocalContext.current
-    return remember(context, dark) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (dark) {
-                AccentPair(
-                    Color(context.getColor(android.R.color.system_accent1_200)),
-                    Color(context.getColor(android.R.color.system_accent1_800)),
-                )
-            } else {
-                AccentPair(Color(context.getColor(android.R.color.system_accent1_600)), Color.White)
-            }
-        } else if (dark) {
-            AccentPair(FallbackAccentDark, Color.White)
+private fun rememberAccent(dark: Boolean): AccentPair =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (dark) {
+            AccentPair(
+                colorResource(android.R.color.system_accent1_200),
+                colorResource(android.R.color.system_accent1_800),
+            )
         } else {
-            AccentPair(FallbackAccentLight, Color.White)
+            AccentPair(colorResource(android.R.color.system_accent1_600), Color.White)
         }
+    } else if (dark) {
+        AccentPair(FallbackAccentDark, Color.White)
+    } else {
+        AccentPair(FallbackAccentLight, Color.White)
     }
-}
 
 private fun lightMaterialColors(accent: AccentPair) = materialLightColorScheme(
     primary = accent.accent,
