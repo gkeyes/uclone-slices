@@ -26,6 +26,7 @@ require_equal() {
 
 require_equal "Manager/fixture versionName" "$MANAGER_VERSION" "$FIXTURE_VERSION"
 require_equal "Runtime crate/module version" "$RUNTIME_VERSION" "$MODULE_VERSION"
+require_equal "Manager/module version" "$MANAGER_VERSION" "$MODULE_VERSION"
 require_equal "Manager/module protocol id" "$MANAGER_PROTOCOL_BUILD_ID" "$MODULE_RUNTIME_BUILD_ID"
 require_equal "Manager/fixture versionCode" "$MANAGER_VERSION_CODE" "$FIXTURE_VERSION_CODE"
 require_equal "Manager/module versionCode" "$MANAGER_VERSION_CODE" "$MODULE_VERSION_CODE"

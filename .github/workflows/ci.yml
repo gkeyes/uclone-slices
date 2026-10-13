@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: ["main", "codex/v2-rebuild"]
+    branches: ["main", "codex/**", "claude/**"]
     # A v* tag is pushed only after the user confirms the candidate; it is the only path
     # that publishes a GitHub Release, and it publishes the bytes this run verified.
     tags: ["v*"]
@@ -27,7 +27,9 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     env:
-      HAS_RELEASE_SIGNING: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' && secrets.RELEASE_STORE_PASSWORD != '' && secrets.RELEASE_KEY_ALIAS != '' && secrets.RELEASE_KEY_PASSWORD != '' }}
+      # Pull requests never see the release key, even from branches of this repository: PR code is
+      # unreviewed. Branch and tag pushes sign with it and must have it.
+      HAS_RELEASE_SIGNING: ${{ github.event_name != 'pull_request' && secrets.RELEASE_KEYSTORE_BASE64 != '' && secrets.RELEASE_STORE_PASSWORD != '' && secrets.RELEASE_KEY_ALIAS != '' && secrets.RELEASE_KEY_PASSWORD != '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -73,8 +75,7 @@ jobs:
           echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/uclone-signing/release.p12" >> "$GITHUB_ENV"
           echo "RELEASE_STORE_TYPE=pkcs12" >> "$GITHUB_ENV"
 
-      # Pull requests (including forks without secrets) are validated unsigned; every branch or
-      # tag push must produce the fixed-certificate delivery.
+      # Every branch or tag push must produce the fixed-certificate delivery.
       - name: Require fixed release signing
         if: github.event_name != 'pull_request'
         run: test "$HAS_RELEASE_SIGNING" = "true"
@@ -97,9 +98,9 @@ jobs:
 
       - name: Validate Android apps
         env:
-          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
-          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_STORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.RELEASE_STORE_PASSWORD || '' }}
+          RELEASE_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.RELEASE_KEY_ALIAS || '' }}
+          RELEASE_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.RELEASE_KEY_PASSWORD || '' }}
         run: ./gradlew --no-daemon --console=plain :manager-app:testDebugUnitTest :manager-app:lintRelease :manager-app:assembleRelease :device-fixture-app:lintFromDebug :device-fixture-app:lintToDebug :device-fixture-app:assembleFromDebug :device-fixture-app:assembleToDebug
 
       - name: Upload Android reports
