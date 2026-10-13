@@ -7,11 +7,11 @@ use thiserror::Error;
 use crate::model::{
     AccountIoIntent, AccountIoKind, AccountIoLease, AccountIoPhase, AccountIoScope,
     AccountIoSource, AccountIoStatus, AccountIoToken, ArchiveAccountId, ArchiveAccountKind,
-    ArchiveScope, ArchivedState, BindingState, Capabilities, DisplayName, ModelError, ObservedView,
-    PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection, PackageName,
-    PackageSnapshot, RebindIntent, ResolvedRestoreMapping, RestoreBatchResult, RestoreItemResult,
-    RestoreItemState, RestoreMapping, RestoreTarget, SeedMode, SigningIdentity, SlotId, TransferId,
-    TrashHold, TrashIntent,
+    ArchiveScope, ArchivedState, BASE_ACCOUNT_NAME, BindingState, Capabilities, DisplayName,
+    ModelError, ObservedView, PackageAggregate, PackageBinding, PackageEnabledState,
+    PackageInspection, PackageName, PackageSnapshot, RebindIntent, ResolvedRestoreMapping,
+    RestoreBatchResult, RestoreItemResult, RestoreItemState, RestoreMapping, RestoreTarget,
+    SeedMode, SigningIdentity, SlotId, TransferId, TrashHold, TrashIntent,
 };
 #[cfg(test)]
 use crate::model::{ArchiveDomain, RestorePath, RestorePolicy};
@@ -245,7 +245,7 @@ where
                         logged_adapter("begin_backup_io", package, "resolve_source", error)
                     })?;
                 let name = if slot.is_base() {
-                    "系统原始空间".to_owned()
+                    BASE_ACCOUNT_NAME.to_owned()
                 } else {
                     snapshot
                         .slots

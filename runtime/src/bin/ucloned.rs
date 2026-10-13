@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use boot::{BOOT_ID_PATH, prepare_runtime_root, reconcile_once_per_boot, wait_for_user0_ready};
-use rpc::{OPERATION_FAILED_RESPONSE, RequestHandler, serialize_transaction, spawn_connection};
+use rpc::{
+    ConnectionLimit, MAX_CONCURRENT_CONNECTIONS, OPERATION_FAILED_RESPONSE, RequestHandler,
+    serialize_transaction, spawn_connection,
+};
 use uclone_slices_runtime::layout::RUNTIME_ROOT;
 use uclone_slices_runtime::{handle_line, production};
 
@@ -53,13 +56,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         })
     });
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => drop(spawn_connection(stream, Arc::clone(&handler))),
+    let connections = ConnectionLimit::new(MAX_CONCURRENT_CONNECTIONS);
+    loop {
+        // Waiting here (not after accept) leaves extra clients in the listen backlog.
+        let permit = connections.acquire();
+        match listener.accept() {
+            Ok((stream, _address)) => drop(spawn_connection(stream, Arc::clone(&handler), permit)),
             Err(error) => eprintln!("ucloned accept failed: {error}"),
         }
     }
-    Ok(())
 }
 
 fn remove_stale_socket(path: &Path) -> Result<(), std::io::Error> {

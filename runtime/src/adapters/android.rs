@@ -15,10 +15,42 @@ use crate::ports::{AdapterError, AndroidOps};
 
 const PROCESS_EXIT_CONFIRMATION_WINDOW: Duration = Duration::from_secs(10);
 const PROCESS_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
-const WECHAT_PACKAGE: &str = "com.tencent.mm";
-const WECHAT_FAST_RESTART_FORCE_STOP_LIMIT: usize = 5;
-const WECHAT_FAST_RESTART_CONFIRMATION_WINDOW: Duration = Duration::from_secs(2);
-const WECHAT_FAST_RESTART_QUIET_WINDOW: Duration = Duration::from_millis(500);
+
+/// How `force_stop` confirms that a package has stopped.
+///
+/// Most packages use the generic confirmation (one `am force-stop`, then wait until two
+/// consecutive scans find no process for the UID). Packages listed in
+/// [`FORCE_STOP_POLICIES`] restart themselves right after a force-stop (for example
+/// WeChat's FastRestart), so they get a bounded retry loop instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ForceStopPolicy {
+    /// Name used in diagnostics.
+    label: &'static str,
+    /// Maximum `am force-stop` requests, counting the first one.
+    force_stop_limit: usize,
+    /// Total time allowed for the package to quiesce.
+    confirmation_window: Duration,
+    /// How long the UID must stay without processes to count as stopped.
+    quiet_window: Duration,
+}
+
+/// Packages that need a fast-restart force-stop policy, keyed by package name.
+const FORCE_STOP_POLICIES: &[(&str, ForceStopPolicy)] = &[(
+    "com.tencent.mm",
+    ForceStopPolicy {
+        label: "WeChat FastRestart",
+        force_stop_limit: 5,
+        confirmation_window: Duration::from_secs(2),
+        quiet_window: Duration::from_millis(500),
+    },
+)];
+
+fn force_stop_policy(package: &PackageName) -> Option<&'static ForceStopPolicy> {
+    FORCE_STOP_POLICIES
+        .iter()
+        .find(|(name, _)| *name == package.as_str())
+        .map(|(_, policy)| policy)
+}
 
 #[derive(Debug, Clone)]
 struct CommandOutput {
@@ -306,8 +338,13 @@ impl SystemAndroidOps {
         Ok(())
     }
 
-    fn force_stop_wechat(&mut self, package: &PackageName, uid: u32) -> Result<(), AdapterError> {
-        let deadline = Instant::now() + WECHAT_FAST_RESTART_CONFIRMATION_WINDOW;
+    fn force_stop_with_policy(
+        &mut self,
+        package: &PackageName,
+        uid: u32,
+        policy: &ForceStopPolicy,
+    ) -> Result<(), AdapterError> {
+        let deadline = Instant::now() + policy.confirmation_window;
         let mut previous_generation = self.package_processes(uid)?;
         let mut force_stop_attempts = 0_usize;
 
@@ -321,7 +358,7 @@ impl SystemAndroidOps {
                 let now = Instant::now();
                 if remaining.is_empty() {
                     let quiet_start = *empty_since.get_or_insert(now);
-                    if now.duration_since(quiet_start) >= WECHAT_FAST_RESTART_QUIET_WINDOW {
+                    if now.duration_since(quiet_start) >= policy.quiet_window {
                         return Ok(());
                     }
                 } else {
@@ -329,9 +366,7 @@ impl SystemAndroidOps {
                     let has_new_generation = remaining
                         .iter()
                         .any(|process| !previous_generation.contains(process));
-                    if has_new_generation
-                        && force_stop_attempts < WECHAT_FAST_RESTART_FORCE_STOP_LIMIT
-                    {
+                    if has_new_generation && force_stop_attempts < policy.force_stop_limit {
                         previous_generation = remaining;
                         break;
                     }
@@ -339,8 +374,9 @@ impl SystemAndroidOps {
 
                 if now >= deadline {
                     return Err(AdapterError::new(format!(
-                        "WeChat FastRestart did not quiesce within {} ms after {force_stop_attempts} force-stop attempt(s); {} process(es) remain for UID {uid}",
-                        WECHAT_FAST_RESTART_CONFIRMATION_WINDOW.as_millis(),
+                        "{} did not quiesce within {} ms after {force_stop_attempts} force-stop attempt(s); {} process(es) remain for UID {uid}",
+                        policy.label,
+                        policy.confirmation_window.as_millis(),
                         remaining.len()
                     )));
                 }
@@ -529,9 +565,9 @@ impl AndroidOps for SystemAndroidOps {
     }
 
     fn force_stop(&mut self, package: &PackageName) -> Result<(), AdapterError> {
-        if package.as_str() == WECHAT_PACKAGE {
+        if let Some(policy) = force_stop_policy(package) {
             let uid = self.package_uid(package)?;
-            return self.force_stop_wechat(package, uid);
+            return self.force_stop_with_policy(package, uid, policy);
         }
         self.request_force_stop(package)?;
         let uid = self.package_uid(package)?;

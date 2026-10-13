@@ -67,6 +67,15 @@ impl<'de> Deserialize<'de> for PackageName {
     }
 }
 
+/// Account name recorded for the base space in `begin_backup_io` sources and in archive
+/// manifests.
+///
+/// This is data, not UI copy: it is persisted in every existing archive's `manifest.json`,
+/// shipped Manager builds show it verbatim in the restore preview, and they send it back as
+/// the slot name when a base account is restored into a new slot. Changing it would change
+/// what new archives contain and how they render on already-installed Managers.
+pub(crate) const BASE_ACCOUNT_NAME: &str = "系统原始空间";
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct SlotId(String);

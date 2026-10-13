@@ -390,8 +390,6 @@ pub(crate) struct FileSlotStorage {
     canonical_ce_root: PathBuf,
     canonical_de_root: PathBuf,
     owner: DirectoryOwner,
-    #[cfg(test)]
-    available_bytes_by_device: std::collections::BTreeMap<u64, u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -439,16 +437,7 @@ impl FileSlotStorage {
             canonical_ce_root: canonical_ce_root.into(),
             canonical_de_root: canonical_de_root.into(),
             owner,
-            #[cfg(test)]
-            available_bytes_by_device: std::collections::BTreeMap::new(),
         })
-    }
-
-    #[cfg(test)]
-    fn set_available_bytes(&mut self, path: &Path, available: u64) -> Result<(), AdapterError> {
-        let device = fs::metadata(path).map_err(io_error)?.dev();
-        self.available_bytes_by_device.insert(device, available);
-        Ok(())
     }
 
     fn slot_paths(&self, package: &PackageName, slot: &SlotId) -> (PathBuf, PathBuf) {
@@ -572,9 +561,8 @@ impl FileSlotStorage {
 
     fn available_bytes(&self, path: &Path) -> Result<(u64, u64), AdapterError> {
         let device = fs::metadata(path).map_err(io_error)?.dev();
-        #[cfg(test)]
-        if let Some(available) = self.available_bytes_by_device.get(&device) {
-            return Ok((device, *available));
+        if let Some(available) = fault_injection::available_bytes_override(device) {
+            return Ok((device, available));
         }
         let statistics =
             rustix::fs::statvfs(path).map_err(|error| io_error(std::io::Error::from(error)))?;
@@ -1577,120 +1565,8 @@ fn retire_completed_rollback(rollback: &Path) -> Result<(), AdapterError> {
     sync_directory(parent)
 }
 
-#[cfg(not(test))]
 fn rename_path(source: &Path, target: &Path) -> std::io::Result<()> {
-    fs::rename(source, target)
-}
-
-#[cfg(test)]
-thread_local! {
-    static TEST_RENAME_FAILURE: std::cell::RefCell<Option<TestRenameFailure>> =
-        const { std::cell::RefCell::new(None) };
-    static TEST_COPY_FAILURE_PATHS: std::cell::RefCell<Option<(PathBuf, PathBuf)>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-#[derive(Clone)]
-struct TestRenameFailure {
-    target_prefixes: Vec<PathBuf>,
-    triggered: std::rc::Rc<std::cell::Cell<bool>>,
-}
-
-#[cfg(test)]
-struct TestRenameFailureGuard {
-    previous: Option<TestRenameFailure>,
-    triggered: std::rc::Rc<std::cell::Cell<bool>>,
-}
-
-#[cfg(test)]
-impl TestRenameFailureGuard {
-    fn was_triggered(&self) -> bool {
-        self.triggered.get()
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestRenameFailureGuard {
-    fn drop(&mut self) {
-        TEST_RENAME_FAILURE.with(|failure| {
-            *failure.borrow_mut() = self.previous.take();
-        });
-    }
-}
-
-#[cfg(test)]
-fn fail_next_rename_into(target_prefixes: &[&Path]) -> TestRenameFailureGuard {
-    let triggered = std::rc::Rc::new(std::cell::Cell::new(false));
-    let failure = TestRenameFailure {
-        target_prefixes: target_prefixes
-            .iter()
-            .map(|path| path.to_path_buf())
-            .collect(),
-        triggered: triggered.clone(),
-    };
-    let previous = TEST_RENAME_FAILURE.with(|configured| configured.borrow_mut().replace(failure));
-    TestRenameFailureGuard {
-        previous,
-        triggered,
-    }
-}
-
-#[cfg(test)]
-struct TestCopyFailureGuard {
-    previous: Option<(PathBuf, PathBuf)>,
-}
-
-#[cfg(test)]
-impl Drop for TestCopyFailureGuard {
-    fn drop(&mut self) {
-        TEST_COPY_FAILURE_PATHS.with(|paths| {
-            *paths.borrow_mut() = self.previous.take();
-        });
-    }
-}
-
-#[cfg(test)]
-fn fail_next_copy(source: &Path, target: &Path) -> TestCopyFailureGuard {
-    let previous = TEST_COPY_FAILURE_PATHS.with(|configured| {
-        configured
-            .borrow_mut()
-            .replace((source.to_path_buf(), target.to_path_buf()))
-    });
-    TestCopyFailureGuard { previous }
-}
-
-#[cfg(test)]
-fn take_injected_copy_failure(source: &Path, target: &Path) -> bool {
-    TEST_COPY_FAILURE_PATHS.with(|configured| {
-        let mut configured = configured.borrow_mut();
-        configured
-            .as_ref()
-            .is_some_and(|(expected_source, expected_target)| {
-                expected_source == source && expected_target == target
-            })
-            .then(|| configured.take())
-            .flatten()
-            .is_some()
-    })
-}
-
-#[cfg(test)]
-fn rename_path(source: &Path, target: &Path) -> std::io::Result<()> {
-    let should_fail = TEST_RENAME_FAILURE.with(|configured| {
-        let mut configured = configured.borrow_mut();
-        let matches = configured.as_ref().is_some_and(|failure| {
-            failure
-                .target_prefixes
-                .iter()
-                .any(|prefix| target.starts_with(prefix))
-        });
-        if matches && let Some(failure) = configured.take() {
-            failure.triggered.set(true);
-        }
-        matches
-    });
-    if should_fail {
+    if fault_injection::take_rename_failure(target) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::CrossesDevices,
             "Cross-device link (os error 18)",
@@ -1954,16 +1830,10 @@ fn copy_path_preserving(source: &Path, destination: &Path) -> Result<(), Adapter
             "filtered copy destination already exists",
         ));
     }
-    let status = Command::new("/system/bin/cp")
-        .args(["-a", "--"])
-        .arg(source)
-        .arg(destination)
-        .status()
-        .map_err(io_error)?;
-    status
-        .success()
-        .then_some(())
-        .ok_or_else(|| AdapterError::new("could not copy filtered Android data tree"))
+    run_command_line(
+        &copy_path_command(source, destination),
+        "could not copy filtered Android data tree",
+    )
 }
 
 #[cfg(not(target_os = "android"))]
@@ -1985,22 +1855,66 @@ fn copy_path_preserving(source: &Path, destination: &Path) -> Result<(), Adapter
 
 #[cfg(target_os = "android")]
 fn copy_tree(source: &Path, target: &Path) -> Result<(), AdapterError> {
-    let status = Command::new("/system/bin/cp")
-        .args(["-a", "--"])
-        .arg(source.join("."))
-        .arg(target)
+    run_command_line(
+        &copy_tree_command(source, target),
+        "could not copy Android data tree",
+    )
+}
+
+/// One external command: the program and its exact argument vector.
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandLine {
+    program: &'static str,
+    arguments: Vec<std::ffi::OsString>,
+}
+
+#[cfg(any(target_os = "android", test))]
+const ANDROID_CP: &str = "/system/bin/cp";
+
+/// `cp -a -- <source>/. <target>`: copies the contents of `source` into the existing `target`.
+#[cfg(any(target_os = "android", test))]
+fn copy_tree_command(source: &Path, target: &Path) -> CommandLine {
+    CommandLine {
+        program: ANDROID_CP,
+        arguments: vec![
+            "-a".into(),
+            "--".into(),
+            source.join(".").into_os_string(),
+            target.as_os_str().to_owned(),
+        ],
+    }
+}
+
+/// `cp -a -- <source> <destination>`: copies `source` itself to the new path `destination`.
+#[cfg(any(target_os = "android", test))]
+fn copy_path_command(source: &Path, destination: &Path) -> CommandLine {
+    CommandLine {
+        program: ANDROID_CP,
+        arguments: vec![
+            "-a".into(),
+            "--".into(),
+            source.as_os_str().to_owned(),
+            destination.as_os_str().to_owned(),
+        ],
+    }
+}
+
+#[cfg(target_os = "android")]
+fn run_command_line(command: &CommandLine, failure: &str) -> Result<(), AdapterError> {
+    let status = Command::new(command.program)
+        .args(&command.arguments)
         .status()
         .map_err(io_error)?;
     status
         .success()
         .then_some(())
-        .ok_or_else(|| AdapterError::new("could not copy Android data tree"))
+        .ok_or_else(|| AdapterError::new(failure))
 }
 
 #[cfg(not(target_os = "android"))]
 fn copy_tree(source: &Path, target: &Path) -> Result<(), AdapterError> {
-    #[cfg(test)]
-    if take_injected_copy_failure(source, target) {
+    if fault_injection::take_copy_failure(source, target) {
         return Err(AdapterError::new("injected copy failure"));
     }
     for entry in fs::read_dir(source).map_err(io_error)? {
@@ -2331,6 +2245,32 @@ fn remove_slot_artifacts(
 fn io_error(error: std::io::Error) -> AdapterError {
     AdapterError::new(error.to_string())
 }
+
+/// Fault-injection hooks for host tests. Production builds compile these no-op versions,
+/// which the optimizer removes; the test build replaces them with `fault_injection.rs`.
+#[cfg(not(test))]
+mod fault_injection {
+    use std::path::Path;
+
+    #[inline(always)]
+    pub(super) fn take_rename_failure(_target: &Path) -> bool {
+        false
+    }
+
+    #[cfg_attr(target_os = "android", allow(dead_code))]
+    #[inline(always)]
+    pub(super) fn take_copy_failure(_source: &Path, _target: &Path) -> bool {
+        false
+    }
+
+    #[inline(always)]
+    pub(super) fn available_bytes_override(_device: u64) -> Option<u64> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod fault_injection;
 
 #[cfg(test)]
 mod tests;

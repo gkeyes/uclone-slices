@@ -579,8 +579,9 @@ fn restore_backup_inner(
                 (&destination.de_path, &account.de),
             ]
         }))?;
-        let expected = manifest_entry_index(&manifest);
-        let mut seen = BTreeSet::new();
+        // Entries still to be extracted. Each archive entry takes its manifest entry out, so a
+        // duplicate or undeclared path finds nothing, and anything left at the end is missing.
+        let mut expected = manifest_entry_index(&manifest);
         let mut entry_count = 0_usize;
         let mut tally = ExtractTally {
             extracted: 0,
@@ -596,11 +597,11 @@ fn restore_backup_inner(
             let mut entry = entry.map_err(io_error)?;
             let path = entry.path().map_err(io_error)?.into_owned();
             let (account_id, domain, relative) = parse_archive_data_path(&path)?;
-            let key = (account_id.to_owned(), domain.to_owned(), relative.clone());
-            if !seen.insert(key.clone()) {
-                return Err(ArchiveError::Invalid);
-            }
-            let expected_entry = expected.get(&key).ok_or(ArchiveError::Invalid)?;
+            let domain_index = if domain == "ce" { 0 } else { 1 };
+            let expected_entry = expected
+                .get_mut(account_id)
+                .and_then(|domains| domains[domain_index].remove(relative.as_path()))
+                .ok_or(ArchiveError::Invalid)?;
             let destination = destination_map
                 .get(account_id)
                 .ok_or(ArchiveError::Incompatible)?;
@@ -619,7 +620,12 @@ fn restore_backup_inner(
                 &mut directories,
             )?;
         }
-        if seen.len() != expected.len() || tally.extracted != manifest.logical_size {
+        if expected
+            .values()
+            .flatten()
+            .any(|entries| !entries.is_empty())
+            || tally.extracted != manifest.logical_size
+        {
             return Err(ArchiveError::Invalid);
         }
         (manifest, directories)
@@ -712,7 +718,7 @@ fn build_manifest(
         accounts.push(ArchiveAccountManifest {
             archive_account_id: source.archive_account_id.clone(),
             name: if source.kind == ArchiveAccountKind::Base {
-                "系统原始空间".to_owned()
+                crate::model::BASE_ACCOUNT_NAME.to_owned()
             } else {
                 source.name.clone()
             },
@@ -1397,21 +1403,20 @@ fn validate_manifest_entry(entry: &ManifestEntry) -> Result<(), ArchiveError> {
     Ok(())
 }
 
-fn manifest_entry_index(
-    manifest: &ArchiveManifest,
-) -> BTreeMap<(String, String, PathBuf), &ManifestEntry> {
-    let mut index = BTreeMap::new();
+/// Manifest entries by account id, then domain (`[ce, de]`), then relative path, all
+/// borrowed from the manifest. Paths compare by component, as the archive paths they are
+/// matched against do.
+type ManifestEntryIndex<'a> = BTreeMap<&'a str, [BTreeMap<&'a Path, &'a ManifestEntry>; 2]>;
+
+fn manifest_entry_index(manifest: &ArchiveManifest) -> ManifestEntryIndex<'_> {
+    let mut index = ManifestEntryIndex::new();
     for account in &manifest.accounts {
-        for (domain, content) in [("ce", &account.ce), ("de", &account.de)] {
+        let domains = index
+            .entry(account.archive_account_id.as_str())
+            .or_default();
+        for (entries, content) in domains.iter_mut().zip([&account.ce, &account.de]) {
             for entry in &content.entries {
-                index.insert(
-                    (
-                        account.archive_account_id.clone(),
-                        domain.to_owned(),
-                        PathBuf::from(&entry.path),
-                    ),
-                    entry,
-                );
+                entries.insert(Path::new(entry.path.as_str()), entry);
             }
         }
     }
