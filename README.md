@@ -94,7 +94,6 @@ flowchart LR
 
 - `runtime/`：Rust 聚合、Use Case、端口、生产适配器和 socket 入口。
 - `manager-app/`：Compose Manager。
-- `device-fixture-app/`：验证 CE/DE 隔离的测试 App。
 - `protocol/fixtures/`：Rust 与 Kotlin 共用的协议 fixtures。
 - `kernelsu/`：KernelSU 模块启动层。
 - `docs/`：开发约束、设置来源、真机验收和 ADR。
@@ -115,11 +114,7 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-manager-helper.sh
 ./gradlew --no-daemon \
   :manager-app:testDebugUnitTest \
   :manager-app:lintRelease \
-  :manager-app:assembleRelease \
-  :device-fixture-app:lintFromDebug \
-  :device-fixture-app:lintToDebug \
-  :device-fixture-app:assembleFromDebug \
-  :device-fixture-app:assembleToDebug
+  :manager-app:assembleRelease
 
 ./tools/check-decision-alignment.sh
 ./tools/test-kernelsu.sh
