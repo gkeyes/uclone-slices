@@ -196,12 +196,7 @@ impl SystemAndroidOps {
             if !pid.bytes().all(|byte| byte.is_ascii_digit()) {
                 continue;
             }
-            let status = match fs::read_to_string(entry.path().join("status")) {
-                Ok(status) => status,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AdapterError::new(error.to_string())),
-            };
-            if let Some(uid) = status_uid(&status) {
+            if let Some(uid) = process_uid(&entry.path())? {
                 uids.insert(uid);
             }
         }
@@ -275,12 +270,7 @@ impl SystemAndroidOps {
             if !pid.bytes().all(|byte| byte.is_ascii_digit()) {
                 continue;
             }
-            let status = match fs::read_to_string(entry.path().join("status")) {
-                Ok(status) => status,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AdapterError::new(error.to_string())),
-            };
-            if status_uid(&status) == Some(uid) {
+            if process_uid(&entry.path())? == Some(uid) {
                 processes.push(entry.path());
             }
         }
@@ -294,6 +284,7 @@ impl SystemAndroidOps {
             PROCESS_EXIT_CONFIRMATION_WINDOW,
             PROCESS_EXIT_POLL_INTERVAL,
             || self.package_processes(uid),
+            |known| surviving_processes(known, uid),
         )
     }
 
@@ -413,19 +404,30 @@ impl SystemAndroidOps {
     }
 }
 
-fn confirm_processes_stably_stopped<F>(
+/// Polls until two consecutive full scans find no process for `uid`, or the window ends.
+/// While processes from the last full scan are still alive, only those are rechecked: the
+/// package cannot have stopped yet, so a full `/proc` scan would not change the answer.
+fn confirm_processes_stably_stopped<F, G>(
     uid: u32,
     confirmation_window: Duration,
     poll_interval: Duration,
-    mut processes: F,
+    mut scan_all: F,
+    mut recheck: G,
 ) -> Result<(), AdapterError>
 where
     F: FnMut() -> Result<Vec<PathBuf>, AdapterError>,
+    G: FnMut(&[PathBuf]) -> Result<Vec<PathBuf>, AdapterError>,
 {
     let deadline = Instant::now() + confirmation_window;
     let mut previous_scan_was_empty = false;
+    let mut remaining = Vec::new();
     loop {
-        let remaining = processes()?;
+        if !remaining.is_empty() {
+            remaining = recheck(&remaining)?;
+        }
+        if remaining.is_empty() {
+            remaining = scan_all()?;
+        }
         if remaining.is_empty() {
             if previous_scan_was_empty {
                 return Ok(());
@@ -756,6 +758,25 @@ fn package_uid_from_rows(
         return Err(AdapterError::new("package UID is shared by another app"));
     }
     Ok(uid)
+}
+
+/// Reads the real UID of one `/proc/<pid>` entry; `None` once the process has exited.
+fn process_uid(process: &Path) -> Result<Option<u32>, AdapterError> {
+    match fs::read_to_string(process.join("status")) {
+        Ok(status) => Ok(status_uid(&status)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(AdapterError::new(error.to_string())),
+    }
+}
+
+fn surviving_processes(known: &[PathBuf], uid: u32) -> Result<Vec<PathBuf>, AdapterError> {
+    let mut surviving = Vec::with_capacity(known.len());
+    for process in known {
+        if process_uid(process)? == Some(uid) {
+            surviving.push(process.clone());
+        }
+    }
+    Ok(surviving)
 }
 
 fn status_uid(content: &str) -> Option<u32> {
@@ -1516,13 +1537,67 @@ mod tests {
         ]);
         let mut scan_count = 0_usize;
 
-        confirm_processes_stably_stopped(10_123, Duration::from_secs(1), Duration::ZERO, || {
-            scan_count += 1;
-            Ok(scans.pop_front().unwrap_or_default())
-        })
+        confirm_processes_stably_stopped(
+            10_123,
+            Duration::from_secs(1),
+            Duration::ZERO,
+            || {
+                scan_count += 1;
+                Ok(scans.pop_front().unwrap_or_default())
+            },
+            |_known| Ok(Vec::new()),
+        )
         .unwrap();
 
         assert_eq!(scan_count, 4);
+    }
+
+    #[test]
+    fn process_stop_confirmation_rechecks_only_known_processes_until_they_exit() {
+        let mut full_scans = 0_usize;
+        let mut rechecks = 0_usize;
+
+        confirm_processes_stably_stopped(
+            10_123,
+            Duration::from_secs(1),
+            Duration::ZERO,
+            || {
+                full_scans += 1;
+                Ok(if full_scans == 1 {
+                    vec![PathBuf::from("/proc/123")]
+                } else {
+                    Vec::new()
+                })
+            },
+            |known| {
+                rechecks += 1;
+                Ok(if rechecks < 5 {
+                    known.to_vec()
+                } else {
+                    Vec::new()
+                })
+            },
+        )
+        .unwrap();
+
+        // One scan finds the process, rechecks follow it until it exits, then two consecutive
+        // empty full scans confirm that nothing new took its place.
+        assert_eq!(rechecks, 5);
+        assert_eq!(full_scans, 3);
+    }
+
+    #[test]
+    fn process_stop_recheck_drops_exited_and_reused_pids() {
+        let root = tempfile::tempdir().unwrap();
+        let alive = root.path().join("123");
+        let reused = root.path().join("456");
+        fs::create_dir_all(&alive).unwrap();
+        fs::create_dir_all(&reused).unwrap();
+        fs::write(alive.join("status"), "Uid:\t10123\t10123\t10123\t10123\n").unwrap();
+        fs::write(reused.join("status"), "Uid:\t10999\t10999\t10999\t10999\n").unwrap();
+        let known = [alive.clone(), reused, root.path().join("789")];
+
+        assert_eq!(surviving_processes(&known, 10_123).unwrap(), vec![alive]);
     }
 
     #[test]

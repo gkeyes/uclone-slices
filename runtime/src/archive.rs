@@ -877,7 +877,7 @@ fn scan_domain(
         rules,
         record_exclusions,
     };
-    collect_entries(&context, root, 0, &mut entries, &mut excluded)?;
+    collect_entries(&context, &mut entries, &mut excluded)?;
     entries.sort_by(|left, right| left.path.cmp(&right.path));
     if entries.len() > MAX_ENTRIES {
         return Err(ArchiveError::Invalid);
@@ -899,12 +899,27 @@ fn scan_domain(
     })
 }
 
+/// Walks the domain with an explicit stack: the tree belongs to the app, so its depth must
+/// not translate into daemon or helper stack depth.
 fn collect_entries(
+    context: &ScanContext<'_>,
+    entries: &mut Vec<ManifestEntry>,
+    excluded: &mut ExcludedStats,
+) -> Result<(), ArchiveError> {
+    let mut pending = vec![(context.root.to_path_buf(), 0_usize)];
+    while let Some((directory, depth)) = pending.pop() {
+        collect_directory_entries(context, &directory, depth, entries, excluded, &mut pending)?;
+    }
+    Ok(())
+}
+
+fn collect_directory_entries(
     context: &ScanContext<'_>,
     directory: &Path,
     depth: usize,
     entries: &mut Vec<ManifestEntry>,
     excluded: &mut ExcludedStats,
+    pending: &mut Vec<(PathBuf, usize)>,
 ) -> Result<(), ArchiveError> {
     let mut children = fs::read_dir(directory)
         .map_err(io_error)?
@@ -950,7 +965,7 @@ fn collect_entries(
                 mode,
                 mtime_seconds,
             });
-            collect_entries(context, &path, depth.saturating_add(1), entries, excluded)?;
+            pending.push((path, depth.saturating_add(1)));
         } else if metadata.file_type().is_file() {
             if metadata.nlink() != 1 {
                 return Err(ArchiveError::Invalid);
@@ -994,30 +1009,32 @@ fn collect_excluded_stats(
     metadata: &fs::Metadata,
     stats: &mut ExcludedStats,
 ) -> Result<(), ArchiveError> {
-    stats.entries = stats.entries.checked_add(1).ok_or(ArchiveError::Invalid)?;
-    if stats.entries > MAX_ENTRIES as u64 {
-        return Err(ArchiveError::Invalid);
-    }
-    if metadata.file_type().is_file() {
-        stats.logical_size = stats
-            .logical_size
-            .checked_add(metadata.len())
-            .filter(|size| *size <= MAX_LOGICAL_BYTES)
-            .ok_or(ArchiveError::Invalid)?;
-    } else if metadata.file_type().is_dir() {
-        for entry in fs::read_dir(path).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            let child = entry.path();
-            let child_metadata = fs::symlink_metadata(&child).map_err(io_error)?;
-            collect_excluded_stats(root, &child, &child_metadata, stats)?;
-        }
-    } else if metadata.file_type().is_symlink() {
-        let target = fs::read_link(path).map_err(io_error)?;
-        if target.is_absolute() || !relative_link_stays_inside(root, path, &target) {
+    let mut pending = vec![(path.to_path_buf(), metadata.clone())];
+    while let Some((path, metadata)) = pending.pop() {
+        stats.entries = stats.entries.checked_add(1).ok_or(ArchiveError::Invalid)?;
+        if stats.entries > MAX_ENTRIES as u64 {
             return Err(ArchiveError::Invalid);
         }
-    } else {
-        return Err(ArchiveError::Invalid);
+        if metadata.file_type().is_file() {
+            stats.logical_size = stats
+                .logical_size
+                .checked_add(metadata.len())
+                .filter(|size| *size <= MAX_LOGICAL_BYTES)
+                .ok_or(ArchiveError::Invalid)?;
+        } else if metadata.file_type().is_dir() {
+            for entry in fs::read_dir(&path).map_err(io_error)? {
+                let child = entry.map_err(io_error)?.path();
+                let child_metadata = fs::symlink_metadata(&child).map_err(io_error)?;
+                pending.push((child, child_metadata));
+            }
+        } else if metadata.file_type().is_symlink() {
+            let target = fs::read_link(&path).map_err(io_error)?;
+            if target.is_absolute() || !relative_link_stays_inside(root, &path, &target) {
+                return Err(ArchiveError::Invalid);
+            }
+        } else {
+            return Err(ArchiveError::Invalid);
+        }
     }
     Ok(())
 }
@@ -2220,5 +2237,39 @@ mod tests {
         manifest.accounts[0].kind = ArchiveAccountKind::Slot;
         manifest.accounts[0].source_slot = "slot-1".to_owned();
         assert!(validate_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn deep_app_trees_are_scanned_without_recursion() {
+        // A recursive walk of this depth needs far more than the small stack below, while an
+        // iterative walk needs only one directory level of it.
+        const DEPTH: usize = 1500;
+        const SMALL_STACK_BYTES: usize = 256 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        let ce = root.path().join("ce");
+        let deep = ["files", "cache"].map(|top| {
+            let mut path = ce.join(top);
+            for _ in 0..DEPTH {
+                path.push("d");
+            }
+            fs::create_dir_all(&path).unwrap();
+            fs::write(path.join("leaf"), b"leaf").unwrap();
+            path
+        });
+        assert!(deep.iter().all(|path| path.join("leaf").is_file()));
+
+        let scan = std::thread::Builder::new()
+            .stack_size(SMALL_STACK_BYTES)
+            .spawn(move || scan_domain(&ce, ArchiveDomain::Ce, &[], true))
+            .unwrap()
+            .join()
+            .unwrap()
+            .unwrap();
+
+        // files + DEPTH directories + leaf; the excluded cache tree counts the same way.
+        assert_eq!(scan.manifest.entries.len(), DEPTH + 2);
+        assert_eq!(scan.manifest.logical_size, 4);
+        assert_eq!(scan.excluded.entries, (DEPTH + 2) as u64);
+        assert_eq!(scan.excluded.logical_size, 4);
     }
 }
