@@ -2,7 +2,6 @@ import java.security.MessageDigest
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -62,7 +61,8 @@ val prepareArchiveHelper by tasks.registering(Copy::class) {
 
 android {
     namespace = "com.uclone.slices.v2"
-    compileSdk = 36
+    compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "com.uclone.slices.v2"
@@ -104,7 +104,7 @@ android {
 
     sourceSets {
         getByName("release") {
-            jniLibs.srcDir(generatedArchiveHelper)
+            jniLibs.srcDir(generatedArchiveHelper.get().asFile)
         }
         getByName("test") {
             resources.srcDir("../protocol/fixtures")
@@ -149,6 +149,7 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.kotlinx.coroutines.android)
 
-    testImplementation(kotlin("test"))
+    // AGP 9 built-in Kotlin does not infer the kotlin-test JUnit variant, so name it.
+    testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.org.json)
 }
