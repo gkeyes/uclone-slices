@@ -1,17 +1,15 @@
 mod adapters;
 pub mod archive;
 mod composition;
+pub mod layout;
 mod links;
 mod model;
 mod ports;
 mod protocol;
 mod usecases;
+pub mod validation;
 
 pub use composition::{CompositionError, ProductionRuntime, production};
-pub use model::{
-    BindingState, Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode,
-    SigningIdentity, SigningKind, SlotId, SlotSnapshot,
-};
 pub use usecases::RuntimeError;
 
 pub fn handle_line(runtime: &mut ProductionRuntime, expected_build_id: &str, line: &str) -> String {

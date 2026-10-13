@@ -5,6 +5,9 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use crate::archive::{ArchiveAccountKind, ArchiveDomain, ArchiveScope};
+use crate::validation;
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModelError {
     #[error("invalid package name")]
@@ -30,14 +33,7 @@ pub struct PackageName(String);
 impl PackageName {
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        let valid = !value.is_empty()
-            && value.contains('.')
-            && !value.starts_with('.')
-            && !value.ends_with('.')
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_'));
-        valid
+        validation::is_package_name(&value)
             .then_some(Self(value))
             .ok_or(ModelError::InvalidPackage)
     }
@@ -86,10 +82,7 @@ impl SlotId {
 
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        let numbered = value.strip_prefix("slot-").is_some_and(|number| {
-            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-        });
-        (value == "base" || numbered)
+        validation::is_slot_id(&value)
             .then_some(Self(value))
             .ok_or(ModelError::InvalidSlot)
     }
@@ -210,6 +203,7 @@ pub struct SigningIdentity {
 }
 
 impl SigningIdentity {
+    #[cfg(test)]
     pub fn new(kind: SigningKind, sha256: Vec<String>) -> Result<Self, ModelError> {
         let identity = Self { kind, sha256 };
         identity.validate()?;
@@ -217,30 +211,9 @@ impl SigningIdentity {
     }
 
     pub fn validate(&self) -> Result<(), ModelError> {
-        let valid_digest = |value: &String| {
-            value.len() == 64
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        };
-        if self.sha256.is_empty() || self.sha256.len() > 16 || !self.sha256.iter().all(valid_digest)
-        {
-            return Err(ModelError::InvalidSigningIdentity);
-        }
-        let unique = self.sha256.iter().collect::<BTreeSet<_>>();
-        if unique.len() != self.sha256.len() {
-            return Err(ModelError::InvalidSigningIdentity);
-        }
-        if self.kind == SigningKind::Multiple
-            && (self.sha256.len() < 2
-                || !self
-                    .sha256
-                    .windows(2)
-                    .all(|pair| pair[0].as_str() < pair[1].as_str()))
-        {
-            return Err(ModelError::InvalidSigningIdentity);
-        }
-        Ok(())
+        validation::is_signing_digest_set(self.kind == SigningKind::Multiple, &self.sha256)
+            .then_some(())
+            .ok_or(ModelError::InvalidSigningIdentity)
     }
 
     pub fn is_compatible_with(&self, persisted: &Self) -> bool {
@@ -339,17 +312,6 @@ impl ObservedView {
     }
 }
 
-fn valid_account_io_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value != "."
-        && value != ".."
-        && !value.starts_with('.')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct AccountIoToken(String);
@@ -357,12 +319,9 @@ pub struct AccountIoToken(String);
 impl AccountIoToken {
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        (value.len() == 32
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')))
-        .then_some(Self(value))
-        .ok_or(ModelError::InvalidState)
+        validation::is_io_token(&value)
+            .then_some(Self(value))
+            .ok_or(ModelError::InvalidState)
     }
 
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
@@ -402,7 +361,7 @@ pub struct ArchiveAccountId(String);
 impl ArchiveAccountId {
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        valid_account_io_id(&value)
+        validation::is_identifier(&value)
             .then_some(Self(value))
             .ok_or(ModelError::InvalidState)
     }
@@ -435,7 +394,7 @@ pub struct TransferId(String);
 impl TransferId {
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        valid_account_io_id(&value)
+        validation::is_identifier(&value)
             .then_some(Self(value))
             .ok_or(ModelError::InvalidState)
     }
@@ -469,53 +428,18 @@ pub enum AccountIoKind {
     Restore,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchiveScope {
-    Account,
-    AllAccounts,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchivedAccountKind {
-    Base,
-    Slot,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RestoreDomain {
-    Ce,
-    De,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RestorePath {
-    pub domain: RestoreDomain,
+    pub domain: ArchiveDomain,
     pub path: String,
 }
 
 impl RestorePath {
     pub(crate) fn validate(&self) -> Result<(), ModelError> {
-        if self.path.is_empty() || self.path.len() > 4096 || self.path.starts_with('/') {
-            return Err(ModelError::InvalidState);
-        }
-        let segments = self.path.split('/').collect::<Vec<_>>();
-        if segments.is_empty()
-            || segments.iter().any(|segment| {
-                segment.is_empty()
-                    || matches!(*segment, "." | ".." | "**")
-                    || (*segment != "*"
-                        && !segment.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-                        }))
-            })
-        {
-            return Err(ModelError::InvalidState);
-        }
-        Ok(())
+        validation::is_path_pattern(&self.path)
+            .then_some(())
+            .ok_or(ModelError::InvalidState)
     }
 }
 
@@ -534,7 +458,7 @@ impl RestorePolicy {
         let Self::PreservePaths { paths } = self else {
             return Ok(());
         };
-        if paths.is_empty() || paths.len() > 64 {
+        if paths.is_empty() || paths.len() > validation::MAX_PATH_RULES {
             return Err(ModelError::InvalidState);
         }
         for path in paths {
@@ -543,18 +467,15 @@ impl RestorePolicy {
         if paths.iter().collect::<BTreeSet<_>>().len() != paths.len() {
             return Err(ModelError::InvalidState);
         }
-        for (index, left) in paths.iter().enumerate() {
-            for right in paths.iter().skip(index + 1) {
-                if left.domain == right.domain && restore_patterns_overlap(&left.path, &right.path)
-                {
-                    return Err(ModelError::InvalidState);
-                }
-            }
+        if validation::any_patterns_overlap(
+            paths.iter().map(|path| (path.domain, path.path.as_str())),
+        ) {
+            return Err(ModelError::InvalidState);
         }
         Ok(())
     }
 
-    pub(crate) fn paths_for(&self, domain: RestoreDomain) -> Vec<&str> {
+    pub(crate) fn paths_for(&self, domain: ArchiveDomain) -> Vec<&str> {
         match self {
             Self::Replace => Vec::new(),
             Self::PreservePaths { paths } => paths
@@ -564,16 +485,6 @@ impl RestorePolicy {
                 .collect(),
         }
     }
-}
-
-fn restore_patterns_overlap(left: &str, right: &str) -> bool {
-    let left = left.split('/').collect::<Vec<_>>();
-    let right = right.split('/').collect::<Vec<_>>();
-    let shared = left.len().min(right.len());
-    left.iter()
-        .take(shared)
-        .zip(right.iter().take(shared))
-        .all(|(left, right)| left == right || *left == "*" || *right == "*")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -587,7 +498,7 @@ pub enum RestoreTarget {
 #[serde(deny_unknown_fields)]
 pub struct RestoreMapping {
     pub archive_account_id: ArchiveAccountId,
-    pub archive_kind: ArchivedAccountKind,
+    pub archive_kind: ArchiveAccountKind,
     pub name: DisplayName,
     pub target: RestoreTarget,
     #[serde(default)]
@@ -611,6 +522,16 @@ pub enum PackageEnabledState {
     Disabled,
     DisabledUser,
     DisabledUntilUsed,
+}
+
+impl PackageEnabledState {
+    /// Whether the app may be launched in this state.
+    pub fn allows_launch(self) -> bool {
+        !matches!(
+            self,
+            Self::Disabled | Self::DisabledUser | Self::DisabledUntilUsed
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -697,7 +618,7 @@ pub struct AccountIoStatus {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResolvedRestoreMapping {
     pub archive_account_id: ArchiveAccountId,
-    pub archive_kind: ArchivedAccountKind,
+    pub archive_kind: ArchiveAccountKind,
     pub name: DisplayName,
     pub previous_name: Option<DisplayName>,
     pub target_slot: SlotId,
@@ -1238,261 +1159,4 @@ pub struct Capabilities {
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    use super::*;
-
-    fn package() -> PackageName {
-        PackageName::new("com.example.app").unwrap()
-    }
-
-    fn identity() -> PackageIdentity {
-        PackageIdentity::new(10_000, "/data/app/example/base.apk", 1, 2).unwrap()
-    }
-
-    #[test]
-    fn identifiers_only_enforce_operational_grammar() {
-        assert!(PackageName::new("com.example.app").is_ok());
-        assert!(PackageName::new("single").is_err());
-        assert!(PackageName::new("../app").is_err());
-        assert!(DisplayName::new("Work profile").is_ok());
-        assert!(DisplayName::new("\n").is_err());
-    }
-
-    #[test]
-    fn restore_policy_accepts_single_wildcards_and_rejects_unsafe_or_overlapping_paths() {
-        let valid = RestorePolicy::PreservePaths {
-            paths: vec![RestorePath {
-                domain: RestoreDomain::Ce,
-                path: "files/Dolphin/*/Paks".to_owned(),
-            }],
-        };
-        assert!(valid.validate().is_ok());
-
-        for path in ["/data/user/0/app", "../files", "files/**/Paks"] {
-            assert_eq!(
-                RestorePolicy::PreservePaths {
-                    paths: vec![RestorePath {
-                        domain: RestoreDomain::Ce,
-                        path: path.to_owned(),
-                    }],
-                }
-                .validate(),
-                Err(ModelError::InvalidState),
-            );
-        }
-        let overlapping = RestorePolicy::PreservePaths {
-            paths: vec![
-                RestorePath {
-                    domain: RestoreDomain::Ce,
-                    path: "files/game".to_owned(),
-                },
-                RestorePath {
-                    domain: RestoreDomain::Ce,
-                    path: "files/game/Paks".to_owned(),
-                },
-            ],
-        };
-        assert_eq!(overlapping.validate(), Err(ModelError::InvalidState));
-    }
-
-    #[test]
-    fn aggregate_owns_slot_lifecycle() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-        let slot = aggregate
-            .reserve_slot(DisplayName::new("Work").unwrap())
-            .unwrap();
-        let slot_id = slot.id().clone();
-        aggregate.begin_creation(&slot, false).unwrap();
-        aggregate.finish_creation(slot).unwrap();
-        aggregate.begin_activation(&slot_id).unwrap();
-        aggregate.finish_activation(&slot_id).unwrap();
-
-        assert_eq!(aggregate.active_slot(), &slot_id);
-        assert_eq!(aggregate.snapshot().unwrap().slots.len(), 2);
-    }
-
-    #[test]
-    fn reboot_launch_defaults_off_and_survives_round_trip() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-
-        assert!(!aggregate.launch_after_reboot());
-        aggregate.set_launch_after_reboot(true).unwrap();
-
-        let encoded = serde_json::to_string(&aggregate).unwrap();
-        let restored: PackageAggregate = serde_json::from_str(&encoded).unwrap();
-        assert!(restored.launch_after_reboot());
-        assert!(restored.snapshot().unwrap().launch_after_reboot);
-    }
-
-    #[test]
-    fn persisted_aggregate_without_reboot_launch_setting_migrates_off() {
-        let aggregate = PackageAggregate::enrolled(package(), identity());
-        let mut legacy = serde_json::to_value(aggregate).unwrap();
-        legacy
-            .as_object_mut()
-            .unwrap()
-            .remove("launch_after_reboot");
-
-        let restored: PackageAggregate = serde_json::from_value(legacy).unwrap();
-
-        assert!(!restored.launch_after_reboot());
-        assert!(!restored.snapshot().unwrap().launch_after_reboot);
-    }
-
-    #[test]
-    fn aggregate_wire_format_stays_independent_from_the_v1_binding_sidecar() {
-        let aggregate = PackageAggregate::enrolled(package(), identity());
-
-        let encoded = serde_json::to_value(aggregate).unwrap();
-
-        let fields = encoded.as_object().unwrap();
-        assert!(!fields.contains_key("binding"));
-        assert!(!fields.contains_key("signing"));
-        assert!(!fields.contains_key("binding_state"));
-    }
-
-    #[test]
-    fn signing_lineages_accept_verified_rotation_in_either_direction() {
-        let old = SigningIdentity::new(SigningKind::Lineage, vec!["a".repeat(64)]).unwrap();
-        let rotated =
-            SigningIdentity::new(SigningKind::Lineage, vec!["a".repeat(64), "b".repeat(64)])
-                .unwrap();
-
-        assert!(old.is_compatible_with(&rotated));
-        assert!(rotated.is_compatible_with(&old));
-        let newest_first =
-            SigningIdentity::new(SigningKind::Lineage, vec!["b".repeat(64), "a".repeat(64)])
-                .unwrap();
-        assert!(old.is_compatible_with(&newest_first));
-    }
-
-    #[test]
-    fn multiple_signers_require_a_sorted_exact_set() {
-        let first =
-            SigningIdentity::new(SigningKind::Multiple, vec!["a".repeat(64), "b".repeat(64)])
-                .unwrap();
-        let same =
-            SigningIdentity::new(SigningKind::Multiple, vec!["a".repeat(64), "b".repeat(64)])
-                .unwrap();
-        let different =
-            SigningIdentity::new(SigningKind::Multiple, vec!["a".repeat(64), "c".repeat(64)])
-                .unwrap();
-
-        assert!(first.is_compatible_with(&same));
-        assert!(!first.is_compatible_with(&different));
-        assert!(
-            SigningIdentity::new(SigningKind::Multiple, vec!["b".repeat(64), "a".repeat(64)],)
-                .is_err()
-        );
-        assert!(SigningIdentity::new(SigningKind::Lineage, vec!["A".repeat(64)]).is_err());
-        assert!(SigningIdentity::new(SigningKind::Lineage, vec!["a".repeat(63)]).is_err());
-    }
-
-    #[test]
-    fn invalid_persisted_relationships_are_rejected() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-        aggregate.active_slot = SlotId::numbered(9);
-
-        assert_eq!(aggregate.validate(), Err(ModelError::InvalidState));
-    }
-
-    #[test]
-    fn interrupted_activation_keeps_both_directions() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-        let slot = aggregate
-            .reserve_slot(DisplayName::new("Work").unwrap())
-            .unwrap();
-        let slot_id = slot.id().clone();
-        aggregate.begin_creation(&slot, false).unwrap();
-        aggregate.finish_creation(slot).unwrap();
-        aggregate.begin_activation(&slot_id).unwrap();
-
-        let base = SlotId::base();
-        assert_eq!(aggregate.pending_activation(), Some((&base, &slot_id)));
-        aggregate.abort_activation(&base).unwrap();
-        assert!(aggregate.snapshot().is_ok());
-    }
-
-    #[test]
-    fn rename_and_delete_preserve_slot_identity_and_monotonic_numbering() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-        let slot = aggregate
-            .reserve_slot(DisplayName::new("Work").unwrap())
-            .unwrap();
-        let slot_id = slot.id().clone();
-        aggregate.begin_creation(&slot, false).unwrap();
-        aggregate.finish_creation(slot).unwrap();
-
-        aggregate
-            .rename_slot(&slot_id, DisplayName::new("Personal").unwrap())
-            .unwrap();
-        assert_eq!(aggregate.snapshot().unwrap().slots[1].name, "Personal");
-
-        aggregate.begin_deletion(&slot_id).unwrap();
-        assert_eq!(aggregate.pending_deletion(), Some(&slot_id));
-        assert_eq!(aggregate.snapshot(), Err(ModelError::StateConflict));
-        aggregate.finish_deletion(&slot_id).unwrap();
-        assert!(!aggregate.has_slot(&slot_id));
-
-        let next = aggregate
-            .reserve_slot(DisplayName::new("Next").unwrap())
-            .unwrap();
-        assert_eq!(next.id(), &SlotId::numbered(2));
-    }
-
-    #[test]
-    fn base_active_and_missing_slots_cannot_be_deleted() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-        assert_eq!(
-            aggregate.begin_deletion(&SlotId::base()),
-            Err(ModelError::StateConflict)
-        );
-        assert_eq!(
-            aggregate.begin_deletion(&SlotId::numbered(9)),
-            Err(ModelError::SlotNotFound)
-        );
-
-        let slot = aggregate
-            .reserve_slot(DisplayName::new("Work").unwrap())
-            .unwrap();
-        let slot_id = slot.id().clone();
-        aggregate.begin_creation(&slot, false).unwrap();
-        aggregate.finish_creation(slot).unwrap();
-        aggregate.begin_activation(&slot_id).unwrap();
-        aggregate.finish_activation(&slot_id).unwrap();
-
-        assert_eq!(
-            aggregate.begin_deletion(&slot_id),
-            Err(ModelError::StateConflict)
-        );
-        aggregate
-            .rename_slot(&slot_id, DisplayName::new("Current").unwrap())
-            .unwrap();
-        assert_eq!(aggregate.snapshot().unwrap().slots[1].name, "Current");
-        assert_eq!(
-            aggregate.rename_slot(&SlotId::base(), DisplayName::new("Root").unwrap()),
-            Err(ModelError::StateConflict)
-        );
-    }
-
-    #[test]
-    fn unenrollment_is_a_durable_terminal_intent() {
-        let mut aggregate = PackageAggregate::enrolled(package(), identity());
-
-        aggregate.begin_unenrollment().unwrap();
-
-        assert!(aggregate.is_unenrolling());
-        assert_eq!(aggregate.snapshot(), Err(ModelError::StateConflict));
-        assert_eq!(
-            aggregate.begin_unenrollment(),
-            Err(ModelError::StateConflict)
-        );
-        let encoded = serde_json::to_string(&aggregate).unwrap();
-        assert!(encoded.contains(r#""state":"unenrolling""#));
-        let restored: PackageAggregate = serde_json::from_str(&encoded).unwrap();
-        assert!(restored.is_unenrolling());
-        assert!(restored.validate().is_ok());
-    }
-}
+mod tests;

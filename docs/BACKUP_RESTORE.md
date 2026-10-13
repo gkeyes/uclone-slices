@@ -76,7 +76,7 @@ Manager 负责 SAF 导入导出、归档、压缩、加密、预览和结果展�
 
 ## 中断与回退
 
-事务 intent 位于 Runtime 控制目录，普通账号 Aggregate schema 不变。Runtime 在开机普通收敛之前优先恢复未完成的账号 I/O：未提交的当前账号先回到真实 Base 再回滚；进入 `Finalizing` 的事务已经越过提交边界，只能继续收敛目标和清理，不能退回恢复前账号。App 恢复到安全视图但不自动启动。新事务不再创建 Base alias；升级前遗留的 `maintenance-base` 堆叠挂载会逐层卸载并验证归零，无法清理时 fail-closed。
+事务 intent 位于 Runtime 控制目录，普通账号 Aggregate schema 不变。Runtime 在开机普通收敛之前优先恢复未完成的账号 I/O：未提交的当前账号先回到真实 Base 再回滚；进入 `Finalizing` 的事务已经越过提交边界，只能继续收敛目标和清理，不能退回恢复前账号。App 恢复到安全视图但不自动启动。事务不创建 Base alias（只有未发布的 0.2.1 之前的开发版创建过 `maintenance-base`，挂载也不会跨越模块升级所需的重启）。
 
 Manager 在最终清理首次失败时会显式重试一次 `finish_restore_io` 并读取最终结果；若重试仍失败，则保留 `Finalizing` intent 供状态页显式恢复，不在后台通过 `abort_account_io` 隐式完成后继续显示失败。
 
