@@ -34,10 +34,15 @@ enum class BindingState(val wire: String) {
     Ready("ready"),
     LegacyUnbound("legacy_unbound"),
     RebindRequired("rebind_required"),
-    LegacyConfirmationRequired("legacy_confirmation_required");
+    LegacyConfirmationRequired("legacy_confirmation_required"),
+
+    // A state a newer Runtime reports that this Manager does not know. It is never sent and never
+    // auto-repaired: the package stays visible but every write and the silent rebind stay off.
+    Unsupported("");
 
     companion object {
-        fun fromWire(value: String): BindingState = entries.first { it.wire == value }
+        fun fromWire(value: String): BindingState =
+            entries.firstOrNull { it != Unsupported && it.wire == value } ?: Unsupported
     }
 }
 
@@ -148,7 +153,9 @@ enum class RestoreItemState(val wire: String) {
     Skipped("skipped");
 
     companion object {
-        fun fromWire(value: String): RestoreItemState = entries.first { it.wire == value }
+        // An unknown result from a newer Runtime is reported as failed, never as restored.
+        fun fromWire(value: String): RestoreItemState =
+            entries.firstOrNull { it.wire == value } ?: Failed
     }
 }
 
@@ -230,8 +237,10 @@ enum class ErrorCode(val wire: String) {
     BackupIncompatible("backup_incompatible");
 
     companion object {
+        // A newer Runtime may add error codes. It still answered, so an unknown code is a failed
+        // operation, never a transport failure that would mark the Runtime unavailable.
         fun fromWire(value: String): ErrorCode =
-            entries.first { it.wire == value }
+            entries.firstOrNull { it.wire == value } ?: OperationFailed
     }
 }
 
