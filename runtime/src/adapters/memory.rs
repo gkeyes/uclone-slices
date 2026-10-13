@@ -171,8 +171,9 @@ pub(crate) enum SlotFailure {
     Discard,
     DiscardCe,
     DiscardDe,
-    DiscardPackageCe,
-    DiscardPackageDe,
+    TrashPackageCe,
+    TrashPackageDe,
+    PurgeTrash,
     Cleanup,
 }
 
@@ -182,6 +183,9 @@ pub(crate) struct MemorySlotStorage {
     staging: BTreeSet<(PackageName, AccountIoToken, ArchiveAccountId)>,
     maintenance: BTreeSet<(PackageName, AccountIoToken)>,
     replacements: BTreeMap<(PackageName, AccountIoToken, SlotId), Option<(bool, bool)>>,
+    /// Slot domains moved to the trash by unenroll, which the memory store never expires.
+    trash: BTreeMap<(PackageName, SlotId), (bool, bool)>,
+    purge_calls: usize,
     failures: VecDeque<SlotFailure>,
 }
 
@@ -204,6 +208,14 @@ impl MemorySlotStorage {
         slot: &SlotId,
     ) -> Option<(bool, bool)> {
         self.domains.get(&(package.clone(), slot.clone())).copied()
+    }
+
+    pub(crate) fn trashed(&self, package: &PackageName, slot: &SlotId) -> Option<(bool, bool)> {
+        self.trash.get(&(package.clone(), slot.clone())).copied()
+    }
+
+    pub(crate) fn purge_calls(&self) -> usize {
+        self.purge_calls
     }
 
     pub(crate) fn fail_next(&mut self, failure: SlotFailure) {
@@ -280,28 +292,43 @@ impl SlotStorage for MemorySlotStorage {
         }
     }
 
-    fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
-        let ce_failed = self.take_failure(SlotFailure::DiscardPackageCe);
-        let de_failed = self.take_failure(SlotFailure::DiscardPackageDe);
-        for ((stored_package, _slot), pair) in &mut self.domains {
+    fn trash_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        let ce_failed = self.take_failure(SlotFailure::TrashPackageCe);
+        let de_failed = self.take_failure(SlotFailure::TrashPackageDe);
+        for ((stored_package, slot), pair) in &mut self.domains {
             if stored_package != package {
                 continue;
             }
-            if !ce_failed {
+            let trashed = self
+                .trash
+                .entry((package.clone(), slot.clone()))
+                .or_insert((false, false));
+            if !ce_failed && pair.0 {
                 pair.0 = false;
+                trashed.0 = true;
             }
-            if !de_failed {
+            if !de_failed && pair.1 {
                 pair.1 = false;
+                trashed.1 = true;
             }
         }
         self.domains.retain(|_, pair| *pair != (false, false));
+        self.trash.retain(|_, pair| *pair != (false, false));
         if ce_failed {
-            Err(AdapterError::new("injected CE package discard failure"))
+            Err(AdapterError::new("injected CE package trash failure"))
         } else if de_failed {
-            Err(AdapterError::new("injected DE package discard failure"))
+            Err(AdapterError::new("injected DE package trash failure"))
         } else {
             Ok(())
         }
+    }
+
+    fn purge_trash(&mut self) -> Result<(), AdapterError> {
+        self.purge_calls += 1;
+        if self.take_failure(SlotFailure::PurgeTrash) {
+            return Err(AdapterError::new("injected trash purge failure"));
+        }
+        Ok(())
     }
 
     fn require_complete_pair(

@@ -512,6 +512,26 @@ impl FileSlotStorage {
         }
     }
 
+    /// Renames `<slots root>/<package>` of each domain to `<storage root>/trash/<now>-<package>`
+    /// on the same filesystem. Both domains are attempted; the first error is returned.
+    fn trash_package_at(&self, package: &PackageName, now: u64) -> Result<(), AdapterError> {
+        let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
+        let ce_result =
+            trash_package_domain(&self.ce_slots_root, &ce_trash, package, now, self.owner);
+        let de_result =
+            trash_package_domain(&self.de_slots_root, &de_trash, package, now, self.owner);
+        ce_result.and(de_result)
+    }
+
+    /// Deletes every trash entry whose timestamp is at least [`layout::TRASH_RETENTION`] before
+    /// `now`. Both domains are attempted; the first error is returned.
+    fn purge_trash_at(&self, now: u64) -> Result<(), AdapterError> {
+        let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
+        let ce_result = purge_trash_domain(&ce_trash, now, self.owner);
+        let de_result = purge_trash_domain(&de_trash, now, self.owner);
+        ce_result.and(de_result)
+    }
+
     fn available_bytes(&self, path: &Path) -> Result<(u64, u64), AdapterError> {
         let device = fs::metadata(path).map_err(io_error)?.dev();
         #[cfg(test)]
@@ -657,10 +677,12 @@ impl SlotStorage for FileSlotStorage {
         ce_result.and(de_result)
     }
 
-    fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
-        let ce_result = remove_tree_if_exists(&self.ce_slots_root.join(package.as_str()));
-        let de_result = remove_tree_if_exists(&self.de_slots_root.join(package.as_str()));
-        ce_result.and(de_result)
+    fn trash_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        self.trash_package_at(package, unix_seconds_now()?)
+    }
+
+    fn purge_trash(&mut self) -> Result<(), AdapterError> {
+        self.purge_trash_at(unix_seconds_now()?)
     }
 
     fn require_complete_pair(
@@ -1971,11 +1993,106 @@ fn copy_tree(source: &Path, target: &Path) -> Result<(), AdapterError> {
     Ok(())
 }
 
+/// Removes `path` and everything below it without following symbolic links: a link is removed
+/// itself, never its target.
 fn remove_tree_if_exists(path: &Path) -> Result<(), AdapterError> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(io_error(error)),
+    }
+}
+
+fn unix_seconds_now() -> Result<u64, AdapterError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .map_err(|_| AdapterError::new("system clock is before the Unix epoch"))
+}
+
+fn trash_package_domain(
+    slots_root: &Path,
+    trash_root: &Path,
+    package: &PackageName,
+    now: u64,
+    owner: DirectoryOwner,
+) -> Result<(), AdapterError> {
+    let source = slots_root.join(package.as_str());
+    match fs::symlink_metadata(&source) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(io_error(error)),
+    }
+    secure_private_directory(trash_root, owner)?;
+    let base_name = format!("{now}-{}", package.as_str());
+    let mut target = trash_root.join(&base_name);
+    let mut suffix = 0_u64;
+    // `rename` silently replaces an empty directory, so pick a name nothing uses yet.
+    while fs::symlink_metadata(&target).is_ok() {
+        suffix += 1;
+        target = trash_root.join(format!("{base_name}-{suffix}"));
+    }
+    rename_path(&source, &target).map_err(io_error)?;
+    // The package state is removed right after this returns; the move must be durable first.
+    sync_directory(slots_root)?;
+    sync_directory(trash_root)
+}
+
+/// The Unix timestamp a trash entry was created at, from its `<seconds>-<package>` name.
+fn trash_entry_timestamp(name: &std::ffi::OsStr) -> Option<u64> {
+    let (seconds, rest) = name.to_str()?.split_once('-')?;
+    if rest.is_empty() || seconds.is_empty() || !seconds.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    seconds.parse().ok()
+}
+
+fn purge_trash_domain(
+    trash_root: &Path,
+    now: u64,
+    owner: DirectoryOwner,
+) -> Result<(), AdapterError> {
+    match fs::symlink_metadata(trash_root) {
+        Ok(_) => secure_private_directory(trash_root, owner)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(io_error(error)),
+    }
+    let retention = layout::TRASH_RETENTION.as_secs();
+    let mut first_error = None;
+    for entry in fs::read_dir(trash_root).map_err(io_error)? {
+        let result = entry.map_err(io_error).and_then(|entry| {
+            let path = entry.path();
+            let Some(created) = trash_entry_timestamp(&entry.file_name()) else {
+                eprintln!(
+                    "op=purge_trash path={} step=skip_unexpected_entry error=unrecognized_name",
+                    path.display()
+                );
+                return Ok(());
+            };
+            if now.saturating_sub(created) < retention {
+                return Ok(());
+            }
+            // `file_type` comes from the directory entry itself and never follows a link, so a
+            // link or file found here is unlinked itself and never traversed.
+            if entry.file_type().map_err(io_error)?.is_dir() {
+                remove_tree_if_exists(&path)
+            } else {
+                eprintln!(
+                    "op=purge_trash path={} step=remove_unexpected_entry error=not_a_directory",
+                    path.display()
+                );
+                fs::remove_file(&path).map_err(io_error)
+            }
+        });
+        if let Err(error) = result
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => sync_directory(trash_root),
     }
 }
 

@@ -158,6 +158,7 @@ where
                 );
             }
         }
+        self.purge_trash("reconcile_boot");
         recovered
     }
 
@@ -855,14 +856,23 @@ where
             .map_err(adapter_error)?
             .ok_or(RuntimeError::NotFound)?;
         aggregate.validate().map_err(model_error)?;
-        if aggregate.is_unenrolling() {
-            return self.finish_unenrollment(package, UnenrollContext::Request);
+        if !aggregate.is_unenrolling() {
+            aggregate.begin_unenrollment().map_err(model_error)?;
+            self.packages
+                .save(&aggregate)
+                .map_err(|error| logged_adapter("unenroll", package, "save_intent", error))?;
         }
-        aggregate.begin_unenrollment().map_err(model_error)?;
-        self.packages
-            .save(&aggregate)
-            .map_err(|error| logged_adapter("unenroll", package, "save_intent", error))?;
-        self.finish_unenrollment(package, UnenrollContext::Request)
+        self.finish_unenrollment(package, UnenrollContext::Request)?;
+        self.purge_trash("unenroll");
+        Ok(())
+    }
+
+    /// Deletes expired trash entries. A failure only delays the deletion to the next purge,
+    /// so it is logged and never fails the operation that triggered it.
+    fn purge_trash(&mut self, operation: &str) {
+        if let Err(error) = self.slots.purge_trash() {
+            eprintln!("op={operation} step=purge_trash error={error}");
+        }
     }
 
     pub fn create_slot(
@@ -1864,8 +1874,8 @@ where
             return Err(context.view_failure(package));
         }
         self.slots
-            .discard_package(package)
-            .map_err(|error| context.map_adapter(package, "discard_unenroll_slots", error))?;
+            .trash_package(package)
+            .map_err(|error| context.map_adapter(package, "trash_unenroll_slots", error))?;
         self.packages
             .remove(package)
             .map_err(|error| context.map_adapter(package, "remove_unenroll_state", error))

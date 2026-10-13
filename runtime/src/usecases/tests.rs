@@ -25,8 +25,12 @@ impl SlotStorage for CapacityDeniedStorage {
         self.0.discard(package, slot)
     }
 
-    fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
-        self.0.discard_package(package)
+    fn trash_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        self.0.trash_package(package)
+    }
+
+    fn purge_trash(&mut self) -> Result<(), AdapterError> {
+        self.0.purge_trash()
     }
 
     fn require_complete_pair(
@@ -1381,7 +1385,7 @@ fn final_save_failure_is_recovered_from_the_real_target_view() {
 }
 
 #[test]
-fn unenroll_from_active_slot_returns_to_base_and_removes_every_slot() {
+fn unenroll_from_active_slot_returns_to_base_and_trashes_every_slot() {
     let package = package();
     let (mut runtime, target) = with_slot();
     runtime.activate_slot(&package, &target).unwrap();
@@ -1394,6 +1398,8 @@ fn unenroll_from_active_slot_returns_to_base_and_removes_every_slot() {
     let (packages, slots, android) = runtime.into_parts();
     assert!(packages.load(&package).unwrap().is_none());
     assert_eq!(slots.domain_state(&package, &target), None);
+    assert_eq!(slots.trashed(&package, &target), Some((true, true)));
+    assert_eq!(slots.purge_calls(), 1);
     assert_eq!(android.view(&package), Some(&ObservedView::Base));
     assert!(!android.is_running(&package));
     assert_eq!(
@@ -1495,8 +1501,8 @@ fn unenroll_verification_failure_is_retryable_state_conflict() {
 #[test]
 fn partial_unenroll_storage_cleanup_recovers_both_domains() {
     for (failure, remaining) in [
-        (SlotFailure::DiscardPackageCe, (true, false)),
-        (SlotFailure::DiscardPackageDe, (false, true)),
+        (SlotFailure::TrashPackageCe, (true, false)),
+        (SlotFailure::TrashPackageDe, (false, true)),
     ] {
         let package = package();
         let (runtime, target) = with_slot();
@@ -1517,7 +1523,44 @@ fn partial_unenroll_storage_cleanup_recovers_both_domains() {
         let (packages, slots, _android) = runtime.into_parts();
         assert!(packages.load(&package).unwrap().is_none());
         assert_eq!(slots.domain_state(&package, &target), None);
+        assert_eq!(slots.trashed(&package, &target), Some((true, true)));
     }
+}
+
+#[test]
+fn unenroll_purge_failure_does_not_fail_the_unenroll() {
+    let package = package();
+    let (runtime, target) = with_slot();
+    let (packages, mut slots, android) = runtime.into_parts();
+    slots.fail_next(SlotFailure::PurgeTrash);
+    let mut runtime = Runtime::new(packages, slots, android);
+
+    assert_eq!(runtime.unenroll(&package), Ok(()));
+
+    let (packages, slots, _android) = runtime.into_parts();
+    assert!(packages.load(&package).unwrap().is_none());
+    assert_eq!(slots.trashed(&package, &target), Some((true, true)));
+    assert_eq!(slots.purge_calls(), 1);
+}
+
+#[test]
+fn failed_unenroll_does_not_purge_and_boot_reconcile_purges() {
+    let package = package();
+    let (runtime, _target) = with_slot();
+    let (packages, mut slots, android) = runtime.into_parts();
+    slots.fail_next(SlotFailure::TrashPackageCe);
+    let mut runtime = Runtime::new(packages, slots, android);
+    assert_eq!(
+        runtime.unenroll(&package),
+        Err(RuntimeError::OperationFailed)
+    );
+    assert_eq!(runtime.slots.purge_calls(), 0);
+
+    runtime.reconcile_boot().unwrap();
+
+    let (packages, slots, _android) = runtime.into_parts();
+    assert!(packages.load(&package).unwrap().is_none());
+    assert_eq!(slots.purge_calls(), 1);
 }
 
 #[test]

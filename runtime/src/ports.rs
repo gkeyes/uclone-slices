@@ -104,7 +104,11 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
 
     fn discard(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError>;
 
-    fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError>;
+    /// Moves every slot of `package`, in both domains, into the trash instead of deleting it.
+    fn trash_package(&mut self, package: &PackageName) -> Result<(), AdapterError>;
+
+    /// Permanently deletes trash entries older than the retention period.
+    fn purge_trash(&mut self) -> Result<(), AdapterError>;
 
     fn require_complete_pair(
         &self,
