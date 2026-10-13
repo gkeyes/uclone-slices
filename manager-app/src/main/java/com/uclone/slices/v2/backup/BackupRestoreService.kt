@@ -213,8 +213,7 @@ internal class BackupRestoreEngine(
             ) { done, total -> publishBytes(BackupJobKind.Backup, done, total) }
             result = when (helperResult) {
                 is ArchiveHelperResult.Success -> {
-                    writeStarted = true
-                    copyToDocument(outputFile, destination)
+                    copyToDocument(outputFile, destination) { writeStarted = true }
                     documentComplete = true
                     BackupJobState.BackupComplete(
                         manifest = helperResult.manifest,
@@ -533,8 +532,10 @@ internal class BackupRestoreEngine(
         } ?: throw IOException("document unavailable")
     }
 
-    private fun copyToDocument(source: File, uri: Uri) {
+    /** [onOpened] runs once the document is open with truncation, i.e. its old content is gone. */
+    private fun copyToDocument(source: File, uri: Uri, onOpened: () -> Unit) {
         context.contentResolver.openFileDescriptor(uri, "rwt")?.use { descriptor ->
+            onOpened()
             FileOutputStream(descriptor.fileDescriptor).use { output ->
                 source.inputStream().use { input -> input.copyTo(output) }
                 output.fd.sync()
