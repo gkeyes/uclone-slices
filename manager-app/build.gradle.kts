@@ -103,7 +103,7 @@ android {
 
     sourceSets {
         getByName("release") {
-            jniLibs.srcDir(generatedArchiveHelper)
+            jniLibs.srcDir(generatedArchiveHelper.get().asFile)
         }
         getByName("test") {
             resources.srcDir("../protocol/fixtures")
