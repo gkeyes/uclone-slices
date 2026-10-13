@@ -542,9 +542,14 @@ internal class BackupRestoreEngine(
         } ?: throw IOException("document unavailable")
     }
 
+    /**
+     * False only when the document is known to be empty. A provider that cannot report a size
+     * (statSize is -1 for pipes and other non-file descriptors) or cannot be read is treated as
+     * holding an older backup, so a failed job never deletes it.
+     */
     private fun documentHasContent(uri: Uri): Boolean = runCatching {
-        context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize > 0 } ?: false
-    }.getOrDefault(false)
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize != 0L } ?: true
+    }.getOrDefault(true)
 
     private fun truncateOrDeleteDocument(uri: Uri) {
         runCatching {
