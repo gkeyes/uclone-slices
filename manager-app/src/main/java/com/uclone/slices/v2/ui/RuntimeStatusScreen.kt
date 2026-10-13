@@ -17,7 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.uclone.slices.v2.R
-import top.yukonga.miuix.kmp.basic.Text
+import androidx.compose.material3.Text
 
 @Composable
 internal fun RuntimeStatusScreen(

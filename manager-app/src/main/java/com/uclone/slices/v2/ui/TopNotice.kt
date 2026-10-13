@@ -13,7 +13,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -30,7 +29,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -43,6 +44,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -56,7 +59,6 @@ import androidx.compose.ui.unit.sp
 import com.uclone.slices.v2.R
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
-import top.yukonga.miuix.kmp.basic.Text
 
 /**
  * The floating notice at the top of the Manager.
@@ -187,10 +189,16 @@ private fun TopNoticeCard(
             .graphicsLayer {
                 translationY = dragOffset
                 alpha = 1f - (-dragOffset / (dismissDistance * 2f)).coerceIn(0f, .6f)
-                shadowElevation = NoticeShadow.toPx()
-                this.shape = shape
-                clip = true
             }
+            // iOS 27 glass card refracting the page; solid glass with a shadow where glass is not live.
+            .glassSurface(
+                shape,
+                tint = Surfaces.panelTint,
+                blurRadius = 16.dp,
+                refraction = 16.dp,
+                depth = 28.dp,
+                fallbackElevation = NoticeShadow,
+            )
             .semantics { liveRegion = LiveRegionMode.Polite }
             .pointerInput(posted.id) {
                 awaitEachGesture {
@@ -219,26 +227,24 @@ private fun TopNoticeCard(
                     }
                 },
             )
-            .background(Surfaces.raised)
-            .border(0.5.dp, Surfaces.hairline, shape)
             .padding(
                 start = 10.dp,
                 top = 10.dp,
-                end = if (retry) Space.xxs else 14.dp,
+                end = if (retry) Space.xs else 18.dp,
                 bottom = 10.dp,
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(Radius.small))
-                .background(tone.container()),
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(Brush.linearGradient(tone.tileGradient())),
             contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = if (success) "✓" else "!",
-                color = tone.onContainer(),
+                color = Color.White,
                 fontSize = TypeScale.headline,
                 fontWeight = FontWeight.Bold,
             )
@@ -276,7 +282,8 @@ private fun TopNoticeCard(
     }
 }
 
-private val NoticeRadius = Radius.row + Space.xxs
+/** Glass card radius; the notice is about 52dp tall, so this reads as a capsule. */
+private val NoticeRadius = Radius.card
 private val NoticeShadow = 6.dp
 private val NoticeSwipeDistance = 28.dp
 private const val NoticeFlingVelocity = 900f

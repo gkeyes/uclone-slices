@@ -41,8 +41,8 @@ import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.PackageSnapshot
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.Text
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 
 @Composable
 internal fun AppListScreen(
@@ -329,7 +329,7 @@ private fun RowScope.HomeActions(
         enabled = !state.busy && state.operationsAllowed,
     )
     if (refreshing) {
-        Box(Modifier.size(Space.touchTarget), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(Space.glassButton), contentAlignment = Alignment.Center) {
             SlicesSpinner(size = 22.dp)
         }
     } else {
