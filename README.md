@@ -5,7 +5,7 @@
 
 UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前版本为 **v0.2.4**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 协议 ID 为 `0.2.3`；Manager 与 KernelSU 模块需使用同一版本。
+当前版本为 **v0.2.5**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 协议 ID 为 `0.2.3`；Manager 与 KernelSU 模块需使用同一版本。
 
 ## 功能
 
@@ -131,6 +131,7 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 ## 数据位置
 
 - 聚合状态：`/data/adb/uclone-slices-v2/packages/<package>/aggregate.json`
+- 取消配置回收区记录：`/data/adb/uclone-slices-v2/packages/<package>/trash-intent.json`
 - 签名身份：`/data/adb/uclone-slices-v2/packages/<package>/binding-v1.json`
 - 重绑 journal：`/data/adb/uclone-slices-v2/packages/<package>/rebind-intent.json`
 - 备份/恢复 journal：`/data/adb/uclone-slices-v2/packages/<package>/account-io-intent-v1.json`
@@ -140,7 +141,7 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 - DE 空间：`/data/misc_de/0/uclone-slices-v2/slots/<package>/<slot>`
 - Runtime socket：`/data/adb/uclone-slices-v2/runtime.sock`
 - 恢复暂存和回滚：CE/DE UClone 根下的 `transfers`、`maintenance`、`rollback`，事务完成或恢复后统一清理。
-- 回收区：取消配置时先把 CE、DE 各自的 `slots/<package>` 在同一文件系统内重命名到 CE/DE UClone 根下的 `trash/pending/<package>`（不会过期）；两个域都移入后，才以同一时间戳一起重命名为 `trash/<Unix 秒>[-<序号>]/<package>`，然后移除登记。中途中断时，登记保持“取消配置中”，下次加载或开机协调会从已完成的步骤继续。超过 7 天的时间戳目录在开机协调和每次成功取消配置后清理：只删除其中以合法包名命名的子项，目录清空后再删除自身；`pending`、名称不符合 `<数字>` 或 `<数字>-<数字>` 的条目和非包名子项保持不动，删除不跟随符号链接。
+- 回收区：取消配置时先把 CE、DE 各自的 `slots/<package>` 在同一文件系统内重命名到 CE/DE UClone 根下的 `trash/pending/<package>`（不会过期）；两个域都移入后，Runtime 选定一个两域都未使用的 `<Unix 秒>[-<序号>]` 名称并先写入 `packages/<package>/trash-intent.json`，再把两域分别重命名为 `trash/<该名称>/<package>`；确认每个原本有数据的域都已到位后才移除登记（连同该记录）。中途中断时，登记保持“取消配置中”，下次加载或开机协调会从已完成的步骤继续，并沿用已记录的名称。超过 7 天的时间戳目录在开机协调和每次成功取消配置后清理：只删除其中以合法包名命名的子项，目录清空后再删除自身；仍在取消配置中的包、`pending`、名称不符合 `<数字>` 或 `<数字>-<数字>` 的条目和非包名子项保持不动，删除不跟随符号链接。
 
 Runtime 根目录、CE/DE 的 UClone 根、`slots`、`trash`、`trash/pending`、`trash/<时间戳>` 和包名父目录均为 `root:root 0700`；socket 为 `root:root 0600`。slot 本身及其内容继续使用目标 App 的 UID、原 mode 和 MCS 标签。
 

@@ -11,6 +11,7 @@ use crate::model::{
     PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection, PackageName,
     PackageSnapshot, RebindIntent, ResolvedRestoreMapping, RestoreBatchResult, RestoreItemResult,
     RestoreItemState, RestoreMapping, RestoreTarget, SeedMode, SigningIdentity, SlotId, TransferId,
+    TrashIntent,
 };
 #[cfg(test)]
 use crate::model::{ArchiveDomain, RestorePath, RestorePolicy};
@@ -870,7 +871,24 @@ where
     /// Deletes expired trash entries. A failure only delays the deletion to the next purge,
     /// so it is logged and never fails the operation that triggered it.
     fn purge_trash(&mut self, operation: &str) {
-        if let Err(error) = self.slots.purge_trash() {
+        let names = match self.packages.list() {
+            Ok(names) => names,
+            Err(error) => {
+                eprintln!("op={operation} step=purge_trash_list error={error}");
+                return;
+            }
+        };
+        // The trash of a package still unenrolling stays until its unenroll completes; a package
+        // whose state cannot be read is kept as well.
+        let unenrolling: Vec<_> = names
+            .into_iter()
+            .filter(|package| {
+                self.packages.load(package).map_or(true, |aggregate| {
+                    aggregate.is_some_and(|aggregate| aggregate.is_unenrolling())
+                })
+            })
+            .collect();
+        if let Err(error) = self.slots.purge_trash(&unenrolling) {
             eprintln!("op={operation} step=purge_trash error={error}");
         }
     }
@@ -1873,9 +1891,36 @@ where
         if observed != ObservedView::Base {
             return Err(context.view_failure(package));
         }
+        let (ce, de) = self
+            .slots
+            .stage_package_trash(package)
+            .map_err(|error| context.map_adapter(package, "stage_unenroll_trash", error))?;
+        let intent = match self
+            .packages
+            .load_trash_intent(package)
+            .map_err(|error| context.map_adapter(package, "load_unenroll_trash", error))?
+        {
+            Some(intent) => intent,
+            None => {
+                let name = self
+                    .slots
+                    .reserve_trash_name(package)
+                    .map_err(|error| context.map_adapter(package, "name_unenroll_trash", error))?;
+                let intent = TrashIntent {
+                    package: package.clone(),
+                    name,
+                    ce,
+                    de,
+                };
+                self.packages
+                    .save_trash_intent(&intent)
+                    .map_err(|error| context.map_adapter(package, "save_unenroll_trash", error))?;
+                intent
+            }
+        };
         self.slots
-            .trash_package(package)
-            .map_err(|error| context.map_adapter(package, "trash_unenroll_slots", error))?;
+            .finalize_package_trash(&intent)
+            .map_err(|error| context.map_adapter(package, "finalize_unenroll_trash", error))?;
         self.packages
             .remove(package)
             .map_err(|error| context.map_adapter(package, "remove_unenroll_state", error))

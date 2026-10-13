@@ -18,7 +18,7 @@ use crate::links::visit_tree_nofollow;
 use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, ArchiveDomain, PackageAggregate,
     PackageBinding, PackageName, RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging,
-    SeedMode, Slot, SlotId, TransferId,
+    SeedMode, Slot, SlotId, TransferId, TrashIntent,
 };
 use crate::ports::{AdapterError, PackageStore, SlotStorage};
 use crate::validation;
@@ -51,6 +51,12 @@ impl FilePackageStore {
         self.packages_root
             .join(package.as_str())
             .join("rebind-intent.json")
+    }
+
+    fn trash_intent_path(&self, package: &PackageName) -> PathBuf {
+        self.packages_root
+            .join(package.as_str())
+            .join("trash-intent.json")
     }
 
     fn account_io_intent_path(&self, package: &PackageName) -> PathBuf {
@@ -191,6 +197,31 @@ impl PackageStore for FilePackageStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(io_error(error)),
         }
+    }
+
+    fn load_trash_intent(
+        &self,
+        package: &PackageName,
+    ) -> Result<Option<TrashIntent>, AdapterError> {
+        let intent = read_optional_json::<TrashIntent>(&self.trash_intent_path(package))?;
+        if let Some(intent) = &intent {
+            intent
+                .validate()
+                .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+            if &intent.package != package {
+                return Err(AdapterError::state_conflict(
+                    "trash intent package does not match its path",
+                ));
+            }
+        }
+        Ok(intent)
+    }
+
+    fn save_trash_intent(&mut self, intent: &TrashIntent) -> Result<(), AdapterError> {
+        intent
+            .validate()
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        write_json_atomic(&self.trash_intent_path(&intent.package), intent)
     }
 
     fn list_account_io_intents(&self) -> Result<Vec<AccountIoIntent>, AdapterError> {
@@ -513,63 +544,29 @@ impl FileSlotStorage {
         }
     }
 
-    /// Moves `<slots root>/<package>` of each domain to `trash/pending/<package>`, which never
-    /// expires, and only once both domains are there renames each to `trash/<now>[-N]/<package>`.
-    /// Every step is a same-filesystem rename made durable before the next, and every step skips
-    /// data that an interrupted earlier attempt already moved, so a retry finishes the move.
-    fn trash_package_at(&self, package: &PackageName, now: u64) -> Result<(), AdapterError> {
+    /// `<now>` or the first `<now>-<N>` under which neither domain's trash holds `package`.
+    fn reserve_trash_name_at(
+        &self,
+        package: &PackageName,
+        now: u64,
+    ) -> Result<String, AdapterError> {
         let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
-        let ce_result = stage_package_in_trash(&self.ce_slots_root, &ce_trash, package, self.owner);
-        let de_result = stage_package_in_trash(&self.de_slots_root, &de_trash, package, self.owner);
-        ce_result.and(de_result)?;
-        let pending = [&ce_trash, &de_trash]
-            .map(|trash| trash.join(layout::TRASH_PENDING_DIR).join(package.as_str()));
-        let mut staged = Vec::with_capacity(2);
-        for (trash, pending) in [(&ce_trash, &pending[0]), (&de_trash, &pending[1])] {
-            if path_exists_nofollow(pending)? {
-                staged.push((trash, pending));
-            }
-        }
-        if staged.is_empty() {
-            return Ok(());
-        }
-        // One timestamp directory for both domains, named so neither already holds the package.
         let mut name = now.to_string();
         let mut suffix = 0_u64;
-        loop {
-            let mut free = true;
-            for (trash, _pending) in &staged {
-                free &= !path_exists_nofollow(&trash.join(&name).join(package.as_str()))?;
-            }
-            if free {
-                break;
-            }
+        while path_exists_nofollow(&ce_trash.join(&name).join(package.as_str()))?
+            || path_exists_nofollow(&de_trash.join(&name).join(package.as_str()))?
+        {
             suffix += 1;
             name = format!("{now}-{suffix}");
         }
-        let mut first_error = None;
-        for (trash, pending) in staged {
-            let result = (|| {
-                let expiring = trash.join(&name);
-                secure_durable_private_directory(&expiring, self.owner)?;
-                rename_path(pending, &expiring.join(package.as_str())).map_err(io_error)?;
-                sync_directory(&trash.join(layout::TRASH_PENDING_DIR))?;
-                sync_directory(&expiring)
-            })();
-            if let Err(error) = result
-                && first_error.is_none()
-            {
-                first_error = Some(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
+        Ok(name)
     }
 
     /// Purges expired timestamp directories of both domains; the first error is returned.
-    fn purge_trash_at(&self, now: u64) -> Result<(), AdapterError> {
+    fn purge_trash_at(&self, now: u64, unenrolling: &[PackageName]) -> Result<(), AdapterError> {
         let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
-        let ce_result = purge_trash_domain(&ce_trash, now, self.owner);
-        let de_result = purge_trash_domain(&de_trash, now, self.owner);
+        let ce_result = purge_trash_domain(&ce_trash, now, unenrolling, self.owner);
+        let de_result = purge_trash_domain(&de_trash, now, unenrolling, self.owner);
         ce_result.and(de_result)
     }
 
@@ -718,12 +715,37 @@ impl SlotStorage for FileSlotStorage {
         ce_result.and(de_result)
     }
 
-    fn trash_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
-        self.trash_package_at(package, unix_seconds_now()?)
+    fn stage_package_trash(&mut self, package: &PackageName) -> Result<(bool, bool), AdapterError> {
+        let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
+        let ce_result = stage_package_in_trash(&self.ce_slots_root, &ce_trash, package, self.owner);
+        let de_result = stage_package_in_trash(&self.de_slots_root, &de_trash, package, self.owner);
+        ce_result.and(de_result)?;
+        let pending = |trash: &Path| {
+            path_exists_nofollow(&trash.join(layout::TRASH_PENDING_DIR).join(package.as_str()))
+        };
+        Ok((pending(&ce_trash)?, pending(&de_trash)?))
     }
 
-    fn purge_trash(&mut self) -> Result<(), AdapterError> {
-        self.purge_trash_at(unix_seconds_now()?)
+    fn reserve_trash_name(&self, package: &PackageName) -> Result<String, AdapterError> {
+        self.reserve_trash_name_at(package, unix_seconds_now()?)
+    }
+
+    fn finalize_package_trash(&mut self, intent: &TrashIntent) -> Result<(), AdapterError> {
+        let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
+        let mut first_error = None;
+        for (trash, recorded) in [(&ce_trash, intent.ce), (&de_trash, intent.de)] {
+            if let Err(error) =
+                finalize_package_domain(trash, &intent.package, &intent.name, recorded, self.owner)
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn purge_trash(&mut self, unenrolling: &[PackageName]) -> Result<(), AdapterError> {
+        self.purge_trash_at(unix_seconds_now()?, unenrolling)
     }
 
     fn require_complete_pair(
@@ -2093,17 +2115,49 @@ fn stage_package_in_trash(
         ));
     }
     rename_path(&source, &pending).map_err(io_error)?;
-    sync_directory(slots_root)?;
-    sync_directory(&pending_root)
+    // Destination first: the entry must be durable where it went before it may vanish where it was.
+    sync_directory(&pending_root)?;
+    sync_directory(slots_root)
+}
+
+/// Renames `<trash>/pending/<package>` to `<trash>/<name>/<package>` if it is still pending, then
+/// verifies that the data is there when `recorded` says the domain had any.
+fn finalize_package_domain(
+    trash_root: &Path,
+    package: &PackageName,
+    name: &str,
+    recorded: bool,
+    owner: DirectoryOwner,
+) -> Result<(), AdapterError> {
+    let pending_root = trash_root.join(layout::TRASH_PENDING_DIR);
+    let pending = pending_root.join(package.as_str());
+    let expiring = trash_root.join(name);
+    let target = expiring.join(package.as_str());
+    if path_exists_nofollow(&pending)? {
+        if !recorded || path_exists_nofollow(&target)? {
+            return Err(AdapterError::state_conflict(
+                "pending trash does not match the trash intent",
+            ));
+        }
+        secure_durable_private_directory(&expiring, owner)?;
+        rename_path(&pending, &target).map_err(io_error)?;
+        sync_directory(&expiring)?;
+        sync_directory(&pending_root)?;
+    }
+    if recorded && !real_directory(&target)? {
+        return Err(AdapterError::state_conflict(
+            "trashed slot data is missing from its trash directory",
+        ));
+    }
+    Ok(())
 }
 
 /// The Unix timestamp of a `<seconds>` or `<seconds>-<N>` trash directory name.
 fn trash_entry_timestamp(name: &str) -> Option<u64> {
-    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
-    let (seconds, suffix) = name.split_once('-').unwrap_or((name, "0"));
-    (digits(seconds) && digits(suffix))
-        .then(|| seconds.parse().ok())
-        .flatten()
+    if !validation::is_trash_name(name) {
+        return None;
+    }
+    name.split('-').next()?.parse().ok()
 }
 
 /// Deletes, in each `trash/<seconds>[-N]` directory at least [`layout::TRASH_RETENTION`] old,
@@ -2112,6 +2166,7 @@ fn trash_entry_timestamp(name: &str) -> Option<u64> {
 fn purge_trash_domain(
     trash_root: &Path,
     now: u64,
+    unenrolling: &[PackageName],
     owner: DirectoryOwner,
 ) -> Result<(), AdapterError> {
     if !path_exists_nofollow(trash_root)? {
@@ -2141,7 +2196,7 @@ fn purge_trash_domain(
             if now.saturating_sub(created) < retention {
                 return Ok(());
             }
-            purge_expired_trash_directory(&path)
+            purge_expired_trash_directory(&path, unenrolling)
         });
         if let Err(error) = result
             && first_error.is_none()
@@ -2155,7 +2210,10 @@ fn purge_trash_domain(
     }
 }
 
-fn purge_expired_trash_directory(directory: &Path) -> Result<(), AdapterError> {
+fn purge_expired_trash_directory(
+    directory: &Path,
+    unenrolling: &[PackageName],
+) -> Result<(), AdapterError> {
     let mut kept = false;
     for entry in fs::read_dir(directory).map_err(io_error)? {
         let entry = entry.map_err(io_error)?;
@@ -2169,6 +2227,13 @@ fn purge_expired_trash_directory(directory: &Path) -> Result<(), AdapterError> {
                 "op=purge_trash path={} step=skip_unexpected_entry",
                 path.display()
             );
+            kept = true;
+            continue;
+        }
+        if unenrolling
+            .iter()
+            .any(|package| entry.file_name() == package.as_str())
+        {
             kept = true;
             continue;
         }

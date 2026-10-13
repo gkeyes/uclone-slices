@@ -4,7 +4,7 @@ use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, Capabilities, ObservedView,
     PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection, PackageName,
     RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging, SeedMode, Slot, SlotId,
-    TransferId,
+    TransferId, TrashIntent,
 };
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -65,6 +65,10 @@ pub(crate) trait PackageStore: core::fmt::Debug {
     ) -> Result<Option<RebindIntent>, AdapterError>;
     fn save_rebind_intent(&mut self, intent: &RebindIntent) -> Result<(), AdapterError>;
     fn clear_rebind_intent(&mut self, package: &PackageName) -> Result<(), AdapterError>;
+    /// The unenroll trash intent, removed together with the package by [`Self::remove`].
+    fn load_trash_intent(&self, package: &PackageName)
+    -> Result<Option<TrashIntent>, AdapterError>;
+    fn save_trash_intent(&mut self, intent: &TrashIntent) -> Result<(), AdapterError>;
     fn list_account_io_intents(&self) -> Result<Vec<AccountIoIntent>, AdapterError>;
     fn load_account_io_intent(
         &self,
@@ -104,11 +108,20 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
 
     fn discard(&mut self, package: &PackageName, slot: &SlotId) -> Result<(), AdapterError>;
 
-    /// Moves every slot of `package`, in both domains, into the trash instead of deleting it.
-    fn trash_package(&mut self, package: &PackageName) -> Result<(), AdapterError>;
+    /// Moves every slot of `package` in both domains to a pending trash area that never expires
+    /// and returns whether (CE, DE) data is pending afterwards. Data already pending is kept.
+    fn stage_package_trash(&mut self, package: &PackageName) -> Result<(bool, bool), AdapterError>;
 
-    /// Permanently deletes trash entries older than the retention period.
-    fn purge_trash(&mut self) -> Result<(), AdapterError>;
+    /// A trash directory name, from the current time, under which neither domain holds `package`.
+    fn reserve_trash_name(&self, package: &PackageName) -> Result<String, AdapterError>;
+
+    /// Moves the pending data of `intent.package` to the expiring `intent.name` directory and
+    /// verifies that every domain the intent recorded is there; idempotent.
+    fn finalize_package_trash(&mut self, intent: &TrashIntent) -> Result<(), AdapterError>;
+
+    /// Permanently deletes trash entries older than the retention period, except the data of
+    /// the `unenrolling` packages.
+    fn purge_trash(&mut self, unenrolling: &[PackageName]) -> Result<(), AdapterError>;
 
     fn require_complete_pair(
         &self,

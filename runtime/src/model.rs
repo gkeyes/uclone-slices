@@ -263,6 +263,28 @@ impl PackageBinding {
     }
 }
 
+/// The trash directory an unenroll finalizes into, chosen once after every domain is pending and
+/// kept until the package state is removed, so every retry reuses it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrashIntent {
+    pub package: PackageName,
+    /// The `<unix seconds>[-N]` directory below each domain's trash.
+    pub name: String,
+    /// Whether the CE domain had slot data pending when the name was chosen.
+    pub ce: bool,
+    /// Whether the DE domain had slot data pending when the name was chosen.
+    pub de: bool,
+}
+
+impl TrashIntent {
+    pub fn validate(&self) -> Result<(), ModelError> {
+        validation::is_trash_name(&self.name)
+            .then_some(())
+            .ok_or(ModelError::InvalidState)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RebindIntent {
     pub package: PackageName,

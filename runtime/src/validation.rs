@@ -24,6 +24,13 @@ pub fn is_package_name(value: &str) -> bool {
         })
 }
 
+/// A trash directory name: `<unix seconds>` or `<unix seconds>-<N>`, both ASCII digits.
+pub fn is_trash_name(value: &str) -> bool {
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let (seconds, suffix) = value.split_once('-').unwrap_or((value, "0"));
+    digits(seconds) && digits(suffix)
+}
+
 /// A slot directory name: `base` or `slot-<digits>`.
 pub fn is_slot_id(value: &str) -> bool {
     value == "base"
