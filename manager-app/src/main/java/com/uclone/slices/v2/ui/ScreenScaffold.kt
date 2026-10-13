@@ -326,7 +326,6 @@ internal fun TopBarIconButton(
             .clickable(
                 enabled = enabled,
                 role = Role.Button,
-                onClickLabel = contentDescription,
                 interactionSource = null,
                 indication = null,
                 onClick = onClick,
