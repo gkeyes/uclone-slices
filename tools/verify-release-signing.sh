@@ -13,8 +13,12 @@ fail() {
 [ -x "$APKSIGNER" ] || fail "apksigner not executable: $APKSIGNER"
 [ -f "$1" ] || fail "APK not found: $1"
 
+if ! VERIFY_OUTPUT=$("$APKSIGNER" verify --verbose --print-certs "$1" 2>&1); then
+    printf '%s\n' "$VERIFY_OUTPUT" >&2
+    fail "apksigner rejected $1"
+fi
 DIGESTS=$(
-    "$APKSIGNER" verify --verbose --print-certs "$1" |
+    printf '%s\n' "$VERIFY_OUTPUT" |
         sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' |
         tr '[:upper:]' '[:lower:]'
 )
