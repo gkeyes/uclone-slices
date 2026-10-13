@@ -141,7 +141,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0")
-    implementation("top.yukonga.miuix.kmp:miuix-android:0.7.2")
+    // iOS 27 Liquid Glass: Kyant0/AndroidLiquidGlass backdrop (AGSL refraction, as in
+    // DualSimRouting) and its capsule shapes. 1.0.6 is the newest release built for this
+    // toolchain: 2.x needs Kotlin 2.4 metadata and compileSdk 37.
+    implementation("io.github.kyant0:backdrop:1.0.6")
+    implementation("io.github.kyant0:shapes:1.2.0")
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
