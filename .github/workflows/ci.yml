@@ -122,7 +122,12 @@ jobs:
       - name: Verify fixed Manager signature
         if: env.HAS_RELEASE_SIGNING == 'true'
         run: |
-          test "$(unzip -p manager-app/build/outputs/apk/release/manager-app-release.apk lib/arm64-v8a/libuclone_archive.so | sha256sum | awk '{print $1}')" = "$(cat outputs/helpers/uclone_archive.sha256)"
+          PACKAGED_HELPER_SHA256=$(unzip -p manager-app/build/outputs/apk/release/manager-app-release.apk lib/arm64-v8a/libuclone_archive.so | sha256sum | awk '{print $1}')
+          EXPECTED_HELPER_SHA256=$(cat outputs/helpers/uclone_archive.sha256)
+          if [ "$PACKAGED_HELPER_SHA256" != "$EXPECTED_HELPER_SHA256" ]; then
+            echo "::error::Packaged archive helper $PACKAGED_HELPER_SHA256 does not match $EXPECTED_HELPER_SHA256"
+            exit 1
+          fi
           APKSIGNER="$ANDROID_HOME/build-tools/37.0.0/apksigner" \
             ./tools/verify-release-signing.sh \
             manager-app/build/outputs/apk/release/manager-app-release.apk
