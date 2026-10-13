@@ -33,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +61,7 @@ import com.uclone.slices.v2.ui.Motion
 import com.uclone.slices.v2.ui.SectionHeader
 import com.uclone.slices.v2.ui.SlicesMenuItem
 import com.uclone.slices.v2.ui.SlicesPasswordField
+import com.uclone.slices.v2.ui.SlicesLinearProgress
 import com.uclone.slices.v2.ui.SlicesPopupMenu
 import com.uclone.slices.v2.ui.SlicesSpinner
 import com.uclone.slices.v2.ui.SlotsUiState
@@ -80,13 +80,12 @@ import com.uclone.slices.v2.ui.container
 import com.uclone.slices.v2.ui.rememberReducedMotion
 import com.uclone.slices.v2.ui.rememberStaggerPlay
 import com.uclone.slices.v2.ui.rollingNumber
-import com.uclone.slices.v2.ui.sharedAxisX
+import com.uclone.slices.v2.ui.iosPush
 import com.uclone.slices.v2.ui.spaceDisplayName
 import com.uclone.slices.v2.ui.staggerIn
 import java.text.DateFormat
 import java.util.Date
-import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
-import top.yukonga.miuix.kmp.basic.Text
+import androidx.compose.material3.Text
 
 /** Running job, or one of the pages. Running is drawn on its own full-page state. */
 private const val RunningPane = -1
@@ -107,14 +106,12 @@ internal fun BackupRestoreScreen(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let { onIntent(BackupUiIntent.SelectRestore(it)) } }
     val reduced = rememberReducedMotion()
-    val pageOffset = with(LocalDensity.current) { Motion.PageOffset.roundToPx() }
 
     AnimatedContent(
         targetState = if (state.running) RunningPane else state.page.ordinal,
         transitionSpec = {
-            sharedAxisX(
+            iosPush(
                 forward = targetState == RunningPane || targetState >= initialState,
-                offsetPx = pageOffset,
                 reduced = reduced,
             )
         },
@@ -761,7 +758,7 @@ private fun RunningContent(state: BackupRestoreUiState, contentPadding: PaddingV
                     animationSpec = if (reduced) snap() else Motion.spatial(),
                     label = "backup-progress",
                 )
-                LinearProgressIndicator(
+                SlicesLinearProgress(
                     progress = shown,
                     modifier = Modifier
                         .fillMaxWidth()

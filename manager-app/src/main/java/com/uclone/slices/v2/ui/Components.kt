@@ -11,11 +11,13 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -26,6 +28,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -36,8 +39,11 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -50,22 +56,29 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -73,29 +86,39 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
+import com.kyant.backdrop.backdrops.LayerBackdrop
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.shapes.Capsule
 import com.uclone.slices.v2.R
+import com.uclone.slices.v2.ui.liquid.LiquidButton
+import com.uclone.slices.v2.ui.liquid.LiquidToggle
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.Switch
-import top.yukonga.miuix.kmp.basic.Text
 
 // ---------- Screen scaffold ----------
 
 /**
- * Screen scaffold shared by every page: edge-to-edge page colour, a 30sp large title that scrolls
- * with the content and collapses into a 17sp title bar whose hairline fades in. The collapse
- * fraction is read in the draw phase only, so scrolling never recomposes the bar.
+ * Screen scaffold shared by every page, iOS 27 style: the list scrolls under a floating title bar
+ * made of Liquid Glass buttons. A 34sp large title scrolls with the content; once it has scrolled
+ * away the 17sp title and a soft edge fade in behind the buttons. The collapse fraction is read in
+ * the draw phase only, so scrolling never recomposes the bar.
+ *
+ * The list is recorded into [backdrop] and the bar's glass refracts it. Pass a [backdrop] the
+ * screen also provides to its own sheets (see [LocalGlassBackdrop]); page content always draws
+ * solid surfaces.
  */
 @Composable
 internal fun ManagerScreen(
@@ -109,6 +132,7 @@ internal fun ManagerScreen(
     actions: (@Composable RowScope.() -> Unit)? = null,
     listState: LazyListState = rememberLazyListState(),
     itemSpacing: Dp = Space.sm,
+    backdrop: LayerBackdrop = rememberGlassBackdrop(),
     content: LazyListScope.() -> Unit,
 ) {
     val threshold = with(LocalDensity.current) { 44.dp.toPx() }
@@ -120,7 +144,8 @@ internal fun ManagerScreen(
         }
     }
     val layoutDirection = LocalLayoutDirection.current
-    Column(
+    val top = contentPadding.calculateTopPadding()
+    Box(
         modifier
             .fillMaxSize()
             .background(Surfaces.page)
@@ -129,30 +154,34 @@ internal fun ManagerScreen(
                 end = contentPadding.calculateEndPadding(layoutDirection),
             ),
     ) {
+        CompositionLocalProvider(LocalGlassBackdrop provides null) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .glassSource(backdrop),
+                contentPadding = PaddingValues(
+                    top = top + Space.topBar,
+                    bottom = contentPadding.calculateBottomPadding() + Space.xl,
+                ),
+                verticalArrangement = Arrangement.spacedBy(itemSpacing),
+            ) {
+                item(key = "screen_large_title", contentType = "large_title") {
+                    LargeTitle(title, accessory = titleAccessory)
+                }
+                content()
+            }
+        }
         TopBar(
             title = title,
             collapse = collapse,
-            modifier = Modifier.padding(top = contentPadding.calculateTopPadding()),
+            statusBarHeight = top,
+            backdrop = backdrop,
             onBack = onBack,
             backEnabled = backEnabled,
             backDescription = backDescription,
             actions = actions,
         )
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            contentPadding = PaddingValues(
-                bottom = contentPadding.calculateBottomPadding() + Space.xl,
-            ),
-            verticalArrangement = Arrangement.spacedBy(itemSpacing),
-        ) {
-            item(key = "screen_large_title", contentType = "large_title") {
-                LargeTitle(title, accessory = titleAccessory)
-            }
-            content()
-        }
     }
 }
 
@@ -160,55 +189,69 @@ internal fun ManagerScreen(
 private fun TopBar(
     title: String,
     collapse: () -> Float,
-    modifier: Modifier,
+    statusBarHeight: Dp,
+    backdrop: LayerBackdrop,
     onBack: (() -> Unit)?,
     backEnabled: Boolean,
     backDescription: String,
     actions: (@Composable RowScope.() -> Unit)?,
 ) {
-    val hairline = Surfaces.hairline
-    Column(modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(Space.touchTarget + Space.xxs)
-                .padding(horizontal = Space.xxs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (onBack != null) {
-                TopBarIconButton(
-                    painter = painterResource(R.drawable.ic_arrow_back),
-                    contentDescription = backDescription,
-                    onClick = onBack,
-                    enabled = backEnabled,
-                    tint = TextPrimary,
-                )
-            }
-            Text(
-                text = title,
-                color = TextPrimary,
-                fontSize = TypeScale.collapsedTitle,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = if (onBack == null) Space.md else Space.xxs, end = Space.xs)
-                    .graphicsLayer {
-                        val c = collapse()
-                        alpha = c
-                        translationY = (1f - c) * 6.dp.toPx()
-                    },
-            )
-            actions?.invoke(this)
-        }
+    val page = Surfaces.page
+    Box(Modifier.fillMaxWidth()) {
+        // Scroll-edge effect: the page colour fades in behind the bar as the large title leaves.
         Box(
             Modifier
-                .fillMaxWidth()
-                .height(0.5.dp)
+                .matchParentSize()
                 .graphicsLayer { alpha = collapse() }
-                .background(hairline),
+                .background(
+                    Brush.verticalGradient(
+                        0f to page,
+                        .55f to page.copy(alpha = .86f),
+                        1f to page.copy(alpha = 0f),
+                    ),
+                ),
         )
+        CompositionLocalProvider(LocalGlassBackdrop provides backdrop) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = statusBarHeight)
+                    .height(Space.topBar)
+                    .padding(horizontal = Space.md - Space.xxs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (onBack != null) {
+                    GlassBackButton(
+                        onClick = onBack,
+                        enabled = backEnabled,
+                        contentDescription = backDescription,
+                    )
+                }
+                Text(
+                    text = title,
+                    color = TextPrimary,
+                    fontSize = TypeScale.collapsedTitle,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = if (onBack != null) TextAlign.Center else TextAlign.Start,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = Space.xs)
+                        .graphicsLayer {
+                            val c = collapse()
+                            alpha = c
+                            translationY = (1f - c) * 6.dp.toPx()
+                        },
+                )
+                if (actions != null) {
+                    GlassButtonGroup(content = actions)
+                } else if (onBack != null) {
+                    // Keeps the centred title centred against the back button.
+                    Spacer(Modifier.size(Space.glassButton))
+                }
+            }
+        }
     }
 }
 
@@ -226,7 +269,8 @@ private fun LargeTitle(text: String, accessory: (@Composable RowScope.() -> Unit
             color = TextPrimary,
             fontSize = TypeScale.largeTitle,
             fontWeight = FontWeight.Bold,
-            lineHeight = 36.sp,
+            lineHeight = 41.sp,
+            letterSpacing = (-0.4).sp,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
@@ -235,7 +279,96 @@ private fun LargeTitle(text: String, accessory: (@Composable RowScope.() -> Unit
     }
 }
 
-/** 48dp icon action used in the title bar; round press feedback. */
+/**
+ * Round 44dp Liquid Glass button carrying one glyph, as in iOS 27 navigation bars. It refracts
+ * [LocalGlassBackdrop]; without a live backdrop it draws the same circle as solid glass.
+ */
+@Composable
+internal fun GlassIconButton(
+    painter: Painter,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    tint: Color = TextPrimary,
+    iconRotation: Float = 0f,
+) {
+    val backdrop = LocalGlassBackdrop.current
+    val fade by animateFloatAsState(if (enabled) 1f else TextAlpha.Disabled, Motion.effects(), label = "glass-icon-alpha")
+    val glyph: @Composable () -> Unit = {
+        Icon(
+            painter = painter,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier
+                .size(22.dp)
+                .graphicsLayer { rotationZ = iconRotation },
+        )
+    }
+    if (backdrop != null && glassLive()) {
+        LiquidButton(
+            onClick = onClick,
+            backdrop = backdrop,
+            modifier = modifier
+                .graphicsLayer { alpha = fade }
+                .size(Space.glassButton),
+            enabled = enabled,
+            surfaceColor = Surfaces.glassTint,
+            buttonHeight = Space.glassButton,
+            horizontalPadding = 0.dp,
+        ) { glyph() }
+    } else {
+        Box(
+            modifier = modifier
+                .graphicsLayer { alpha = fade }
+                .size(Space.glassButton)
+                .pressFeedback(enabled, Motion.PressedScale, CircleShape)
+                .solidGlass(CircleShape)
+                .clickable(
+                    enabled = enabled,
+                    role = Role.Button,
+                    interactionSource = null,
+                    indication = null,
+                    onClick = onClick,
+                ),
+            contentAlignment = Alignment.Center,
+        ) { glyph() }
+    }
+}
+
+/** iOS 27 back button: a round glass button showing only the chevron (‹, mirrored in RTL). */
+@Composable
+private fun GlassBackButton(onClick: () -> Unit, enabled: Boolean, contentDescription: String) {
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    GlassIconButton(
+        painter = painterResource(R.drawable.ic_chevron_right),
+        contentDescription = contentDescription,
+        onClick = onClick,
+        enabled = enabled,
+        iconRotation = if (rtl) 0f else 180f,
+    )
+}
+
+/**
+ * Title-bar actions grouped on one glass capsule, as iOS 27 groups bar buttons. The items inside
+ * are plain glyph buttons ([TopBarIconButton]) or flat [AppButton]s; only the capsule refracts.
+ */
+@Composable
+private fun GlassButtonGroup(content: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier
+            .height(Space.glassButton)
+            .glassSurface(RoundedCornerShape(Radius.chip), fallbackElevation = 0.dp)
+            .padding(horizontal = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CompositionLocalProvider(LocalGlassBackdrop provides null) {
+            content()
+        }
+    }
+}
+
+/** 44dp glyph action inside the title bar's glass group; round press feedback. */
 @Composable
 internal fun TopBarIconButton(
     painter: Painter,
@@ -246,7 +379,7 @@ internal fun TopBarIconButton(
 ) {
     Box(
         modifier = Modifier
-            .size(Space.touchTarget)
+            .size(Space.glassButton)
             .pressFeedback(enabled, Motion.PressedScale, CircleShape)
             .clip(CircleShape)
             .clickable(
@@ -315,7 +448,7 @@ internal fun Footnote(text: String, modifier: Modifier = Modifier, color: Color 
 }
 
 /**
- * Grouped card: no dividers; rows are separated by their 56dp height and insets. Placed on the
+ * Grouped card (radius 26): no dividers; rows are separated by their 52dp height and insets. Placed on the
  * page gutter; size changes use the spatial spring.
  */
 @Composable
@@ -376,19 +509,22 @@ internal fun InsetHairline(start: Dp = Space.md) {
     )
 }
 
-/** Leading icon on a 36dp tonal plate (radius 10). */
+/**
+ * Leading icon: an iOS Settings-style tile (30dp, radius 8) with a white glyph on the tone's
+ * gradient; the gradient cross-fades when the tone changes.
+ */
 @Composable
-internal fun IconPlate(painter: Painter, tone: Tone = Tone.Info, size: Dp = 36.dp) {
-    val container by animateColorAsState(tone.container(), Motion.effects(), label = "plate-bg")
-    val content by animateColorAsState(tone.onContainer(), Motion.effects(), label = "plate-fg")
+internal fun IconPlate(painter: Painter, tone: Tone = Tone.Info, size: Dp = 30.dp) {
+    val start by animateColorAsState(tone.tileGradient()[0], Motion.effects(), label = "plate-start")
+    val end by animateColorAsState(tone.tileGradient()[1], Motion.effects(), label = "plate-end")
     Box(
         modifier = Modifier
             .size(size)
-            .clip(RoundedCornerShape(Radius.small))
-            .background(container),
+            .clip(RoundedCornerShape(Radius.icon * (size / 30.dp)))
+            .background(Brush.linearGradient(listOf(start, end))),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(painter = painter, contentDescription = null, tint = content, modifier = Modifier.size(size * 0.56f))
+        Icon(painter = painter, contentDescription = null, tint = Color.White, modifier = Modifier.size(size * 0.6f))
     }
 }
 
@@ -492,8 +628,9 @@ internal fun ListRow(
 }
 
 /**
- * Switch row: the whole row toggles. The Miuix switch is display-only here (null callback), so
- * the row emits the toggleOn / toggleOff haptic exactly once.
+ * Switch row: the whole row toggles and emits the toggleOn / toggleOff haptic exactly once. The
+ * switch is the iOS 27 [GlassSwitch]; it owns its own drag and tap, so a touch on the switch is
+ * not seen a second time by the row.
  */
 @Composable
 internal fun SwitchRow(
@@ -507,6 +644,12 @@ internal fun SwitchRow(
     horizontalPadding: Dp = Space.md,
 ) {
     val haptic = LocalHapticFeedback.current
+    val toggle: (Boolean) -> Unit = {
+        haptic.performHapticFeedback(
+            if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff,
+        )
+        onCheckedChange(it)
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -517,12 +660,8 @@ internal fun SwitchRow(
                 role = Role.Switch,
                 interactionSource = null,
                 indication = null,
-            ) {
-                haptic.performHapticFeedback(
-                    if (it) HapticFeedbackType.ToggleOn else HapticFeedbackType.ToggleOff,
-                )
-                onCheckedChange(it)
-            }
+                onValueChange = toggle,
+            )
             .graphicsLayer { alpha = if (enabled) 1f else TextAlpha.Disabled / TextAlpha.Primary }
             .heightIn(min = Space.rowMinHeight)
             .padding(horizontal = horizontalPadding, vertical = 10.dp),
@@ -530,16 +669,119 @@ internal fun SwitchRow(
         horizontalArrangement = Arrangement.spacedBy(Space.sm),
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(text = title, color = titleColor, fontSize = TypeScale.body, lineHeight = 21.sp)
+            Text(text = title, color = titleColor, fontSize = TypeScale.body, lineHeight = 22.sp)
             if (!summary.isNullOrBlank()) {
                 AnimatedContent(summary, transitionSpec = fadeThrough(), label = "switch-summary") {
-                    Text(text = it, color = TextSecondary, fontSize = TypeScale.subhead, lineHeight = 19.sp)
+                    Text(text = it, color = TextSecondary, fontSize = TypeScale.subhead, lineHeight = 20.sp)
                 }
             }
         }
-        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+        GlassSwitch(checked = checked, enabled = enabled, onCheckedChange = toggle)
     }
 }
+
+/**
+ * iOS 27 switch, 62x28dp: the vendored Kyant [LiquidToggle], whose thumb turns into a refracting
+ * lens while it is dragged. The thumb samples a small capsule layer holding only the surface
+ * colour, so it never reads the page it is drawn in. Disabled, with reduced motion, or without
+ * live glass it draws the same flat capsule statically and leaves input to the row.
+ * Its own semantics are cleared: the row is the single accessible switch.
+ */
+@Composable
+internal fun GlassSwitch(checked: Boolean, enabled: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    val reduced = rememberReducedMotion()
+    if (!enabled || reduced || !glassLive()) {
+        FlatSwitch(checked = checked, reduced = reduced)
+        return
+    }
+    val surface = Surfaces.card
+    val local = rememberLayerBackdrop {
+        drawRect(surface)
+        drawContent()
+    }
+    val current by rememberUpdatedState(checked)
+    val onChange by rememberUpdatedState(onCheckedChange)
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    // The toggle's drag inspector leaves pointer changes unconsumed; consume them here, after the
+    // toggle has seen them, so the row's own toggleable does not act on the same tap again.
+    // The toggle only listens on its thumb, so a tap that lands on the exposed track is turned
+    // into a toggle here; thumb taps and drags stay with the toggle itself.
+    Box(
+        Modifier
+            .size(SwitchWidth, SwitchHeight)
+            .clearAndSetSemantics { }
+            .pointerInput(rtl) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    val travel = if (current) SwitchWidth - SwitchThumbWidth - 4.dp else 0.dp
+                    val thumbStart = (2.dp + travel).toPx()
+                    val thumbEnd = thumbStart + SwitchThumbWidth.toPx()
+                    val x = if (rtl) size.width - down.position.x else down.position.x
+                    val onTrack = x < thumbStart || x > thumbEnd
+                    val slop = viewConfiguration.touchSlop
+                    var tap = true
+                    do {
+                        val event = awaitPointerEvent()
+                        event.changes.forEach { change ->
+                            if ((change.position - down.position).getDistance() > slop) tap = false
+                            change.consume()
+                        }
+                    } while (event.changes.any { it.pressed })
+                    if (tap && onTrack) onChange(!current)
+                }
+            },
+    ) {
+        Box(
+            Modifier
+                .matchParentSize()
+                .clip(Capsule())
+                .layerBackdrop(local)
+                .background(surface),
+        )
+        LiquidToggle(
+            selected = { current },
+            onSelect = { if (it != current) onChange(it) },
+            backdrop = local,
+        )
+    }
+}
+
+/** Static iOS switch: green or quiet track, white thumb with a soft shadow. */
+@Composable
+private fun FlatSwitch(checked: Boolean, reduced: Boolean) {
+    val track by animateColorAsState(
+        if (checked) SystemGreen else Surfaces.switchOff,
+        if (reduced) snap() else Motion.effects(),
+        label = "switch-track",
+    )
+    val knob by animateFloatAsState(
+        if (checked) 1f else 0f,
+        if (reduced) snap() else Motion.spatial(),
+        label = "switch-knob",
+    )
+    val travel = with(LocalDensity.current) { (SwitchWidth - SwitchThumbWidth - 4.dp).toPx() }
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    Box(
+        Modifier
+            .size(SwitchWidth, SwitchHeight)
+            .clip(Capsule())
+            .background(track),
+    ) {
+        Box(
+            Modifier
+                .padding(2.dp)
+                .size(SwitchThumbWidth, SwitchHeight - 4.dp)
+                .graphicsLayer { translationX = knob * travel * if (rtl) -1f else 1f }
+                .shadow(2.dp, Capsule())
+                .background(Color.White, Capsule()),
+        )
+    }
+}
+
+private val SwitchWidth = 62.dp
+private val SwitchHeight = 28.dp
+private val SwitchThumbWidth = 38.dp
 
 // ---------- Status ----------
 
@@ -720,9 +962,11 @@ private fun StateLayout(
 internal enum class ButtonKind { Primary, Secondary, Destructive, Text }
 
 /**
- * Buttons per spec: primary filled 52dp / r16, secondary tonal (accent 12%), destructive (danger
- * tone), text. All get press feedback; primary and destructive confirm with a haptic, text
- * buttons that cancel a dangerous action can opt into the reject haptic.
+ * Capsule buttons: primary filled, secondary tonal (accent 12%), destructive (danger), text. Drawn
+ * over glass chrome (sheets, alerts) they are Liquid Glass buttons refracting the page, tinted by
+ * kind; on page content they are solid capsules. All get press feedback; primary and destructive
+ * confirm with a haptic, text buttons that cancel a dangerous action can opt into the reject
+ * haptic.
  */
 @Composable
 internal fun AppButton(
@@ -737,6 +981,9 @@ internal fun AppButton(
     rejectHaptic: Boolean = false,
 ) {
     val haptic = LocalHapticFeedback.current
+    val live = glassLive()
+    val backdrop = LocalGlassBackdrop.current
+    val glassBackdrop = if (live && kind != ButtonKind.Text) backdrop else null
     val shape = RoundedCornerShape(Radius.button)
     val targetContainer = when (kind) {
         ButtonKind.Primary -> Accent
@@ -747,16 +994,66 @@ internal fun AppButton(
     val targetContent = when (kind) {
         ButtonKind.Primary -> OnAccent
         ButtonKind.Secondary, ButtonKind.Text -> Accent
-        ButtonKind.Destructive -> Tone.Danger.onContainer()
+        ButtonKind.Destructive -> if (glassBackdrop != null) Color.White else Tone.Danger.onContainer()
     }
     val container by animateColorAsState(targetContainer, Motion.effects(), label = "button-bg")
     val content by animateColorAsState(targetContent, Motion.effects(), label = "button-fg")
     val fade by animateFloatAsState(if (enabled) 1f else TextAlpha.Disabled, Motion.effects(), label = "button-alpha")
+    val click: () -> Unit = {
+        when {
+            kind == ButtonKind.Primary || kind == ButtonKind.Destructive ->
+                haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+            rejectHaptic -> haptic.performHapticFeedback(HapticFeedbackType.Reject)
+        }
+        onClick()
+    }
+    val label: @Composable RowScope.() -> Unit = {
+        if (loading || icon != null) {
+            AnimatedContent(
+                targetState = loading,
+                transitionSpec = fadeThrough(),
+                label = "button-leading",
+            ) { busy ->
+                if (busy) {
+                    SlicesSpinner(size = 18.dp, color = content)
+                } else if (icon != null) {
+                    Icon(painter = icon, contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
+                }
+            }
+        }
+        Text(
+            text = text,
+            color = content,
+            fontSize = if (compact) TypeScale.subhead else TypeScale.body,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+    if (glassBackdrop != null) {
+        LiquidButton(
+            onClick = click,
+            backdrop = glassBackdrop,
+            modifier = modifier.graphicsLayer { alpha = fade },
+            enabled = enabled && !loading,
+            tint = when (kind) {
+                ButtonKind.Primary -> Accent
+                ButtonKind.Destructive -> SystemRed
+                ButtonKind.Secondary, ButtonKind.Text -> Color.Unspecified
+            },
+            surfaceColor = if (kind == ButtonKind.Secondary) Surfaces.glassTint else Color.Unspecified,
+            buttonHeight = if (compact) CompactButtonHeight else ButtonHeight,
+            horizontalPadding = if (compact) Space.sm else Space.lg,
+            content = label,
+        )
+        return
+    }
     Box(
         modifier = modifier
             .pressFeedback(enabled && !loading, Motion.PressedScale, shape)
             .graphicsLayer { alpha = fade }
-            .heightIn(min = if (compact) 40.dp else 52.dp)
+            .heightIn(min = if (compact) CompactButtonHeight else ButtonHeight)
             .clip(shape)
             .background(container)
             .clickable(
@@ -764,51 +1061,26 @@ internal fun AppButton(
                 role = Role.Button,
                 interactionSource = null,
                 indication = null,
-            ) {
-                when {
-                    kind == ButtonKind.Primary || kind == ButtonKind.Destructive ->
-                        haptic.performHapticFeedback(HapticFeedbackType.Confirm)
-                    rejectHaptic -> haptic.performHapticFeedback(HapticFeedbackType.Reject)
-                }
-                onClick()
-            }
+                onClick = click,
+            )
             .padding(
                 horizontal = if (compact) Space.sm else Space.lg,
-                vertical = if (compact) Space.xs else Space.sm,
+                vertical = if (compact) 6.dp else Space.sm,
             ),
         contentAlignment = Alignment.Center,
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Space.xs),
-        ) {
-            if (loading || icon != null) {
-                AnimatedContent(
-                    targetState = loading,
-                    transitionSpec = fadeThrough(),
-                    label = "button-leading",
-                ) { busy ->
-                    if (busy) {
-                        SlicesSpinner(size = 18.dp, color = content)
-                    } else if (icon != null) {
-                        Icon(painter = icon, contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
-                    }
-                }
-            }
-            Text(
-                text = text,
-                color = content,
-                fontSize = if (compact) TypeScale.subhead else TypeScale.body,
-                fontWeight = FontWeight.SemiBold,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+            content = label,
+        )
     }
 }
 
-/** Cancel + confirm pair used at the bottom of every confirmation sheet. */
+private val ButtonHeight = 50.dp
+private val CompactButtonHeight = 36.dp
+
+/** Cancel + confirm capsule pair used at the bottom of every confirmation sheet. */
 @Composable
 internal fun SheetActions(
     cancelText: String,
@@ -843,7 +1115,10 @@ internal fun SheetActions(
 
 // ---------- Segmented ----------
 
-/** Segmented control: the selected indicator slides on the spatial spring; a tick on change. */
+/**
+ * iOS segmented control: a capsule track whose raised capsule indicator slides on the spatial
+ * spring; a tick on change.
+ */
 @Composable
 internal fun Segmented(
     options: List<String>,
@@ -855,12 +1130,11 @@ internal fun Segmented(
     val haptic = LocalHapticFeedback.current
     val reduced = rememberReducedMotion()
     val shape = RoundedCornerShape(Radius.control)
-    val indicator = Surfaces.raised
-    val indicatorBorder = Surfaces.hairline
+    val indicator = if (isSystemInDarkTheme()) Color(0xFF636366) else Color.White
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
-            .height(Space.touchTarget)
+            .height(40.dp)
             .clip(shape)
             .background(Surfaces.control)
             .padding(3.dp),
@@ -872,14 +1146,14 @@ internal fun Segmented(
         LaunchedEffect(selected, reduced) {
             if (reduced) position.snapTo(selected.toFloat()) else position.animateTo(selected.toFloat(), Motion.spatial())
         }
+        val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
         Box(
             Modifier
                 .width(segment)
                 .fillMaxHeight()
-                .offset { IntOffset((position.value * segmentPx).roundToInt(), 0) }
-                .clip(RoundedCornerShape(Radius.control - 3.dp))
-                .background(indicator)
-                .border(0.5.dp, indicatorBorder, RoundedCornerShape(Radius.control - 3.dp)),
+                .offset { IntOffset((position.value * segmentPx * if (rtl) -1f else 1f).roundToInt(), 0) }
+                .shadow(3.dp, shape)
+                .background(indicator, shape),
         )
         Row(Modifier.fillMaxSize()) {
             options.forEachIndexed { index, label ->
@@ -914,7 +1188,7 @@ internal fun Segmented(
                         text = label,
                         color = color,
                         fontSize = TypeScale.subhead,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = if (index == selected) FontWeight.SemiBold else FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(horizontal = Space.xs),
@@ -940,10 +1214,12 @@ private class RetainedHolder<T : Any> {
 }
 
 /**
- * Bottom sheet used for every confirmation, choice and form: top radius 28, 36x4 drag handle,
- * drag-down or scrim tap to dismiss, predictive back. Enters with spring(0.9, 380); exits in
- * 220ms on the accelerating curve. It stays composed while the exit runs; callbacks only fire
- * while it is visible. [dismissible] = false keeps it open against back, drag and scrim.
+ * Bottom sheet used for every confirmation, choice and form: an iOS 27 floating Liquid Glass panel
+ * inset 12dp from the screen edges, radius 34, 36x5 drag handle, drag-down or scrim tap to
+ * dismiss, predictive back. Enters with spring(0.9, 380); exits in 220ms on the accelerating
+ * curve. It stays composed while the exit runs; callbacks only fire while it is visible.
+ * [dismissible] = false keeps it open against back, drag and scrim. The panel refracts
+ * [LocalGlassBackdrop]; buttons inside it are glass capsules.
  */
 @Composable
 internal fun BottomSheet(
@@ -991,7 +1267,8 @@ internal fun BottomSheet(
     val drag = rememberDraggableState { delta ->
         if (height > 0) scope.launch { hidden.snapTo((hidden.value + delta / height).coerceIn(0f, 1f)) }
     }
-    val sheetShape = RoundedCornerShape(topStart = Radius.sheet, topEnd = Radius.sheet)
+    val inset = with(LocalDensity.current) { Space.panelInset.toPx() }
+    val sheetShape = RoundedCornerShape(Radius.sheet)
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
@@ -1007,14 +1284,26 @@ internal fun BottomSheet(
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth()
+                .windowInsetsPadding(
+                    WindowInsets.ime
+                        .union(WindowInsets.navigationBars)
+                        .union(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
+                )
+                .padding(all = Space.panelInset)
                 .widthIn(max = 640.dp)
-                .windowInsetsPadding(WindowInsets.ime)
+                .fillMaxWidth()
                 .onSizeChanged { height = it.height }
-                .graphicsLayer { translationY = hidden.value * (if (height > 0) height.toFloat() else 2000f) }
-                .clip(sheetShape)
-                .background(Surfaces.raised)
-                .border(0.5.dp, Surfaces.hairline, sheetShape)
+                .graphicsLayer {
+                    translationY = hidden.value * (if (height > 0) height + inset * 3f else 2000f)
+                }
+                .glassSurface(
+                    sheetShape,
+                    tint = Surfaces.panelTint,
+                    blurRadius = 24.dp,
+                    refraction = 24.dp,
+                    depth = 40.dp,
+                    fallbackElevation = 16.dp,
+                )
                 .draggable(
                     state = drag,
                     orientation = Orientation.Vertical,
@@ -1027,18 +1316,17 @@ internal fun BottomSheet(
                         }
                     },
                 )
-                .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(start = Space.md, end = Space.md, bottom = Space.md),
         ) {
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .padding(top = 10.dp, bottom = Space.sm),
+                    .padding(top = 8.dp, bottom = Space.sm),
                 contentAlignment = Alignment.Center,
             ) {
                 Box(
                     Modifier
-                        .size(width = 36.dp, height = 4.dp)
+                        .size(width = 36.dp, height = 5.dp)
                         .clip(CircleShape)
                         .background(TextTertiary),
                 )
@@ -1053,7 +1341,7 @@ internal fun BottomSheet(
                         text = title,
                         color = TextPrimary,
                         fontSize = TypeScale.title,
-                        fontWeight = FontWeight.SemiBold,
+                        fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = Space.xxs),
                     )
                 }
@@ -1074,8 +1362,9 @@ internal fun BottomSheet(
 }
 
 /**
- * Centred dialog, reserved for the short blocking "operation in progress" state: scale 0.94 -> 1
- * plus fade on spring(0.9, 500); exits on the 220ms accelerating curve. Not dismissible.
+ * Centred iOS 27 glass alert, reserved for the short blocking "operation in progress" state:
+ * scale 0.94 -> 1 plus fade on spring(0.9, 500); exits on the 220ms accelerating curve. Not
+ * dismissible. Any buttons placed in it are glass capsules.
  */
 @Composable
 internal fun CenterDialog(
@@ -1101,24 +1390,34 @@ internal fun CenterDialog(
     Box(
         Modifier
             .fillMaxSize()
-            .graphicsLayer { alpha = shown.value.coerceIn(0f, 1f) }
-            .background(scrim)
             .clickable(interactionSource = null, indication = null) { },
         contentAlignment = Alignment.Center,
     ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { alpha = shown.value.coerceIn(0f, 1f) }
+                .background(scrim),
+        )
         Column(
             modifier = Modifier
                 .padding(horizontal = Space.xl)
-                .widthIn(max = 360.dp)
+                .widthIn(max = 340.dp)
                 .fillMaxWidth()
                 .graphicsLayer {
                     val s = Motion.DialogInitialScale + (1f - Motion.DialogInitialScale) * shown.value
                     scaleX = s
                     scaleY = s
+                    alpha = shown.value.coerceIn(0f, 1f)
                 }
-                .clip(RoundedCornerShape(Radius.sheet))
-                .background(Surfaces.raised)
-                .border(0.5.dp, Surfaces.hairline, RoundedCornerShape(Radius.sheet))
+                .glassSurface(
+                    RoundedCornerShape(Radius.sheet),
+                    tint = Surfaces.panelTint,
+                    blurRadius = 24.dp,
+                    refraction = 24.dp,
+                    depth = 40.dp,
+                    fallbackElevation = 16.dp,
+                )
                 .padding(Space.lg),
             horizontalAlignment = Alignment.CenterHorizontally,
             content = content,
@@ -1127,6 +1426,7 @@ internal fun CenterDialog(
 }
 
 // ---------- Misc ----------
+
 
 /** App icon on a squircle-ish clip; the letter tile cross-fades to the bitmap once decoded. */
 @Composable

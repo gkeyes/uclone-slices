@@ -282,7 +282,7 @@ internal fun ReorderRow(
     ) {
         AppIcon(app.label, app.icon, 36.dp)
         Column(Modifier.weight(1f)) {
-            top.yukonga.miuix.kmp.basic.Text(
+            androidx.compose.material3.Text(
                 text = app.label,
                 color = TextPrimary,
                 fontSize = TypeScale.body,
@@ -290,7 +290,7 @@ internal fun ReorderRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            top.yukonga.miuix.kmp.basic.Text(
+            androidx.compose.material3.Text(
                 text = stringResource(R.string.independent_space_count, accountCount),
                 color = TextSecondary,
                 fontSize = TypeScale.caption,
@@ -313,7 +313,7 @@ internal fun ReorderRow(
                 .semantics { contentDescription = handleText },
             contentAlignment = Alignment.Center,
         ) {
-            top.yukonga.miuix.kmp.basic.Icon(
+            androidx.compose.material3.Icon(
                 painter = painterResource(R.drawable.ic_drag_handle),
                 contentDescription = null,
                 tint = if (dragging) Accent else TextTertiary,

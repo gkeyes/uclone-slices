@@ -14,11 +14,12 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /*
- * Cross-app design system v2 tokens (hard values shared by the family of apps). Screens and
- * components read spacing, shape, type, colour and motion only from here.
+ * Cross-app design system v2 tokens, iOS 27 edition (the DualSimRouting design draft): grouped
+ * surfaces, 26dp cards, ~52dp rows, capsule controls and Liquid Glass chrome. Screens and
+ * components read spacing, shape, type, colour and motion only from here. One fixed look that
+ * follows the system light / dark setting; there is no theme or style picker.
  */
 
 /** 4dp grid. */
@@ -40,36 +41,61 @@ internal object Space {
 
     /** Section headers and footnotes align with the text inside cards: gutter + card padding. */
     val textInset = gutter + cardPadding
-    val rowMinHeight = 56.dp
+
+    /** iOS grouped row height. */
+    val rowMinHeight = 52.dp
     val touchTarget = 48.dp
+
+    /** Round glass buttons of the title bar (back, actions). */
+    val glassButton = 44.dp
+
+    /** Floating title bar height under the status bar. */
+    val topBar = 56.dp
+
+    /** Inset of floating glass panels (sheets) from the screen edges. */
+    val panelInset = 12.dp
 }
 
+/** iOS 27 geometry: 26dp cards, capsule buttons and controls, 34dp floating glass panels. */
 internal object Radius {
-    val card = 24.dp
+    val card = 26.dp
     val row = 16.dp
-    val button = 16.dp
 
-    /** Input fields and segmented controls. */
-    val control = 14.dp
+    /** Buttons are capsules. */
+    val button = 999.dp
 
-    /** Small elements: icon plates, inner tiles. */
+    /** Search field and segmented control: capsules. */
+    val control = 999.dp
+
+    /** Text inputs: a rounded field like the iOS grouped text field. */
+    val field = 14.dp
+
+    /** Small elements: app-icon fallbacks, inner tiles. */
     val small = 10.dp
+
+    /** Settings-style icon tiles. */
+    val icon = 8.dp
     val chip = 999.dp
-    val sheet = 28.dp
+
+    /** Floating glass sheets and alerts. */
+    val sheet = 34.dp
+
+    /** Glass menus. */
+    val menu = 22.dp
 }
 
 internal object TypeScale {
-    val largeTitle = 30.sp
+    val largeTitle = 34.sp
     val collapsedTitle = 17.sp
     val title = 20.sp
     val headline = 17.sp
-    val body = 16.sp
-    val subhead = 14.sp
+    val body = 17.sp
+    val subhead = 15.sp
     val sectionHeader = 13.sp
     val caption = 12.sp
 }
 
-/** Text emphasis is opacity on onSurface, never a hard-coded grey. */
+/** Text emphasis is opacity on the label colour, never a hard-coded grey. */
 internal object TextAlpha {
     const val Primary = .92f
     const val Secondary = .62f
@@ -77,33 +103,48 @@ internal object TextAlpha {
     const val Disabled = .38f
 }
 
+/** iOS label colour: black on light, white on dark. */
+internal val Label: Color
+    @Composable @ReadOnlyComposable
+    get() = if (isSystemInDarkTheme()) Color.White else Color.Black
+
 internal val TextPrimary: Color
     @Composable @ReadOnlyComposable
-    get() = MiuixTheme.colorScheme.onSurface.copy(alpha = TextAlpha.Primary)
+    get() = Label.copy(alpha = TextAlpha.Primary)
 internal val TextSecondary: Color
     @Composable @ReadOnlyComposable
-    get() = MiuixTheme.colorScheme.onSurface.copy(alpha = TextAlpha.Secondary)
+    get() = Label.copy(alpha = TextAlpha.Secondary)
 internal val TextTertiary: Color
     @Composable @ReadOnlyComposable
-    get() = MiuixTheme.colorScheme.onSurface.copy(alpha = TextAlpha.Tertiary)
+    get() = Label.copy(alpha = TextAlpha.Tertiary)
 internal val TextDisabled: Color
     @Composable @ReadOnlyComposable
-    get() = MiuixTheme.colorScheme.onSurface.copy(alpha = TextAlpha.Disabled)
+    get() = Label.copy(alpha = TextAlpha.Disabled)
 
 /** Tabular figures: every number that ticks or is compared across rows. */
 internal val Tabular = TextStyle(fontFeatureSettings = "tnum")
 
-/** Neutral surfaces from the spec; Miuix's own scheme is mapped onto the same values. */
+/** iOS grouped surfaces (systemGroupedBackground / secondarySystemGroupedBackground). */
 internal object Surfaces {
     val page: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF000000) else Color(0xFFF5F6F8)
+        get() = if (isSystemInDarkTheme()) Color(0xFF000000) else Color(0xFFF2F2F7)
     val card: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF16171A) else Color(0xFFFFFFFF)
+        get() = if (isSystemInDarkTheme()) Color(0xFF1C1C1E) else Color(0xFFFFFFFF)
     val raised: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF212226) else Color(0xFFFFFFFF)
+        get() = if (isSystemInDarkTheme()) Color(0xFF2C2C2E) else Color(0xFFFFFFFF)
+
+    /** Tint drawn over refracted glass (title-bar buttons, button groups). */
+    val glassTint: Color
+        @Composable @ReadOnlyComposable
+        get() = if (isSystemInDarkTheme()) Color(0xFF1C1C1E).copy(alpha = .42f) else Color.White.copy(alpha = .42f)
+
+    /** Heavier tint for floating panels (sheets, alerts, notices) so their text stays readable. */
+    val panelTint: Color
+        @Composable @ReadOnlyComposable
+        get() = if (isSystemInDarkTheme()) Color(0xFF242428).copy(alpha = .72f) else Color.White.copy(alpha = .70f)
     val hairline: Color
         @Composable @ReadOnlyComposable
         get() = if (isSystemInDarkTheme()) Color.White.copy(alpha = .10f) else Color.Black.copy(alpha = .08f)
@@ -116,19 +157,34 @@ internal object Surfaces {
         @Composable @ReadOnlyComposable
         get() = if (isSystemInDarkTheme()) Color.White.copy(alpha = .06f) else Color.Black.copy(alpha = .06f)
 
-    /** Fill of inputs and segmented tracks: a tint that differs from both page and card. */
+    /** Quiet fill of inputs, search field, segmented track and unselected chips (tertiarySystemFill). */
     val control: Color
         @Composable @ReadOnlyComposable
-        get() = MiuixTheme.colorScheme.onSurface.copy(alpha = .06f)
+        get() = if (isSystemInDarkTheme()) Color(0xFF767680).copy(alpha = .24f) else Color(0xFF767680).copy(alpha = .12f)
+
+    /** Off track of a switch. */
+    val switchOff: Color
+        @Composable @ReadOnlyComposable
+        get() = if (isSystemInDarkTheme()) Color(0xFF39393D) else Color(0xFFE9E9EA)
 }
 
-/** Accent: dynamic (Android 12+) or the spec fallback, as resolved by [SlicesTheme]. */
+/** Accent: the iOS system blue (one fixed look; no wallpaper colour). */
 internal val Accent: Color
     @Composable @ReadOnlyComposable
-    get() = MiuixTheme.colorScheme.primary
+    get() = if (isSystemInDarkTheme()) Color(0xFF0A84FF) else Color(0xFF007AFF)
 internal val OnAccent: Color
     @Composable @ReadOnlyComposable
-    get() = MiuixTheme.colorScheme.onPrimary
+    get() = Color.White
+
+/** iOS system green for switches. */
+internal val SystemGreen: Color
+    @Composable @ReadOnlyComposable
+    get() = if (isSystemInDarkTheme()) Color(0xFF30D158) else Color(0xFF34C759)
+
+/** iOS system red for destructive glass buttons. */
+internal val SystemRed: Color
+    @Composable @ReadOnlyComposable
+    get() = if (isSystemInDarkTheme()) Color(0xFFFF453A) else Color(0xFFFF3B30)
 
 internal object Motion {
     /** Spatial: position and size. */
@@ -158,7 +214,7 @@ internal object Motion {
     const val DialogInitialScale = .94f
 }
 
-/** Semantic tones for chips, banners and icon plates. */
+/** Semantic tones for chips, banners and icon tiles. */
 internal enum class Tone { Neutral, Info, Success, Warning, Danger }
 
 @Composable
@@ -185,4 +241,13 @@ internal fun Tone.onContainer(): Color {
         Tone.Info -> if (dark) Color(0xFFA9C5FA) else Color(0xFF1A57C9)
         Tone.Neutral -> if (dark) Color(0xFFC4C8CF) else Color(0xFF4A4F57)
     }
+}
+
+/** Gradient of a settings-style icon tile (top-left light to bottom-right deep), as in iOS Settings. */
+internal fun Tone.tileGradient(): List<Color> = when (this) {
+    Tone.Success -> listOf(Color(0xFF4CD964), Color(0xFF1E9E45))
+    Tone.Warning -> listOf(Color(0xFFFFB340), Color(0xFFF28500))
+    Tone.Danger -> listOf(Color(0xFFFF6B6B), Color(0xFFE5372B))
+    Tone.Info -> listOf(Color(0xFF4A9BFF), Color(0xFF0A5BD6))
+    Tone.Neutral -> listOf(Color(0xFFA1A1A6), Color(0xFF6C6C70))
 }

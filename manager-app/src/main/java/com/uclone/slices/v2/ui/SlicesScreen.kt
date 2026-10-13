@@ -8,18 +8,24 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -33,8 +39,6 @@ import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.backup.BackupRestoreScreen
 import com.uclone.slices.v2.backup.BackupRestoreUiState
 import com.uclone.slices.v2.backup.BackupUiIntent
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
 
 @Composable
 internal fun SlicesScreen(
@@ -53,24 +57,33 @@ internal fun SlicesScreen(
         onIntent(UiIntent.NavigateBack)
     }
     val reduced = rememberReducedMotion()
-    val pageOffset = with(LocalDensity.current) { Motion.PageOffset.roundToPx() }
+    // The pages are recorded here; the sheets, the operation alert and the top notice drawn above
+    // them refract that recording. They sit outside it, so glass never samples itself.
+    val pageBackdrop = rememberGlassBackdrop()
+    val systemBars = WindowInsets.systemBars.union(WindowInsets.displayCutout).asPaddingValues()
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            containerColor = Surfaces.page,
-        ) { contentPadding ->
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Surfaces.page),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .glassSource(pageBackdrop),
+        ) {
             AnimatedContent(
                 targetState = state.destination,
                 transitionSpec = {
-                    sharedAxisX(
+                    iosPush(
                         forward = targetState.depth() >= initialState.depth(),
-                        offsetPx = pageOffset,
                         reduced = reduced,
                     )
                 },
                 label = "manager_destination",
                 modifier = Modifier.fillMaxSize(),
             ) { destination ->
+                val contentPadding = systemBars
                 when (destination) {
                     ManagerDestination.Spaces -> AppListScreen(
                         state = state,
@@ -116,80 +129,96 @@ internal fun SlicesScreen(
             }
         }
 
-        val configuring = rememberRetained(state.pendingConfigurationPackage)
-        if (configuring != null) {
-            ConfigureAppSheet(
-                visible = state.pendingConfigurationPackage != null,
-                packageName = configuring,
-                installedApp = state.installedApps.firstOrNull { it.packageName == configuring },
-                onConfirm = { onIntent(UiIntent.ConfirmConfigureApp) },
-                onDismiss = { onIntent(UiIntent.DismissConfigureApp) },
+        CompositionLocalProvider(LocalGlassBackdrop provides pageBackdrop) {
+            RootOverlays(
+                state = state,
+                onIntent = onIntent,
+                noticeModifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .zIndex(10f),
             )
         }
+    }
+}
 
-        val recovery = rememberRetained(state.registrationRecovery)
-        if (recovery != null) {
-            RegistrationRecoverySheet(
-                visible = state.registrationRecovery != null,
-                recovery = recovery,
-                onConfirmationChanged = {
-                    onIntent(UiIntent.RegistrationRecoveryConfirmationChanged(it))
-                },
-                onConfirm = { onIntent(UiIntent.ConfirmRegistrationRecovery) },
-                onDismiss = { onIntent(UiIntent.DismissRegistrationRecovery) },
-            )
-        }
-
-        val rename = rememberRetained(state.pendingRename)
-        if (rename != null) {
-            RenameSpaceSheet(
-                visible = state.pendingRename != null,
-                rename = rename,
-                onNameChanged = { onIntent(UiIntent.RenameSlotNameChanged(it)) },
-                onConfirm = { onIntent(UiIntent.ConfirmRenameSlot) },
-                onDismiss = { onIntent(UiIntent.DismissRenameSlot) },
-            )
-        }
-
-        val deletion = rememberRetained(state.pendingDelete)
-        if (deletion != null) {
-            DeleteSpaceSheet(
-                visible = state.pendingDelete != null,
-                deletion = deletion,
-                onConfirm = { onIntent(UiIntent.ConfirmDeleteSlot) },
-                onDismiss = { onIntent(UiIntent.DismissDeleteSlot) },
-            )
-        }
-
-        val unenrollment = rememberRetained(state.pendingUnenroll)
-        if (unenrollment != null) {
-            UnenrollAppSheet(
-                visible = state.pendingUnenroll != null,
-                unenrollment = unenrollment,
-                onConfirmationChanged = {
-                    onIntent(UiIntent.UnenrollConfirmationChanged(it))
-                },
-                onConfirm = { onIntent(UiIntent.ConfirmUnenrollApp) },
-                onDismiss = { onIntent(UiIntent.DismissUnenrollApp) },
-            )
-        }
-
-        val blocking = rememberRetained(state.operation.takeIf { it.blocksScreen })
-        if (blocking != null) {
-            OperationDialog(
-                visible = state.operation.blocksScreen,
-                operation = blocking,
-            )
-        }
-
-        TopNoticeHost(
-            posted = state.posted,
-            onIntent = onIntent,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .zIndex(10f),
+/** Sheets, the blocking operation alert and the top notice, drawn above the recorded pages. */
+@Composable
+private fun RootOverlays(
+    state: SlotsUiState,
+    onIntent: (UiIntent) -> Unit,
+    noticeModifier: Modifier,
+) {
+    val configuring = rememberRetained(state.pendingConfigurationPackage)
+    if (configuring != null) {
+        ConfigureAppSheet(
+            visible = state.pendingConfigurationPackage != null,
+            packageName = configuring,
+            installedApp = state.installedApps.firstOrNull { it.packageName == configuring },
+            onConfirm = { onIntent(UiIntent.ConfirmConfigureApp) },
+            onDismiss = { onIntent(UiIntent.DismissConfigureApp) },
         )
     }
+
+    val recovery = rememberRetained(state.registrationRecovery)
+    if (recovery != null) {
+        RegistrationRecoverySheet(
+            visible = state.registrationRecovery != null,
+            recovery = recovery,
+            onConfirmationChanged = {
+                onIntent(UiIntent.RegistrationRecoveryConfirmationChanged(it))
+            },
+            onConfirm = { onIntent(UiIntent.ConfirmRegistrationRecovery) },
+            onDismiss = { onIntent(UiIntent.DismissRegistrationRecovery) },
+        )
+    }
+
+    val rename = rememberRetained(state.pendingRename)
+    if (rename != null) {
+        RenameSpaceSheet(
+            visible = state.pendingRename != null,
+            rename = rename,
+            onNameChanged = { onIntent(UiIntent.RenameSlotNameChanged(it)) },
+            onConfirm = { onIntent(UiIntent.ConfirmRenameSlot) },
+            onDismiss = { onIntent(UiIntent.DismissRenameSlot) },
+        )
+    }
+
+    val deletion = rememberRetained(state.pendingDelete)
+    if (deletion != null) {
+        DeleteSpaceSheet(
+            visible = state.pendingDelete != null,
+            deletion = deletion,
+            onConfirm = { onIntent(UiIntent.ConfirmDeleteSlot) },
+            onDismiss = { onIntent(UiIntent.DismissDeleteSlot) },
+        )
+    }
+
+    val unenrollment = rememberRetained(state.pendingUnenroll)
+    if (unenrollment != null) {
+        UnenrollAppSheet(
+            visible = state.pendingUnenroll != null,
+            unenrollment = unenrollment,
+            onConfirmationChanged = {
+                onIntent(UiIntent.UnenrollConfirmationChanged(it))
+            },
+            onConfirm = { onIntent(UiIntent.ConfirmUnenrollApp) },
+            onDismiss = { onIntent(UiIntent.DismissUnenrollApp) },
+        )
+    }
+
+    val blocking = rememberRetained(state.operation.takeIf { it.blocksScreen })
+    if (blocking != null) {
+        OperationDialog(
+            visible = state.operation.blocksScreen,
+            operation = blocking,
+        )
+    }
+
+    TopNoticeHost(
+        posted = state.posted,
+        onIntent = onIntent,
+        modifier = noticeModifier,
+    )
 }
 
 /** Navigation depth: forward pushes slide in from the end, back slides the other way. */
@@ -534,8 +563,8 @@ internal fun RuntimeStatusCard(
             leading = {
                 Box(
                     Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(Radius.small))
+                        .size(30.dp)
+                        .clip(RoundedCornerShape(Radius.icon))
                         .background(Surfaces.card.copy(alpha = .6f)),
                     contentAlignment = Alignment.Center,
                 ) {

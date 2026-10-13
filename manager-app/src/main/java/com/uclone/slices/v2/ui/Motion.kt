@@ -15,7 +15,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -206,10 +205,12 @@ internal fun rollingNumber(): AnimatedContentTransitionScope<String>.() -> Conte
 private fun String.digitsValue(): Long? = filter(Char::isDigit).take(15).toLongOrNull()
 
 /**
- * Shared X-axis page transition: 30dp travel + fade on spring(1.0, 380); [forward] decides the
- * direction, back reverses it. Reduced motion swaps pages without movement.
+ * iOS push / pop for the navigation stack: a pushed page slides in over the full width while the
+ * page underneath drifts a quarter width the other way and dims; popping reverses it with the
+ * leaving page on top. Spring(1.0, 380) as the page spring. Reduced motion swaps pages without
+ * movement.
  */
-internal fun sharedAxisX(forward: Boolean, offsetPx: Int, reduced: Boolean): ContentTransform {
+internal fun iosPush(forward: Boolean, reduced: Boolean): ContentTransform {
     if (reduced) {
         return ContentTransform(
             targetContentEnter = EnterTransition.None,
@@ -217,12 +218,23 @@ internal fun sharedAxisX(forward: Boolean, offsetPx: Int, reduced: Boolean): Con
             sizeTransform = null,
         )
     }
-    val direction = if (forward) 1 else -1
-    return (
-        slideInHorizontally(Motion.pageOffset) { offsetPx * direction } +
-            fadeIn(Motion.page())
-        ) togetherWith (
-        slideOutHorizontally(Motion.pageOffset) { -offsetPx * direction } +
-            fadeOut(Motion.page())
+    return if (forward) {
+        ContentTransform(
+            targetContentEnter = slideInHorizontally(Motion.pageOffset) { it },
+            initialContentExit = slideOutHorizontally(Motion.pageOffset) { -it / 4 } +
+                fadeOut(Motion.page(), targetAlpha = PushUnderlayAlpha),
+            targetContentZIndex = 1f,
+            sizeTransform = null,
         )
+    } else {
+        ContentTransform(
+            targetContentEnter = slideInHorizontally(Motion.pageOffset) { -it / 4 } +
+                fadeIn(Motion.page(), initialAlpha = PushUnderlayAlpha),
+            initialContentExit = slideOutHorizontally(Motion.pageOffset) { it },
+            targetContentZIndex = -1f,
+            sizeTransform = null,
+        )
+    }
 }
+
+private const val PushUnderlayAlpha = .7f

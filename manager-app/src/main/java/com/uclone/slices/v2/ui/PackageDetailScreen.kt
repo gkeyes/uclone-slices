@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -35,7 +36,7 @@ import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.SeedMode
 import com.uclone.slices.v2.runtime.SlotSnapshot
 import kotlinx.coroutines.delay
-import top.yukonga.miuix.kmp.basic.Text
+import androidx.compose.material3.Text
 
 @Composable
 internal fun PackageDetailScreen(
@@ -65,10 +66,13 @@ internal fun PackageDetailScreen(
     val play = rememberStaggerPlay("package_detail")
     val actionsEnabled = !state.busy && operationsEnabled
 
+    // Recorded list behind the title bar; the create sheet below refracts it too.
+    val backdrop = rememberGlassBackdrop()
     Box(Modifier.fillMaxSize()) {
         ManagerScreen(
             title = appLabel,
             contentPadding = contentPadding,
+            backdrop = backdrop,
             onBack = { onIntent(UiIntent.NavigateBack) },
             backEnabled = !state.busy,
             backDescription = stringResource(R.string.back_to_apps),
@@ -170,17 +174,19 @@ internal fun PackageDetailScreen(
             }
         }
 
-        CreateSpaceSheet(
-            visible = createSheetVisible,
-            seed = state.seed,
-            canCloneBase = packageSnapshot.activeSlot == BASE_SLOT_ID,
-            onDismiss = { createSheetVisible = false },
-            onIntent = onIntent,
-            onCreate = { name ->
-                createSheetVisible = false
-                onIntent(UiIntent.CreateSlot(name))
-            },
-        )
+        CompositionLocalProvider(LocalGlassBackdrop provides backdrop) {
+            CreateSpaceSheet(
+                visible = createSheetVisible,
+                seed = state.seed,
+                canCloneBase = packageSnapshot.activeSlot == BASE_SLOT_ID,
+                onDismiss = { createSheetVisible = false },
+                onIntent = onIntent,
+                onCreate = { name ->
+                    createSheetVisible = false
+                    onIntent(UiIntent.CreateSlot(name))
+                },
+            )
+        }
     }
 }
 
