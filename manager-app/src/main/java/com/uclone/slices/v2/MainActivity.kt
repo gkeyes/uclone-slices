@@ -80,33 +80,37 @@ class MainActivity : ComponentActivity() {
                     viewModel.onIntent(UiIntent.AppResumed)
                 }
                 val backupState by backupViewModel.state.collectAsStateWithLifecycle()
-                val dispatchSlotsIntent: (UiIntent) -> Unit = { intent ->
-                    when (intent) {
-                        is UiIntent.OpenBackupRestore -> {
-                            if (intent.packageName == null) {
-                                backupViewModel.onIntent(BackupUiIntent.OpenLanding)
-                            } else {
-                                backupViewModel.onIntent(
-                                    BackupUiIntent.OpenBackup(
-                                        intent.packageName,
-                                        intent.slotId,
-                                    ),
-                                )
+                // Remembered so SlicesScreen gets a stable callback. `state` is a delegated
+                // property of a remembered State, so every read below sees the latest value.
+                val dispatchSlotsIntent: (UiIntent) -> Unit = remember(viewModel, backupViewModel) {
+                    { intent: UiIntent ->
+                        when (intent) {
+                            is UiIntent.OpenBackupRestore -> {
+                                if (intent.packageName == null) {
+                                    backupViewModel.onIntent(BackupUiIntent.OpenLanding)
+                                } else {
+                                    backupViewModel.onIntent(
+                                        BackupUiIntent.OpenBackup(
+                                            intent.packageName,
+                                            intent.slotId,
+                                        ),
+                                    )
+                                }
                             }
+                            UiIntent.NavigateBack -> if (
+                                state.destination == ManagerDestination.BackupRestore
+                            ) {
+                                backupViewModel.onIntent(BackupUiIntent.Leave)
+                            }
+                            else -> Unit
                         }
-                        UiIntent.NavigateBack -> if (
+                        viewModel.onIntent(intent)
+                        if (
+                            intent == UiIntent.NavigateBack &&
                             state.destination == ManagerDestination.BackupRestore
                         ) {
-                            backupViewModel.onIntent(BackupUiIntent.Leave)
+                            viewModel.onIntent(UiIntent.Refresh)
                         }
-                        else -> Unit
-                    }
-                    viewModel.onIntent(intent)
-                    if (
-                        intent == UiIntent.NavigateBack &&
-                        state.destination == ManagerDestination.BackupRestore
-                    ) {
-                        viewModel.onIntent(UiIntent.Refresh)
                     }
                 }
                 SlicesScreen(
