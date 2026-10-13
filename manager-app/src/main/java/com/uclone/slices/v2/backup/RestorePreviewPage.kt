@@ -42,8 +42,8 @@ import com.uclone.slices.v2.ui.TextPrimary
 import com.uclone.slices.v2.ui.TextSecondary
 import com.uclone.slices.v2.ui.Tone
 import com.uclone.slices.v2.ui.TypeScale
+import com.uclone.slices.v2.ui.localizedSpaceName
 import com.uclone.slices.v2.ui.onContainer
-import com.uclone.slices.v2.ui.spaceDisplayName
 import java.text.DateFormat
 import java.util.Date
 
@@ -244,7 +244,7 @@ private fun MappingRow(
             stringResource(R.string.system_original_space)
         } else {
             state.targetPackage?.slots?.firstOrNull { it.id == target.slotId }
-                ?.let(::spaceDisplayName)
+                ?.let { localizedSpaceName(it) }
                 ?: target.slotId
         }
     }
@@ -279,7 +279,7 @@ private fun MappingRow(
                     state.targetPackage?.slots?.filterNot { it.id == BASE_SLOT_ID }?.forEach { slot ->
                         add(
                             SlicesMenuItem(
-                                text = spaceDisplayName(slot),
+                                text = localizedSpaceName(slot),
                                 checked = mapping.target == RestoreTarget.Existing(slot.id),
                                 onClick = {
                                     onIntent(

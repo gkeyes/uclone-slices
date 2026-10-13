@@ -244,7 +244,7 @@ private fun CurrentSpaceCard(
         ) { slot ->
             Column {
                 Text(
-                    text = slot?.let(::spaceDisplayName) ?: stringResource(R.string.unknown_space),
+                    text = slot?.let { localizedSpaceName(it) } ?: stringResource(R.string.unknown_space),
                     color = TextPrimary,
                     fontSize = TypeScale.title,
                     fontWeight = FontWeight.SemiBold,
@@ -288,7 +288,7 @@ private fun OtherSpaceCard(
 ) {
     GroupCard(modifier = modifier) {
         ListRow(
-            title = spaceDisplayName(slot),
+            title = localizedSpaceName(slot),
             summary = if (slot.id == BASE_SLOT_ID) {
                 stringResource(R.string.system_space_description)
             } else {

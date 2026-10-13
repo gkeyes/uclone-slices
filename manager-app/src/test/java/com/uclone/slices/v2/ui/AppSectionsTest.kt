@@ -48,15 +48,19 @@ class AppSectionsTest {
 
     @Test
     fun activeSlotUsesDisplayNameAndFallsBackToId() {
-        assertEquals("Work", activeSlotDisplayName(packageSnapshot("com.alpha")))
+        assertEquals("Work", activeSlotDisplayName(packageSnapshot("com.alpha"), BASE_NAME))
         assertEquals(
-            "系统原始空间",
-            activeSlotDisplayName(packageSnapshot("com.alpha").copy(activeSlot = "base")),
+            BASE_NAME,
+            activeSlotDisplayName(
+                packageSnapshot("com.alpha").copy(activeSlot = "base"),
+                BASE_NAME,
+            ),
         )
         assertEquals(
             "slot-missing",
             activeSlotDisplayName(
                 packageSnapshot("com.alpha").copy(activeSlot = "slot-missing"),
+                BASE_NAME,
             ),
         )
         assertEquals(1, independentSpaceCount(packageSnapshot("com.alpha")))
@@ -78,6 +82,8 @@ class AppSectionsTest {
         )
     }
 }
+
+private const val BASE_NAME = "系统原始空间"
 
 private fun packageSnapshot(packageName: String) = PackageSnapshot(
     packageName = packageName,

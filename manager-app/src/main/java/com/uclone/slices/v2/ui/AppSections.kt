@@ -30,15 +30,16 @@ internal fun buildAppSections(
     )
 }
 
-internal fun activeSlotDisplayName(packageSnapshot: PackageSnapshot): String =
+internal fun activeSlotDisplayName(packageSnapshot: PackageSnapshot, baseName: String): String =
     packageSnapshot.slots
         .firstOrNull { it.id == packageSnapshot.activeSlot }
-        ?.let(::spaceDisplayName)
+        ?.let { spaceDisplayName(it, baseName) }
         ?: packageSnapshot.activeSlot
 
-internal fun spaceDisplayName(slot: SlotSnapshot): String =
+/** [baseName] is the localised name of the system original space (`system_original_space`). */
+internal fun spaceDisplayName(slot: SlotSnapshot, baseName: String): String =
     if (slot.id == BASE_SLOT_ID) {
-        "系统原始空间"
+        baseName
     } else {
         slot.name.takeIf(String::isNotBlank) ?: slot.id
     }

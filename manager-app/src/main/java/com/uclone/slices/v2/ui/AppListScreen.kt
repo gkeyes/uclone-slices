@@ -472,7 +472,7 @@ private fun ManagedAppCard(
                         targetState = stringResource(
                             R.string.configured_app_summary,
                             independentSpaceCount(snapshot),
-                            activeSlotDisplayName(snapshot),
+                            localizedActiveSlotName(snapshot),
                         ),
                         transitionSpec = fadeThrough(),
                         label = "app-summary",
@@ -552,7 +552,7 @@ private fun ManagedAppCard(
                         text = if (slot.id == BASE_SLOT_ID) {
                             stringResource(R.string.original_space)
                         } else {
-                            spaceDisplayName(slot)
+                            localizedSpaceName(slot)
                         },
                         icon = painterResource(
                             if (slot.id == BASE_SLOT_ID) R.drawable.ic_layers else R.drawable.ic_phone,

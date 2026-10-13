@@ -22,6 +22,7 @@ import com.uclone.slices.v2.ui.SlicesScreen
 import com.uclone.slices.v2.ui.SlicesTheme
 import com.uclone.slices.v2.ui.SharedPreferencesManagerUiPreferences
 import com.uclone.slices.v2.ui.SlotsViewModel
+import com.uclone.slices.v2.ui.SpaceLabels
 import com.uclone.slices.v2.ui.ManagerDestination
 import com.uclone.slices.v2.ui.UiIntent
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +47,12 @@ class MainActivity : ComponentActivity() {
                                 Dispatchers.IO,
                                 uiPreferences,
                                 RootRuntimeMaintenance(),
+                                SpaceLabels(
+                                    baseSpaceName = getString(R.string.system_original_space),
+                                    bindingConfirmation = getString(
+                                        R.string.rebind_confirmation_word,
+                                    ),
+                                ),
                             )
                         }
                     }

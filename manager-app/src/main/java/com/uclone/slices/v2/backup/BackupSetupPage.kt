@@ -42,8 +42,9 @@ import com.uclone.slices.v2.ui.TextPrimary
 import com.uclone.slices.v2.ui.TextSecondary
 import com.uclone.slices.v2.ui.Tone
 import com.uclone.slices.v2.ui.TypeScale
+import com.uclone.slices.v2.ui.joinSpaceNames
+import com.uclone.slices.v2.ui.localizedSpaceName
 import com.uclone.slices.v2.ui.rememberReducedMotion
-import com.uclone.slices.v2.ui.spaceDisplayName
 
 @Composable
 internal fun BackupSetupContent(
@@ -85,7 +86,7 @@ internal fun BackupSetupContent(
                             text = if (selectedSlot == null) {
                                 stringResource(R.string.backup_all_accounts)
                             } else {
-                                stringResource(R.string.backup_one_account, spaceDisplayName(selectedSlot))
+                                stringResource(R.string.backup_one_account, localizedSpaceName(selectedSlot))
                             },
                             color = Accent,
                             fontSize = TypeScale.subhead,
@@ -94,7 +95,10 @@ internal fun BackupSetupContent(
                 }
                 if (selectedSlot == null) {
                     Text(
-                        text = snapshot?.slots?.joinToString("、") { spaceDisplayName(it) }.orEmpty(),
+                        text = snapshot?.slots
+                            ?.map { localizedSpaceName(it) }
+                            ?.let { joinSpaceNames(it) }
+                            .orEmpty(),
                         color = TextSecondary,
                         fontSize = TypeScale.caption,
                         lineHeight = 18.sp,

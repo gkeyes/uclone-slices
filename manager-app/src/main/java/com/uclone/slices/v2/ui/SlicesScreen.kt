@@ -305,7 +305,7 @@ private fun UnenrollAppSheet(
     } else {
         stringResource(
             R.string.unenroll_affected_spaces,
-            unenrollment.affectedSpaces.joinToString("、"),
+            joinSpaceNames(unenrollment.affectedSpaces),
         )
     }
     BottomSheet(
@@ -407,12 +407,13 @@ private fun RegistrationRecoverySheet(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val confirmationWord = stringResource(R.string.rebind_confirmation_word)
     val affectedSummary = if (recovery.affectedSpaces.isEmpty()) {
         stringResource(R.string.rebind_no_named_spaces)
     } else {
         stringResource(
             R.string.rebind_affected_spaces,
-            recovery.affectedSpaces.joinToString("、"),
+            joinSpaceNames(recovery.affectedSpaces),
         )
     }
     BottomSheet(
@@ -427,7 +428,7 @@ private fun RegistrationRecoverySheet(
             SlicesInputField(
                 value = recovery.confirmation,
                 onValueChange = { if (visible) onConfirmationChanged(it) },
-                label = stringResource(R.string.rebind_confirmation_label),
+                label = stringResource(R.string.rebind_confirmation_label, confirmationWord),
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
@@ -443,7 +444,7 @@ private fun RegistrationRecoverySheet(
             confirmText = stringResource(R.string.rebind_confirm),
             onCancel = { if (visible) onDismiss() },
             onConfirm = { if (visible) onConfirm() },
-            confirmEnabled = recovery.confirmation == BINDING_CONFIRMATION,
+            confirmEnabled = recovery.confirmation == confirmationWord,
         )
     }
 }

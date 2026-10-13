@@ -36,6 +36,7 @@ internal class SlotsViewModel(
     dispatcher: CoroutineDispatcher,
     private val uiPreferences: ManagerUiPreferences = MemoryManagerUiPreferences(),
     private val maintenance: RuntimeMaintenance = NoRuntimeMaintenance(),
+    private val labels: SpaceLabels,
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableState = MutableStateFlow(
@@ -398,7 +399,7 @@ internal class SlotsViewModel(
         }
         val targetName = selected.slots
             .firstOrNull { it.id == slotId }
-            ?.let(::spaceDisplayName)
+            ?.let { spaceDisplayName(it, labels.baseSpaceName) }
             ?: slotId
         val switched = selected.activeSlot != slotId
         runOperation(
@@ -430,7 +431,7 @@ internal class SlotsViewModel(
             mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
-        val targetName = spaceDisplayName(target)
+        val targetName = spaceDisplayName(target, labels.baseSpaceName)
         val switched = packageSnapshot.activeSlot != slotId
         runOperation(
             OperationUiState.ActivatingSpace(packageName, targetName, switched, slotId),
@@ -594,7 +595,7 @@ internal class SlotsViewModel(
                     appLabel = appLabel,
                     affectedSpaces = packageSnapshot.slots
                         .filterNot { slot -> slot.id == BASE_SLOT_ID }
-                        .map(::spaceDisplayName),
+                        .map { slot -> spaceDisplayName(slot, labels.baseSpaceName) },
                 ),
                 pendingConfigurationPackage = null,
                 pendingRename = null,
@@ -632,7 +633,7 @@ internal class SlotsViewModel(
             return
         }
         val recovery = snapshot.registrationRecovery ?: return
-        if (recovery.confirmation != BINDING_CONFIRMATION) {
+        if (recovery.confirmation != labels.bindingConfirmation) {
             mutableState.update { it.copy(posted = post(UiNotice.InvalidInput)) }
             return
         }
@@ -881,7 +882,7 @@ internal class SlotsViewModel(
                     packageName = snapshot.packageName,
                     affectedSpaces = snapshot.slots
                         .filterNot { slot -> slot.id == BASE_SLOT_ID }
-                        .map(::spaceDisplayName),
+                        .map { slot -> spaceDisplayName(slot, labels.baseSpaceName) },
                 ),
                 pendingConfigurationPackage = null,
             )

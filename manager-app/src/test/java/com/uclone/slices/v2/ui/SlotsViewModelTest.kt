@@ -6,6 +6,7 @@ import com.uclone.slices.v2.apps.InstalledAppsSource
 import com.uclone.slices.v2.apps.OptimizedInstalledAppsSource
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.ErrorCode
+import com.uclone.slices.v2.runtime.NoRuntimeMaintenance
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeCommand
@@ -16,6 +17,7 @@ import com.uclone.slices.v2.runtime.SigningIdentity
 import com.uclone.slices.v2.runtime.SigningKind
 import com.uclone.slices.v2.runtime.SlotSnapshot
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
@@ -36,7 +38,7 @@ class SlotsViewModelTest {
     fun initializationRefreshesRuntimePackagesAndLocalApps() {
         val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
 
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         assertEquals(
             listOf(RuntimeCommand.Probe, RuntimeCommand.ListPackages),
@@ -51,7 +53,7 @@ class SlotsViewModelTest {
     @Test
     fun unconfiguredAppRequiresConfirmationBeforeEnrollment() {
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         val commandsBeforeRequest = client.commands.toList()
 
         viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
@@ -71,7 +73,7 @@ class SlotsViewModelTest {
     fun openingConfiguredAppUsesGetPackage() {
         val snapshot = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.OpenPackage(snapshot.packageName))
 
@@ -83,7 +85,7 @@ class SlotsViewModelTest {
     fun legacyUnboundConfigurationIsAutomaticallyBoundWithoutChangingAccounts() {
         val snapshot = packageSnapshot(bindingState = BindingState.LegacyUnbound)
         val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         assertEquals(
             RuntimeCommand.RebindPackage(snapshot.packageName, testSigning(), false),
@@ -100,7 +102,7 @@ class SlotsViewModelTest {
             bindingState = BindingState.LegacyConfirmationRequired,
         )
         val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.OpenPackage(snapshot.packageName))
 
@@ -119,7 +121,7 @@ class SlotsViewModelTest {
             rebindError = ErrorCode.IdentityMismatch,
         )
 
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         assertEquals(UiNotice.IdentityProtected, viewModel.state.value.notice)
         assertEquals(BindingState.RebindRequired, viewModel.state.value.packages.single().bindingState)
@@ -136,7 +138,7 @@ class SlotsViewModelTest {
             listOf(InstalledApp("com.example.app", "Example"))
         }
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, unsignedSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, unsignedSource, Dispatchers.Unconfined)
         val commands = client.commands.toList()
 
         viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
@@ -150,7 +152,7 @@ class SlotsViewModelTest {
     fun dismissingRegistrationRecoveryDoesNotCallRuntime() {
         val legacy = packageSnapshot(bindingState = BindingState.LegacyConfirmationRequired)
         val client = FakeRuntimeClient(initialPackages = listOf(legacy))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
         val commandsBeforeDismiss = client.commands.toList()
 
@@ -167,7 +169,7 @@ class SlotsViewModelTest {
             bindingState = BindingState.LegacyConfirmationRequired,
         )
         val client = FakeRuntimeClient(initialPackages = listOf(legacy))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
         val commandsBeforeConfirm = client.commands.toList()
 
@@ -192,7 +194,7 @@ class SlotsViewModelTest {
     @Test
     fun navigationReturnsToSpacesWithoutCallingRuntime() {
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         val commandsBeforeNavigation = client.commands.toList()
 
         viewModel.onIntent(UiIntent.OpenAddApps)
@@ -211,7 +213,7 @@ class SlotsViewModelTest {
     @Test
     fun operationArgumentsAreFrozenAtIntentTime() = runBlocking {
         val client = FreezingRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         configureApp(viewModel)
         viewModel.onIntent(UiIntent.SeedChanged(SeedMode.CloneBase))
 
@@ -235,7 +237,7 @@ class SlotsViewModelTest {
     fun activeOrdinarySpaceCanBeRenamedWithoutChangingItsIdentity() {
         val initial = packageSnapshot(active = "slot-1")
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
 
         viewModel.onIntent(UiIntent.RequestRenameSlot("slot-1"))
@@ -259,7 +261,7 @@ class SlotsViewModelTest {
     fun renameRejectsBaseBlankAndUnchangedNamesBeforeRuntime() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
         val commandsBeforeRename = client.commands.toList()
 
@@ -280,7 +282,7 @@ class SlotsViewModelTest {
     fun inactiveOrdinarySpaceCanBeDeletedAfterConfirmation() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
 
         viewModel.onIntent(UiIntent.RequestDeleteSlot("slot-1"))
@@ -303,7 +305,7 @@ class SlotsViewModelTest {
     fun baseAndActiveSpaceNeverOpenTheDeleteConfirmation() {
         val initial = packageSnapshot(active = "slot-1")
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
         val commandsBeforeDelete = client.commands.toList()
 
@@ -319,7 +321,7 @@ class SlotsViewModelTest {
     fun deleteFailureKeepsTheCurrentSnapshotWithoutOfferingRegistrationReset() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
         viewModel.onIntent(UiIntent.RequestDeleteSlot("slot-1"))
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
@@ -335,7 +337,7 @@ class SlotsViewModelTest {
     @Test
     fun blankSlotNameNeverReachesRuntime() {
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         configureApp(viewModel)
         val commandsBeforeCreate = client.commands.toList()
 
@@ -348,7 +350,7 @@ class SlotsViewModelTest {
     @Test
     fun busyDropsASecondOperationInsteadOfQueuingIt() = runBlocking {
         val client = BlockingRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
         viewModel.onIntent(UiIntent.ConfirmConfigureApp)
@@ -373,7 +375,7 @@ class SlotsViewModelTest {
     fun refreshedPackagesSynchronizeSelectedByPackageName() {
         val first = packageSnapshot(active = "base")
         val client = FakeRuntimeClient(initialPackages = listOf(first))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage(first.packageName))
         client.snapshot = first.copy(activeSlot = "slot-1")
 
@@ -387,7 +389,7 @@ class SlotsViewModelTest {
     fun refreshClearsCloneBaseSeedWhenTheActiveSpaceChangedOutsideManager() {
         val first = packageSnapshot(active = "base")
         val client = FakeRuntimeClient(initialPackages = listOf(first))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage(first.packageName))
         viewModel.onIntent(UiIntent.SeedChanged(SeedMode.CloneBase))
         client.snapshot = first.copy(activeSlot = "slot-1")
@@ -409,7 +411,7 @@ class SlotsViewModelTest {
         )
         expected.forEach { (code, notice) ->
             val client = FakeRuntimeClient()
-            val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+            val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
             configureApp(viewModel)
             client.nextReply = RuntimeReply.Error(code)
 
@@ -424,7 +426,7 @@ class SlotsViewModelTest {
     @Test
     fun busyDropsDuplicateRebindConfirmationAndKeepsFrozenPackage() = runBlocking {
         val client = BlockingRebindRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
         viewModel.onIntent(UiIntent.RegistrationRecoveryConfirmationChanged("绑定"))
 
@@ -449,7 +451,7 @@ class SlotsViewModelTest {
             initialPackages = listOf(initial),
             buildId = "0.1.6",
         )
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         assertTrue(viewModel.state.value.runtimeReady)
         assertFalse(viewModel.state.value.runtimeCompatible)
@@ -471,7 +473,7 @@ class SlotsViewModelTest {
     @Test
     fun transportFailureClearsRuntimeReadyAndPreservesTypedNotice() {
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         configureApp(viewModel)
         client.nextReply = RuntimeReply.TransportFailure
 
@@ -484,7 +486,7 @@ class SlotsViewModelTest {
     @Test
     fun repeatedFailurePostsTheNoticeAgain() {
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         client.nextReply = RuntimeReply.TransportFailure
         viewModel.onIntent(UiIntent.Refresh)
         val first = assertNotNull(viewModel.state.value.posted)
@@ -501,7 +503,7 @@ class SlotsViewModelTest {
     @Test
     fun expiredNoticeDoesNotDismissTheOneThatReplacedIt() {
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         client.nextReply = RuntimeReply.TransportFailure
         viewModel.onIntent(UiIntent.Refresh)
         val first = assertNotNull(viewModel.state.value.posted)
@@ -519,7 +521,7 @@ class SlotsViewModelTest {
     @Test
     fun navigationKeepsTheVisibleNotice() {
         val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
         viewModel.onIntent(UiIntent.SetLaunchAfterReboot("com.example.app", true))
         val posted = assertNotNull(viewModel.state.value.posted)
@@ -536,7 +538,7 @@ class SlotsViewModelTest {
     @Test
     fun runtimeDependentIntentDoesNotExecuteWhileDisconnected() {
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         client.nextReply = RuntimeReply.TransportFailure
         viewModel.onIntent(UiIntent.Refresh)
         val commandsBeforeOpen = client.commands.toList()
@@ -551,7 +553,7 @@ class SlotsViewModelTest {
     @Test
     fun configuredAccountExpansionPersistsUntilTheUserChangesIt() {
         val preferences = MemoryManagerUiPreferences()
-        val first = SlotsViewModel(
+        val first = slotsViewModel(
             FakeRuntimeClient(),
             appSource,
             Dispatchers.Unconfined,
@@ -560,7 +562,7 @@ class SlotsViewModelTest {
 
         first.onIntent(UiIntent.SetConfiguredAccountsExpanded(true))
         first.onIntent(UiIntent.Refresh)
-        val reopened = SlotsViewModel(
+        val reopened = slotsViewModel(
             FakeRuntimeClient(),
             appSource,
             Dispatchers.Unconfined,
@@ -570,7 +572,7 @@ class SlotsViewModelTest {
         assertTrue(first.state.value.configuredAccountsExpanded)
         assertTrue(reopened.state.value.configuredAccountsExpanded)
         reopened.onIntent(UiIntent.SetConfiguredAccountsExpanded(false))
-        val reopenedAgain = SlotsViewModel(
+        val reopenedAgain = slotsViewModel(
             FakeRuntimeClient(),
             appSource,
             Dispatchers.Unconfined,
@@ -583,7 +585,7 @@ class SlotsViewModelTest {
     fun quickActivationUpdatesOnlyTheHomeSnapshotAndLaunchesCurrentSpaceToo() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
 
@@ -612,7 +614,7 @@ class SlotsViewModelTest {
     fun quickActivationFailureDoesNotOptimisticallyChangeTheHighlight() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
 
         viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
@@ -626,7 +628,7 @@ class SlotsViewModelTest {
     fun rebootLaunchSettingUsesTheRuntimeSnapshotWithoutLaunchingTheApp() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.SetLaunchAfterReboot("com.example.app", true))
 
@@ -643,7 +645,7 @@ class SlotsViewModelTest {
     fun rebootLaunchSettingFailureKeepsThePreviousSwitchValue() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
 
         viewModel.onIntent(UiIntent.SetLaunchAfterReboot("com.example.app", true))
@@ -655,7 +657,7 @@ class SlotsViewModelTest {
     @Test
     fun quickActivationFreezesArgumentsAndDropsASecondTapWhileBusy() = runBlocking {
         val client = BlockingQuickRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
         client.activationStarted.await()
@@ -675,7 +677,7 @@ class SlotsViewModelTest {
     fun unenrollRequiresConfirmationAndMovesTheAppBackToAvailable() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
 
@@ -712,7 +714,7 @@ class SlotsViewModelTest {
     fun unenrollFailureKeepsTheConfiguredAppAndClearsRuntimeOnTransportFailure() {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
         viewModel.onIntent(UiIntent.UnenrollConfirmationChanged(true))
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
@@ -740,7 +742,7 @@ class SlotsViewModelTest {
             ErrorCode.InsufficientStorage to UiNotice.StorageInsufficient,
         ).forEach { (code, notice) ->
             val client = FakeRuntimeClient()
-            val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+            val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
             configureApp(viewModel)
             client.nextReply = RuntimeReply.Error(code)
 
@@ -754,7 +756,7 @@ class SlotsViewModelTest {
     @Test
     fun openingAConfiguredAppShowsItsPageBeforeTheRuntimeReadReturns() = runBlocking<Unit> {
         val client = BlockingGetPackageRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
         client.getStarted.await()
@@ -770,7 +772,7 @@ class SlotsViewModelTest {
     @Test
     fun quickActivationShowsProgressOnTheTappedSpaceInsteadOfADialog() = runBlocking<Unit> {
         val client = BlockingQuickRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
 
         viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
         client.activationStarted.await()
@@ -783,7 +785,7 @@ class SlotsViewModelTest {
 
     @Test
     fun configuredAccountsStartExpanded() {
-        val viewModel = SlotsViewModel(FakeRuntimeClient(), appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(FakeRuntimeClient(), appSource, Dispatchers.Unconfined)
 
         assertTrue(viewModel.state.value.configuredAccountsExpanded)
     }
@@ -792,7 +794,7 @@ class SlotsViewModelTest {
     fun restartingTheRuntimeReconnectsAndReportsTheOutcome() {
         val client = FakeRuntimeClient()
         val maintenance = FakeRuntimeMaintenance(restarts = true)
-        val viewModel = SlotsViewModel(
+        val viewModel = slotsViewModel(
             client,
             appSource,
             Dispatchers.Unconfined,
@@ -810,7 +812,7 @@ class SlotsViewModelTest {
         assertEquals(UiNotice.RuntimeRestarted, viewModel.state.value.notice)
 
         val failingClient = FakeRuntimeClient()
-        val failing = SlotsViewModel(
+        val failing = slotsViewModel(
             failingClient,
             appSource,
             Dispatchers.Unconfined,
@@ -825,7 +827,7 @@ class SlotsViewModelTest {
     @Test
     fun returningToTheManagerOnlyReconnectsWhenTheRuntimeWasUnavailable() {
         val client = FakeRuntimeClient()
-        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         val commandsWhileHealthy = client.commands.toList()
 
         viewModel.onIntent(UiIntent.AppResumed)
@@ -842,7 +844,7 @@ class SlotsViewModelTest {
 
     @Test
     fun runtimeLogIsLoadedOnRequest() {
-        val viewModel = SlotsViewModel(
+        val viewModel = slotsViewModel(
             FakeRuntimeClient(),
             appSource,
             Dispatchers.Unconfined,
@@ -859,7 +861,7 @@ class SlotsViewModelTest {
     fun catalogLoadedDuringARefreshIsNotOverwrittenByTheManagedAppList() {
         val client = HoldingListRuntimeClient()
         val apps = RefreshingCatalogSource()
-        val viewModel = SlotsViewModel(client, apps, Dispatchers.Unconfined)
+        val viewModel = slotsViewModel(client, apps, Dispatchers.Unconfined)
         // The first catalog read starts a refresh that then waits on ListPackages; whichever side
         // lands first, the Add App page must end with the full catalog, not the managed list.
         apps.duringFirstCatalog = {
@@ -883,7 +885,7 @@ class SlotsViewModelTest {
     @Test
     fun restartingTheRuntimeDropsALogReadOfTheOldProcess() {
         val maintenance = FakeRuntimeMaintenance(restarts = true, log = "old process")
-        val viewModel = SlotsViewModel(
+        val viewModel = slotsViewModel(
             FakeRuntimeClient(),
             appSource,
             Dispatchers.Unconfined,
@@ -905,6 +907,16 @@ class SlotsViewModelTest {
         viewModel.onIntent(UiIntent.ConfirmConfigureApp)
     }
 }
+
+private val TEST_LABELS = SpaceLabels(baseSpaceName = "系统原始空间", bindingConfirmation = "绑定")
+
+private fun slotsViewModel(
+    client: RuntimeClient,
+    apps: InstalledAppsSource,
+    dispatcher: CoroutineDispatcher,
+    preferences: ManagerUiPreferences = MemoryManagerUiPreferences(),
+    maintenance: RuntimeMaintenance = NoRuntimeMaintenance(),
+) = SlotsViewModel(client, apps, dispatcher, preferences, maintenance, TEST_LABELS)
 
 private fun packageSnapshot(
     active: String = "base",

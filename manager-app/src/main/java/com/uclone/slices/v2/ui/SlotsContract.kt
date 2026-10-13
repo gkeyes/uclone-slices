@@ -218,4 +218,12 @@ internal fun ErrorCode.toUiNotice(): UiNotice = when (this) {
 }
 
 internal const val BASE_SLOT_ID = "base"
-internal const val BINDING_CONFIRMATION = "绑定"
+
+/**
+ * Localised words the view model puts into or checks against its state: the name of the system
+ * original space and the word typed to confirm a rebind. The Activity reads them from resources.
+ */
+internal data class SpaceLabels(
+    val baseSpaceName: String,
+    val bindingConfirmation: String,
+)
