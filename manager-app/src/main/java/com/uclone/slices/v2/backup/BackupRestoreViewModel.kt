@@ -1,6 +1,7 @@
 package com.uclone.slices.v2.backup
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -235,63 +236,92 @@ internal class BackupRestoreViewModel(
         }
         takePersistableWritePermission(context, destination)
         coroutineScope.launch(dispatcher) {
-            val snapshot = when (val reply = runtime.execute(RuntimeCommand.GetPackage(packageName))) {
-                is RuntimeReply.Package -> reply.packageSnapshot
-                else -> {
-                    password?.fill('\u0000')
-                    return@launch fail(runtimeCode(reply))
-                }
-            }
-            if (!backupBindingAllows(snapshot.bindingState)) {
-                password?.fill('\u0000')
-                return@launch fail("identity_mismatch")
-            }
-            val app = installedApps.loadAppOptimized(packageName)
-                ?: run {
-                    password?.fill('\u0000')
-                    return@launch fail("not_found")
-                }
-            val signing = app.signingIdentity ?: run {
-                password?.fill('\u0000')
-                return@launch fail("identity_mismatch")
-            }
-            val profile = profileCatalog.resolve(packageName, signing)
-            val slotId = current.slotId
-            if (slotId != null && snapshot.slots.none { it.id == slotId }) {
-                password?.fill('\u0000')
-                return@launch fail("not_found")
-            }
-            val submitted = BackupRestoreJobRegistry.submit(
-                context,
-                BackupRestoreJob.Backup(
-                    packageName = packageName,
-                    scope = slotId?.let { AccountIoScope.Account(it) }
-                        ?: AccountIoScope.AllAccounts,
-                    destinationUri = destination.toString(),
-                    password = password,
-                    signingKind = signing.kind,
-                    signingSha256 = signing.sha256,
-                    appVersion = app.versionName,
-                    appVersionCode = app.versionCode,
-                    activeAccountId = slotId ?: snapshot.activeSlot,
-                    launchAfterReboot = snapshot.launchAfterReboot,
-                    profile = profile,
-                ),
-            )
-            if (!submitted) {
-                password?.fill('\u0000')
-                fail("io_busy")
-            } else {
-                mutableState.update {
-                    it.copy(
-                        password = "",
-                        passwordConfirmation = "",
-                        jobState = BackupJobState.Running(BackupJobKind.Backup),
-                        errorCode = null,
+            // The service releases the grant once it has the job; every exit before that
+            // gives it back here so a refused backup does not hold it forever.
+            var submitted = false
+            try {
+                submitted = submitBackup(current, packageName, destination, password)
+            } finally {
+                if (!submitted) {
+                    releasePersistablePermission(
+                        context,
+                        destination,
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                     )
                 }
             }
         }
+    }
+
+    /** Returns whether the job reached the service, which then owns [password] and the grant. */
+    private suspend fun submitBackup(
+        current: BackupRestoreUiState,
+        packageName: String,
+        destination: Uri,
+        password: CharArray?,
+    ): Boolean {
+        val snapshot = when (val reply = runtime.execute(RuntimeCommand.GetPackage(packageName))) {
+            is RuntimeReply.Package -> reply.packageSnapshot
+            else -> {
+                password?.fill('\u0000')
+                fail(runtimeCode(reply))
+                return false
+            }
+        }
+        if (!backupBindingAllows(snapshot.bindingState)) {
+            password?.fill('\u0000')
+            fail("identity_mismatch")
+            return false
+        }
+        val app = installedApps.loadAppOptimized(packageName)
+            ?: run {
+                password?.fill('\u0000')
+                fail("not_found")
+                return false
+            }
+        val signing = app.signingIdentity ?: run {
+            password?.fill('\u0000')
+            fail("identity_mismatch")
+            return false
+        }
+        val profile = profileCatalog.resolve(packageName, signing)
+        val slotId = current.slotId
+        if (slotId != null && snapshot.slots.none { it.id == slotId }) {
+            password?.fill('\u0000')
+            fail("not_found")
+            return false
+        }
+        val submitted = BackupRestoreJobRegistry.submit(
+            context,
+            BackupRestoreJob.Backup(
+                packageName = packageName,
+                scope = slotId?.let { AccountIoScope.Account(it) }
+                    ?: AccountIoScope.AllAccounts,
+                destinationUri = destination.toString(),
+                password = password,
+                signingKind = signing.kind,
+                signingSha256 = signing.sha256,
+                appVersion = app.versionName,
+                appVersionCode = app.versionCode,
+                activeAccountId = slotId ?: snapshot.activeSlot,
+                launchAfterReboot = snapshot.launchAfterReboot,
+                profile = profile,
+            ),
+        )
+        if (!submitted) {
+            password?.fill('\u0000')
+            fail("io_busy")
+        } else {
+            mutableState.update {
+                it.copy(
+                    password = "",
+                    passwordConfirmation = "",
+                    jobState = BackupJobState.Running(BackupJobKind.Backup),
+                    errorCode = null,
+                )
+            }
+        }
+        return submitted
     }
 
     private fun inspectRestore(source: Uri, password: CharArray?) {
@@ -309,6 +339,7 @@ internal class BackupRestoreViewModel(
         )
         if (!submitted) {
             password?.fill('\u0000')
+            releasePersistablePermission(context, source, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             fail("io_busy")
         } else {
             mutableState.update {
