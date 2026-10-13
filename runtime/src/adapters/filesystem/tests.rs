@@ -42,57 +42,37 @@ fn open_slot_storage(
 }
 
 #[test]
-fn legacy_base_alias_mount_detection_counts_every_stacked_layer() {
+fn mount_detection_counts_every_stacked_layer() {
     let mountinfo = concat!(
-        "41 30 0:35 / /data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
-        "42 41 0:35 /maintenance/token/pkg /data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
-        "43 30 0:35 / /data/misc_de/0/uclone-slices-v2/maintenance-base/token/pkg rw - ext4 /dev/block/data rw\n",
+        "41 30 0:35 / /data/misc_ce/0/uclone-slices-v2/maintenance/token/pkg rw - ext4 /dev/block/data rw\n",
+        "42 41 0:35 /slots/pkg/slot-1 /data/misc_ce/0/uclone-slices-v2/maintenance/token/pkg rw - ext4 /dev/block/data rw\n",
+        "43 30 0:35 / /data/misc_de/0/uclone-slices-v2/maintenance/token/pkg rw - ext4 /dev/block/data rw\n",
     );
     assert_eq!(
         mountinfo_path_layer_count(
             mountinfo,
-            Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance-base/token/pkg"),
+            Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance/token/pkg"),
         ),
         2
     );
     assert_eq!(
         mountinfo_path_layer_count(
             mountinfo,
-            Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance-base/token"),
+            Path::new("/data/misc_ce/0/uclone-slices-v2/maintenance/token"),
         ),
         0
     );
     assert_eq!(
         mountinfo_path_layer_count(
             mountinfo,
-            Path::new("/data/misc_de/0/uclone-slices-v2/maintenance-base/token/pkg"),
+            Path::new("/data/misc_de/0/uclone-slices-v2/maintenance/token/pkg"),
         ),
         1
     );
 }
 
 #[test]
-fn legacy_base_alias_cleanup_unmounts_every_stacked_layer() {
-    let target = Path::new("/legacy-alias");
-    let mut layers = std::collections::VecDeque::from([3, 2, 1, 0]);
-    let mut unmounts = 0;
-
-    drain_mount_layers(
-        target,
-        |_path| Ok(layers.pop_front().unwrap()),
-        |_path| {
-            unmounts += 1;
-            Ok(())
-        },
-    )
-    .unwrap();
-
-    assert_eq!(unmounts, 3);
-    assert!(layers.is_empty());
-}
-
-#[test]
-fn restore_maintenance_does_not_create_a_base_alias() {
+fn restore_maintenance_prepares_both_maintenance_directories() {
     let root = tempfile::tempdir().unwrap();
     let package = PackageName::new("com.example.app").unwrap();
     let canonical_ce_root = root.path().join("canonical-ce");
@@ -112,11 +92,8 @@ fn restore_maintenance_does_not_create_a_base_alias() {
     storage.prepare_maintenance(&package, &token).unwrap();
 
     let (maintenance_ce, maintenance_de) = storage.maintenance_paths(&package, &token).unwrap();
-    let (alias_ce, alias_de) = storage.base_alias_paths(&package, &token).unwrap();
     assert!(maintenance_ce.is_dir());
     assert!(maintenance_de.is_dir());
-    assert!(!alias_ce.exists());
-    assert!(!alias_de.exists());
 }
 
 #[test]

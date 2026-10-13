@@ -456,14 +456,6 @@ impl FileSlotStorage {
         self.area_paths(layout::MAINTENANCE_DIR, &[token.as_str(), package.as_str()])
     }
 
-    fn base_alias_paths(
-        &self,
-        package: &PackageName,
-        token: &AccountIoToken,
-    ) -> Result<(PathBuf, PathBuf), AdapterError> {
-        self.area_paths(layout::BASE_ALIAS_DIR, &[token.as_str(), package.as_str()])
-    }
-
     fn rollback_paths(
         &self,
         package: &PackageName,
@@ -912,12 +904,9 @@ impl SlotStorage for FileSlotStorage {
         package: &PackageName,
         token: &AccountIoToken,
     ) -> Result<(), AdapterError> {
-        let (alias_ce, alias_de) = self.base_alias_paths(package, token)?;
-        unmount_base_aliases(&alias_ce, &alias_de)?;
         for area in [
             layout::TRANSFERS_DIR,
             layout::MAINTENANCE_DIR,
-            layout::BASE_ALIAS_DIR,
             layout::ROLLBACK_DIR,
         ] {
             let (ce, de) = self.area_paths(area, &[token.as_str(), package.as_str()])?;
@@ -1687,65 +1676,6 @@ fn remove_directory_contents_excluding_at(
 }
 
 #[cfg(target_os = "android")]
-fn unmount_base_aliases(alias_ce: &Path, alias_de: &Path) -> Result<(), AdapterError> {
-    let mut first_error = None;
-    for target in [alias_ce, alias_de] {
-        if let Err(error) = unmount_all_path_layers(target)
-            && first_error.is_none()
-        {
-            first_error = Some(error);
-        }
-    }
-    let (ce_remaining, de_remaining) = path_mount_presence(alias_ce, alias_de)?;
-    if ce_remaining || de_remaining {
-        Err(first_error.unwrap_or_else(|| {
-            AdapterError::state_conflict("Base maintenance alias remained mounted")
-        }))
-    } else {
-        first_error.map_or(Ok(()), Err)
-    }
-}
-
-#[cfg(target_os = "android")]
-fn unmount_all_path_layers(target: &Path) -> Result<(), AdapterError> {
-    drain_mount_layers(target, path_mount_layer_count, |path| {
-        let status = Command::new("/system/bin/umount")
-            .arg(path)
-            .status()
-            .map_err(io_error)?;
-        status
-            .success()
-            .then_some(())
-            .ok_or_else(|| AdapterError::new("could not unmount the Base maintenance alias"))
-    })
-}
-
-#[cfg(any(target_os = "android", test))]
-fn drain_mount_layers(
-    target: &Path,
-    mut layer_count: impl FnMut(&Path) -> Result<usize, AdapterError>,
-    mut unmount_once: impl FnMut(&Path) -> Result<(), AdapterError>,
-) -> Result<(), AdapterError> {
-    let mut remaining = layer_count(target)?;
-    while remaining > 0 {
-        unmount_once(target)?;
-        let next = layer_count(target)?;
-        if next >= remaining {
-            return Err(AdapterError::state_conflict(
-                "Base maintenance alias unmount made no progress",
-            ));
-        }
-        remaining = next;
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "android"))]
-fn unmount_base_aliases(_alias_ce: &Path, _alias_de: &Path) -> Result<(), AdapterError> {
-    Ok(())
-}
-
-#[cfg(target_os = "android")]
 fn path_mount_presence(first: &Path, second: &Path) -> Result<(bool, bool), AdapterError> {
     let mountinfo = fs::read_to_string("/proc/self/mountinfo").map_err(io_error)?;
     Ok((
@@ -1765,12 +1695,6 @@ fn mountinfo_path_layer_count(mountinfo: &str, path: &Path) -> usize {
             line.split_once(" - ").is_some() && line.split_whitespace().nth(4) == Some(expected)
         })
         .count()
-}
-
-#[cfg(target_os = "android")]
-fn path_mount_layer_count(path: &Path) -> Result<usize, AdapterError> {
-    let mountinfo = fs::read_to_string("/proc/self/mountinfo").map_err(io_error)?;
-    Ok(mountinfo_path_layer_count(&mountinfo, path))
 }
 
 fn populate_domain(source: &Path, target: &Path, seed: SeedMode) -> Result<(), AdapterError> {

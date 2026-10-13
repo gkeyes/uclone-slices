@@ -34,7 +34,6 @@ pub const LEGACY_USER_CE_ROOT: &str = "/data/data";
 /// Directory names below a storage root.
 pub(crate) const TRANSFERS_DIR: &str = "transfers";
 pub(crate) const MAINTENANCE_DIR: &str = "maintenance";
-pub(crate) const BASE_ALIAS_DIR: &str = "maintenance-base";
 pub(crate) const ROLLBACK_DIR: &str = "rollback";
 
 /// Mount roots in `/proc/self/mountinfo` that contain these markers come from the runtime.
