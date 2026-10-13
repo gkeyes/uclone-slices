@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -118,7 +117,7 @@ internal fun Banner(
     }
 }
 
-/** Empty / error state: 64dp round tonal icon, headline title, one subhead line, optional action. */
+/** Empty / error state: 64dp round tonal icon, headline title and one subhead line. */
 @Composable
 internal fun EmptyState(
     title: String,
@@ -126,11 +125,8 @@ internal fun EmptyState(
     message: String? = null,
     icon: Painter = painterResource(R.drawable.ic_space_cube),
     tone: Tone = Tone.Neutral,
-    action: String? = null,
-    onAction: (() -> Unit)? = null,
-    actionEnabled: Boolean = true,
 ) {
-    StateLayout(modifier = modifier, title = title, message = message, action = action, onAction = onAction, actionEnabled = actionEnabled) {
+    StateLayout(modifier = modifier, title = title, message = message) {
         Box(
             Modifier
                 .size(64.dp)
@@ -145,8 +141,8 @@ internal fun EmptyState(
 
 /** Loading state: the same layout as [EmptyState] with a spinner in the tonal circle. */
 @Composable
-internal fun LoadingState(title: String, modifier: Modifier = Modifier, message: String? = null) {
-    StateLayout(modifier = modifier, title = title, message = message, action = null, onAction = null, actionEnabled = false) {
+internal fun LoadingState(title: String, modifier: Modifier = Modifier) {
+    StateLayout(modifier = modifier, title = title, message = null) {
         Box(
             Modifier
                 .size(64.dp)
@@ -164,9 +160,6 @@ private fun StateLayout(
     modifier: Modifier,
     title: String,
     message: String?,
-    action: String?,
-    onAction: (() -> Unit)?,
-    actionEnabled: Boolean,
     icon: @Composable () -> Unit,
 ) {
     Column(
@@ -192,16 +185,6 @@ private fun StateLayout(
                 fontSize = TypeScale.subhead,
                 lineHeight = 20.sp,
                 textAlign = TextAlign.Center,
-            )
-        }
-        if (action != null && onAction != null) {
-            Spacer(Modifier.height(Space.xxs))
-            AppButton(
-                text = action,
-                onClick = onAction,
-                modifier = Modifier.widthIn(min = 160.dp),
-                kind = ButtonKind.Secondary,
-                enabled = actionEnabled,
             )
         }
     }

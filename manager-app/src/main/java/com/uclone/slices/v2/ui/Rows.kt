@@ -50,7 +50,6 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -207,9 +206,7 @@ internal fun ListRow(
     onClick: (() -> Unit)? = null,
     enabled: Boolean = true,
     chevron: Boolean = onClick != null,
-    titleMaxLines: Int = 1,
     summaryMaxLines: Int = 3,
-    monospaceValue: Boolean = false,
 ) {
     val interactive = onClick != null
     Row(
@@ -242,7 +239,7 @@ internal fun ListRow(
                 color = TextPrimary,
                 fontSize = TypeScale.body,
                 lineHeight = 21.sp,
-                maxLines = titleMaxLines,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             if (!summary.isNullOrBlank()) {
@@ -268,7 +265,6 @@ internal fun ListRow(
                     text = shown,
                     color = valueColor,
                     fontSize = TypeScale.subhead,
-                    fontFamily = if (monospaceValue) FontFamily.Monospace else null,
                     style = Tabular,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
