@@ -5,12 +5,32 @@ import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.SeedMode
 
+/**
+ * The Manager's screens as the view model reasons about them. Navigation itself is owned by the
+ * Navigation-Compose back stack (ManagerNavHost.kt); the nav host reports the screen on top with
+ * [UiIntent.DestinationChanged] and the view model asks for moves with [SlotsNavigation].
+ */
 enum class ManagerDestination {
     Spaces,
     AddApp,
     PackageDetails,
     BackupRestore,
     RuntimeStatus,
+}
+
+/** A move the view model asks the nav host to make; delivered once through `navigation`. */
+sealed interface SlotsNavigation {
+    /** Show a configured app's page above the spaces list (replacing the Add App page). */
+    data class ToPackage(val packageName: String) : SlotsNavigation
+    data object ToAddApps : SlotsNavigation
+    data object ToRuntimeStatus : SlotsNavigation
+    data class ToBackupRestore(
+        val packageName: String? = null,
+        val slotId: String? = null,
+    ) : SlotsNavigation
+
+    /** Pop back to the spaces list (the page shown no longer applies). */
+    data object ToSpaces : SlotsNavigation
 }
 
 sealed interface OperationUiState {
@@ -129,8 +149,6 @@ data class UnenrollAppUi(
 data class PostedNotice(val id: Long, val notice: UiNotice)
 
 data class SlotsUiState(
-    val destination: ManagerDestination = ManagerDestination.Spaces,
-    val backupReturnDestination: ManagerDestination = ManagerDestination.Spaces,
     val runtimeReady: Boolean = false,
     val runtimeCompatible: Boolean = false,
     val buildId: String = "",
@@ -150,7 +168,13 @@ data class SlotsUiState(
     val pendingDelete: DeleteSpaceUi? = null,
     val pendingUnenroll: UnenrollAppUi? = null,
     val runtimeLog: String? = null,
+    /** Manual home order (package names) as saved; empty means the default order. */
+    val homeAppOrder: List<String> = emptyList(),
+    /** The order being edited while the home list is in reorder mode; null otherwise. */
+    val reorderDraft: List<String>? = null,
 ) {
+    val reordering: Boolean
+        get() = reorderDraft != null
     val notice: UiNotice?
         get() = posted?.notice
     val busy: Boolean
@@ -177,7 +201,16 @@ sealed interface UiIntent {
         val enabled: Boolean,
     ) : UiIntent
     data class QuickActivateSlot(val packageName: String, val slotId: String) : UiIntent
-    data object NavigateBack : UiIntent
+
+    /**
+     * The nav host reports the screen now on top of the back stack; for the package page also
+     * the package its route names (used to restore the page after process death).
+     */
+    data class DestinationChanged(
+        val destination: ManagerDestination,
+        val packageName: String? = null,
+    ) : UiIntent
+    data class Reorder(val intent: ReorderIntent) : UiIntent
     data class RequestConfigureApp(val packageName: String) : UiIntent
     data object ConfirmConfigureApp : UiIntent
     data object DismissConfigureApp : UiIntent
@@ -199,6 +232,23 @@ sealed interface UiIntent {
     data object DismissRegistrationRecovery : UiIntent
     data class RegistrationRecoveryConfirmationChanged(val value: String) : UiIntent
     data object ConfirmRegistrationRecovery : UiIntent
+}
+
+/** Editing the manual order of the home app list. */
+sealed interface ReorderIntent {
+    /** Enter reorder mode, starting from the order shown. */
+    data object Start : ReorderIntent
+
+    /** Move [packageName] to the position currently held by [target] (drag). */
+    data class MoveTo(val packageName: String, val target: String) : ReorderIntent
+    data class MoveUp(val packageName: String) : ReorderIntent
+    data class MoveDown(val packageName: String) : ReorderIntent
+
+    /** Leave reorder mode keeping the saved order. */
+    data object Cancel : ReorderIntent
+
+    /** Leave reorder mode and save the edited order. */
+    data object Save : ReorderIntent
 }
 
 /** The notice shown when a Runtime command on the spaces screens fails with [this] code. */

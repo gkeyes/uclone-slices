@@ -3,6 +3,7 @@ import java.security.MessageDigest
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 val releaseKeystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
@@ -98,7 +99,10 @@ android {
             if (hasReleaseSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
@@ -140,6 +144,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.androidx.navigation.compose)
     // iOS 27 Liquid Glass backdrop and capsule shapes; see the version note in the catalog.
     implementation(libs.kyant.backdrop)
     implementation(libs.kyant.shapes)
@@ -148,6 +153,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.ui)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.core)
 
     // AGP 9 built-in Kotlin does not infer the kotlin-test JUnit variant, so name it.
     testImplementation(libs.kotlin.test.junit)

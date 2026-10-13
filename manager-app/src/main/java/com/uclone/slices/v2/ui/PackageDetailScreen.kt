@@ -45,6 +45,7 @@ internal fun PackageDetailScreen(
     installedApp: InstalledApp?,
     contentPadding: PaddingValues,
     onIntent: (UiIntent) -> Unit,
+    onBack: () -> Unit,
 ) {
     var createSheetVisible by rememberSaveable(packageSnapshot.packageName) {
         mutableStateOf(false)
@@ -73,7 +74,7 @@ internal fun PackageDetailScreen(
             title = appLabel,
             contentPadding = contentPadding,
             backdrop = backdrop,
-            onBack = { onIntent(UiIntent.NavigateBack) },
+            onBack = onBack,
             backEnabled = !state.busy,
             backDescription = stringResource(R.string.back_to_apps),
             actions = {

@@ -5,7 +5,6 @@ import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.TweenSpec
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
@@ -19,7 +18,8 @@ import androidx.compose.ui.unit.sp
  * Cross-app design system v2 tokens, iOS 27 edition (the DualSimRouting design draft): grouped
  * surfaces, 26dp cards, ~52dp rows, capsule controls and Liquid Glass chrome. Screens and
  * components read spacing, shape, type, colour and motion only from here. One fixed look that
- * follows the system light / dark setting; there is no theme or style picker.
+ * follows the system light / dark setting; there is no theme or style picker. Colour values live
+ * in SlicesColors.kt and reach these tokens through [LocalSlicesColors].
  */
 
 /** 4dp grid. */
@@ -103,10 +103,15 @@ internal object TextAlpha {
     const val Disabled = .38f
 }
 
+/** The colours of the current appearance, as provided by [SlicesTheme]. */
+internal val ThemeColors: SlicesColors
+    @Composable @ReadOnlyComposable
+    get() = LocalSlicesColors.current
+
 /** iOS label colour: black on light, white on dark. */
 internal val Label: Color
     @Composable @ReadOnlyComposable
-    get() = if (isSystemInDarkTheme()) Color.White else Color.Black
+    get() = ThemeColors.label
 
 internal val TextPrimary: Color
     @Composable @ReadOnlyComposable
@@ -128,63 +133,63 @@ internal val Tabular = TextStyle(fontFeatureSettings = "tnum")
 internal object Surfaces {
     val page: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF000000) else Color(0xFFF2F2F7)
+        get() = ThemeColors.page
     val card: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF1C1C1E) else Color(0xFFFFFFFF)
+        get() = ThemeColors.card
     val raised: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF2C2C2E) else Color(0xFFFFFFFF)
+        get() = ThemeColors.raised
 
     /** Tint drawn over refracted glass (title-bar buttons, button groups). */
     val glassTint: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF1C1C1E).copy(alpha = .42f) else Color.White.copy(alpha = .42f)
+        get() = ThemeColors.glassTint
 
     /** Heavier tint for floating panels (sheets, alerts, notices) so their text stays readable. */
     val panelTint: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF242428).copy(alpha = .72f) else Color.White.copy(alpha = .70f)
+        get() = ThemeColors.panelTint
     val hairline: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color.White.copy(alpha = .10f) else Color.Black.copy(alpha = .08f)
+        get() = ThemeColors.hairline
     val scrim: Color
         @Composable @ReadOnlyComposable
-        get() = Color.Black.copy(alpha = if (isSystemInDarkTheme()) .50f else .32f)
+        get() = ThemeColors.scrim
 
     /** Press state layer: 6% black on light, 6% white on dark. */
     val stateLayer: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color.White.copy(alpha = .06f) else Color.Black.copy(alpha = .06f)
+        get() = ThemeColors.stateLayer
 
     /** Quiet fill of inputs, search field, segmented track and unselected chips (tertiarySystemFill). */
     val control: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF767680).copy(alpha = .24f) else Color(0xFF767680).copy(alpha = .12f)
+        get() = ThemeColors.control
 
     /** Off track of a switch. */
     val switchOff: Color
         @Composable @ReadOnlyComposable
-        get() = if (isSystemInDarkTheme()) Color(0xFF39393D) else Color(0xFFE9E9EA)
+        get() = ThemeColors.switchOff
 }
 
 /** Accent: the iOS system blue (one fixed look; no wallpaper colour). */
 internal val Accent: Color
     @Composable @ReadOnlyComposable
-    get() = if (isSystemInDarkTheme()) Color(0xFF0A84FF) else Color(0xFF007AFF)
+    get() = ThemeColors.accent
 internal val OnAccent: Color
     @Composable @ReadOnlyComposable
-    get() = Color.White
+    get() = ThemeColors.onAccent
 
 /** iOS system green for switches. */
 internal val SystemGreen: Color
     @Composable @ReadOnlyComposable
-    get() = if (isSystemInDarkTheme()) Color(0xFF30D158) else Color(0xFF34C759)
+    get() = ThemeColors.systemGreen
 
 /** iOS system red for destructive glass buttons. */
 internal val SystemRed: Color
     @Composable @ReadOnlyComposable
-    get() = if (isSystemInDarkTheme()) Color(0xFFFF453A) else Color(0xFFFF3B30)
+    get() = ThemeColors.systemRed
 
 internal object Motion {
     /** Spatial: position and size. */
@@ -219,29 +224,11 @@ internal enum class Tone { Neutral, Info, Success, Warning, Danger }
 
 @Composable
 @ReadOnlyComposable
-internal fun Tone.container(): Color {
-    val dark = isSystemInDarkTheme()
-    return when (this) {
-        Tone.Success -> if (dark) Color(0xFF17351F) else Color(0xFFE6F4EA)
-        Tone.Warning -> if (dark) Color(0xFF3A2B10) else Color(0xFFFDF1DC)
-        Tone.Danger -> if (dark) Color(0xFF3B1A1A) else Color(0xFFFCE8E8)
-        Tone.Info -> if (dark) Color(0xFF172947) else Color(0xFFE5EEFD)
-        Tone.Neutral -> if (dark) Color(0xFF26282D) else Color(0xFFEEF0F3)
-    }
-}
+internal fun Tone.container(): Color = ThemeColors.tone(this).container
 
 @Composable
 @ReadOnlyComposable
-internal fun Tone.onContainer(): Color {
-    val dark = isSystemInDarkTheme()
-    return when (this) {
-        Tone.Success -> if (dark) Color(0xFF8FD9A8) else Color(0xFF1B6B34)
-        Tone.Warning -> if (dark) Color(0xFFF5C36B) else Color(0xFF8A5300)
-        Tone.Danger -> if (dark) Color(0xFFF4A7A3) else Color(0xFFB3261E)
-        Tone.Info -> if (dark) Color(0xFFA9C5FA) else Color(0xFF1A57C9)
-        Tone.Neutral -> if (dark) Color(0xFFC4C8CF) else Color(0xFF4A4F57)
-    }
-}
+internal fun Tone.onContainer(): Color = ThemeColors.tone(this).onContainer
 
 /** Gradient of a settings-style icon tile (top-left light to bottom-right deep), as in iOS Settings. */
 internal fun Tone.tileGradient(): List<Color> = when (this) {

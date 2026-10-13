@@ -26,7 +26,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 class SlotsViewModelTest {
@@ -54,6 +56,7 @@ class SlotsViewModelTest {
     fun unconfiguredAppRequiresConfirmationBeforeEnrollment() {
         val client = FakeRuntimeClient()
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
         val commandsBeforeRequest = client.commands.toList()
 
         viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
@@ -64,7 +67,7 @@ class SlotsViewModelTest {
         viewModel.onIntent(UiIntent.ConfirmConfigureApp)
 
         assertEquals(RuntimeCommand.Enroll("com.example.app", testSigning()), client.commands.last())
-        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.PackageDetails, host.top)
         assertEquals(UiNotice.ConfigurationCompleted, viewModel.state.value.notice)
         assertNull(viewModel.state.value.pendingConfigurationPackage)
     }
@@ -74,11 +77,12 @@ class SlotsViewModelTest {
         val snapshot = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
 
         viewModel.onIntent(UiIntent.OpenPackage(snapshot.packageName))
 
         assertEquals(RuntimeCommand.GetPackage(snapshot.packageName), client.commands.last())
-        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.PackageDetails, host.top)
     }
 
     @Test
@@ -195,18 +199,19 @@ class SlotsViewModelTest {
     fun navigationReturnsToSpacesWithoutCallingRuntime() {
         val client = FakeRuntimeClient()
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
         val commandsBeforeNavigation = client.commands.toList()
 
         viewModel.onIntent(UiIntent.OpenAddApps)
-        assertEquals(ManagerDestination.AddApp, viewModel.state.value.destination)
-        viewModel.onIntent(UiIntent.NavigateBack)
-        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.AddApp, host.top)
+        host.back()
+        assertEquals(ManagerDestination.Spaces, host.top)
 
         viewModel.onIntent(UiIntent.OpenRuntimeStatus)
-        assertEquals(ManagerDestination.RuntimeStatus, viewModel.state.value.destination)
-        viewModel.onIntent(UiIntent.NavigateBack)
+        assertEquals(ManagerDestination.RuntimeStatus, host.top)
+        host.back()
 
-        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.Spaces, host.top)
         assertEquals(commandsBeforeNavigation, client.commands)
     }
 
@@ -376,13 +381,14 @@ class SlotsViewModelTest {
         val first = packageSnapshot(active = "base")
         val client = FakeRuntimeClient(initialPackages = listOf(first))
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
         viewModel.onIntent(UiIntent.OpenPackage(first.packageName))
         client.snapshot = first.copy(activeSlot = "slot-1")
 
         viewModel.onIntent(UiIntent.Refresh)
 
         assertEquals("slot-1", viewModel.state.value.selected?.activeSlot)
-        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.PackageDetails, host.top)
     }
 
     @Test
@@ -452,6 +458,7 @@ class SlotsViewModelTest {
             buildId = "0.1.6",
         )
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
 
         assertTrue(viewModel.state.value.runtimeReady)
         assertFalse(viewModel.state.value.runtimeCompatible)
@@ -463,7 +470,7 @@ class SlotsViewModelTest {
         viewModel.onIntent(UiIntent.OpenPackage(initial.packageName))
 
         assertEquals(listOf<RuntimeCommand>(RuntimeCommand.Probe), client.commands)
-        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.Spaces, host.top)
         assertNull(viewModel.state.value.selected)
         viewModel.onIntent(UiIntent.ActivateSlot("slot-1"))
         assertEquals(listOf<RuntimeCommand>(RuntimeCommand.Probe), client.commands)
@@ -522,16 +529,17 @@ class SlotsViewModelTest {
     fun navigationKeepsTheVisibleNotice() {
         val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
         viewModel.onIntent(UiIntent.SetLaunchAfterReboot("com.example.app", true))
         val posted = assertNotNull(viewModel.state.value.posted)
 
         viewModel.onIntent(UiIntent.OpenRuntimeStatus)
-        assertEquals(ManagerDestination.RuntimeStatus, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.RuntimeStatus, host.top)
         assertEquals(posted, viewModel.state.value.posted)
 
-        viewModel.onIntent(UiIntent.NavigateBack)
-        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        host.back()
+        assertEquals(ManagerDestination.Spaces, host.top)
         assertEquals(posted, viewModel.state.value.posted)
     }
 
@@ -586,6 +594,7 @@ class SlotsViewModelTest {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
 
         viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
 
@@ -594,7 +603,7 @@ class SlotsViewModelTest {
             client.commands.last(),
         )
         assertEquals("slot-1", viewModel.state.value.packages.single().activeSlot)
-        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.Spaces, host.top)
         assertNull(viewModel.state.value.selected)
         assertEquals(
             UiNotice.SpaceActivated("Work", switched = true),
@@ -607,7 +616,7 @@ class SlotsViewModelTest {
             UiNotice.SpaceActivated("Work", switched = false),
             viewModel.state.value.notice,
         )
-        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.Spaces, host.top)
     }
 
     @Test
@@ -615,13 +624,14 @@ class SlotsViewModelTest {
         val initial = packageSnapshot()
         val client = FakeRuntimeClient(initialPackages = listOf(initial))
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
 
         viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
 
         assertEquals("base", viewModel.state.value.packages.single().activeSlot)
         assertEquals(UiNotice.OperationFailed, viewModel.state.value.notice)
-        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.Spaces, host.top)
     }
 
     @Test
@@ -658,6 +668,7 @@ class SlotsViewModelTest {
     fun quickActivationFreezesArgumentsAndDropsASecondTapWhileBusy() = runBlocking {
         val client = BlockingQuickRuntimeClient()
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
 
         viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
         client.activationStarted.await()
@@ -670,7 +681,7 @@ class SlotsViewModelTest {
         client.releaseActivation.complete(Unit)
         assertFalse(viewModel.state.value.busy)
         assertEquals("slot-1", viewModel.state.value.packages.single().activeSlot)
-        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.Spaces, host.top)
     }
 
     @Test
@@ -757,11 +768,12 @@ class SlotsViewModelTest {
     fun openingAConfiguredAppShowsItsPageBeforeTheRuntimeReadReturns() = runBlocking<Unit> {
         val client = BlockingGetPackageRuntimeClient()
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
 
         viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
         client.getStarted.await()
 
-        assertEquals(ManagerDestination.PackageDetails, viewModel.state.value.destination)
+        assertEquals(ManagerDestination.PackageDetails, host.top)
         assertEquals("com.example.app", viewModel.state.value.selected?.packageName)
         assertFalse(viewModel.state.value.operation.blocksScreen)
         client.releaseGet.complete(Unit)
@@ -862,6 +874,8 @@ class SlotsViewModelTest {
         val client = HoldingListRuntimeClient()
         val apps = RefreshingCatalogSource()
         val viewModel = slotsViewModel(client, apps, Dispatchers.Unconfined)
+        // The nav host reports the Add App page as soon as it is asked to show it.
+        FakeNavHost(viewModel)
         // The first catalog read starts a refresh that then waits on ListPackages; whichever side
         // lands first, the Add App page must end with the full catalog, not the managed list.
         apps.duringFirstCatalog = {
@@ -902,10 +916,343 @@ class SlotsViewModelTest {
         assertNull(viewModel.state.value.runtimeLog)
     }
 
+    @Test
+    fun leavingThePackagePageDropsItsSelectionAndSheets() {
+        val snapshot = packageSnapshot(active = "slot-1")
+        val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
+        viewModel.onIntent(UiIntent.OpenPackage(snapshot.packageName))
+        viewModel.onIntent(UiIntent.RequestRenameSlot("slot-1"))
+        assertNotNull(viewModel.state.value.pendingRename)
+        val commandsBeforeBack = client.commands.toList()
+
+        host.back()
+
+        assertEquals(ManagerDestination.Spaces, host.top)
+        assertNull(viewModel.state.value.selected)
+        assertNull(viewModel.state.value.pendingRename)
+        assertEquals(commandsBeforeBack, client.commands)
+    }
+
+    @Test
+    fun backupRestoreOpensAboveThePageItWasStartedFrom() {
+        val snapshot = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
+        viewModel.onIntent(UiIntent.OpenPackage(snapshot.packageName))
+
+        viewModel.onIntent(UiIntent.OpenBackupRestore(snapshot.packageName, "slot-1"))
+
+        assertEquals(
+            SlotsNavigation.ToBackupRestore(snapshot.packageName, "slot-1"),
+            host.moves.last(),
+        )
+        assertEquals(ManagerDestination.BackupRestore, host.top)
+        // Returning keeps the package page and its selection.
+        host.back()
+        assertEquals(ManagerDestination.PackageDetails, host.top)
+        assertEquals(snapshot.packageName, viewModel.state.value.selected?.packageName)
+    }
+
+    @Test
+    fun navigationRequestsAreDroppedWhileAnOperationRuns() = runBlocking<Unit> {
+        val client = BlockingQuickRuntimeClient()
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
+        viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
+        client.activationStarted.await()
+        val movesBefore = host.moves.toList()
+
+        viewModel.onIntent(UiIntent.OpenAddApps)
+        viewModel.onIntent(UiIntent.OpenRuntimeStatus)
+        viewModel.onIntent(UiIntent.OpenBackupRestore())
+
+        assertEquals(movesBefore, host.moves)
+        assertEquals(ManagerDestination.Spaces, host.top)
+        client.releaseActivation.complete(Unit)
+    }
+
+    @Test
+    fun aPackageThatDisappearsOnRefreshTakesItsPageAway() {
+        val snapshot = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val host = FakeNavHost(viewModel)
+        viewModel.onIntent(UiIntent.OpenPackage(snapshot.packageName))
+        client.enrolled = false
+
+        viewModel.onIntent(UiIntent.Refresh)
+
+        assertEquals(SlotsNavigation.ToSpaces, host.moves.last())
+        assertEquals(ManagerDestination.Spaces, host.top)
+        assertNull(viewModel.state.value.selected)
+    }
+
+    @Test
+    fun aPackagePageRestoredByTheBackStackSelectsItsPackage() {
+        val snapshot = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val moves = mutableListOf<SlotsNavigation>()
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            viewModel.navigation.collect { moves += it }
+        }
+
+        // After process death the restored back stack reports the package page first.
+        viewModel.onIntent(
+            UiIntent.DestinationChanged(ManagerDestination.PackageDetails, snapshot.packageName),
+        )
+        assertEquals(snapshot.packageName, viewModel.state.value.selected?.packageName)
+
+        viewModel.onIntent(UiIntent.Refresh)
+
+        assertEquals(snapshot.packageName, viewModel.state.value.selected?.packageName)
+        assertTrue(moves.none { it == SlotsNavigation.ToSpaces })
+    }
+
+    @Test
+    fun anAddAppPageRestoredByTheBackStackLoadsTheCatalog() {
+        val apps = RefreshingCatalogSource()
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+        val viewModel = slotsViewModel(client, apps, Dispatchers.Unconfined)
+        assertFalse(viewModel.state.value.appCatalogLoaded)
+
+        viewModel.onIntent(UiIntent.DestinationChanged(ManagerDestination.AddApp))
+
+        assertTrue(viewModel.state.value.appCatalogLoaded)
+        assertEquals(1, apps.catalogReads)
+        assertEquals(
+            setOf("com.example.app", "com.other.app"),
+            viewModel.state.value.installedApps.map(InstalledApp::packageName).toSet(),
+        )
+    }
+
+    @Test
+    fun anAddAppPageReportedWhileTheFirstRefreshRunsLoadsTheCatalogWhenItEnds() {
+        val apps = RefreshingCatalogSource()
+        val client = GatedProbeRuntimeClient()
+        val viewModel = slotsViewModel(client, apps, Dispatchers.Unconfined)
+        assertTrue(viewModel.state.value.busy)
+
+        // Restored after process death: the page is reported before the refresh has ended.
+        viewModel.onIntent(UiIntent.DestinationChanged(ManagerDestination.AddApp))
+        assertEquals(0, apps.catalogReads)
+        client.gate.complete(Unit)
+
+        assertFalse(viewModel.state.value.busy)
+        assertTrue(viewModel.state.value.appCatalogLoaded)
+        assertEquals(1, apps.catalogReads)
+        assertEquals(
+            setOf("com.example.app", "com.other.app"),
+            viewModel.state.value.installedApps.map(InstalledApp::packageName).toSet(),
+        )
+    }
+
+    @Test
+    fun aRestoredPackagePageReturnsHomeWhenTheRuntimeCannotListIt() {
+        listOf(
+            RuntimeReply.TransportFailure,
+            RuntimeReply.Error(ErrorCode.OperationFailed),
+            RuntimeReply.Capabilities("0.0.0-other"),
+        ).forEach { probeReply ->
+            // Reported while the first refresh still runs ...
+            val gated = GatedProbeRuntimeClient(probeReply)
+            val during = slotsViewModel(gated, appSource, Dispatchers.Unconfined)
+            val duringMoves = recordNavigation(during)
+            during.onIntent(
+                UiIntent.DestinationChanged(ManagerDestination.PackageDetails, "com.example.app"),
+            )
+            assertTrue(duringMoves.isEmpty())
+            gated.gate.complete(Unit)
+            assertEquals(listOf<SlotsNavigation>(SlotsNavigation.ToSpaces), duringMoves.distinct())
+            assertNull(during.state.value.selected)
+
+            // ... or after it ended.
+            val failed = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+            failed.nextReply = probeReply
+            val after = slotsViewModel(failed, appSource, Dispatchers.Unconfined)
+            val afterMoves = recordNavigation(after)
+            after.onIntent(
+                UiIntent.DestinationChanged(ManagerDestination.PackageDetails, "com.example.app"),
+            )
+            assertEquals(listOf<SlotsNavigation>(SlotsNavigation.ToSpaces), afterMoves.distinct())
+        }
+    }
+
+    @Test
+    fun homeOrderIsEditedInTheViewModelAndSavedOnlyOnSave() {
+        val preferences = MemoryManagerUiPreferences()
+        val viewModel = slotsViewModel(
+            TwoAppsRuntimeClient(),
+            twoAppsSource,
+            Dispatchers.Unconfined,
+            preferences,
+        )
+        assertEquals(
+            listOf("com.example.app", "com.other.app"),
+            viewModel.state.value.orderedManagedApps().map(InstalledApp::packageName),
+        )
+
+        viewModel.onIntent(UiIntent.Reorder(ReorderIntent.Start))
+        assertTrue(viewModel.state.value.reordering)
+        viewModel.onIntent(UiIntent.Reorder(ReorderIntent.MoveDown("com.example.app")))
+        assertEquals(
+            listOf("com.other.app", "com.example.app"),
+            viewModel.state.value.reorderKeys(),
+        )
+        viewModel.onIntent(UiIntent.Reorder(ReorderIntent.Cancel))
+
+        assertFalse(viewModel.state.value.reordering)
+        assertEquals(emptyList(), preferences.homeAppOrder)
+        assertEquals(
+            listOf("com.example.app", "com.other.app"),
+            viewModel.state.value.orderedManagedApps().map(InstalledApp::packageName),
+        )
+
+        viewModel.onIntent(UiIntent.Reorder(ReorderIntent.Start))
+        viewModel.onIntent(
+            UiIntent.Reorder(ReorderIntent.MoveTo("com.other.app", "com.example.app")),
+        )
+        viewModel.onIntent(UiIntent.Reorder(ReorderIntent.Save))
+
+        assertFalse(viewModel.state.value.reordering)
+        assertEquals(listOf("com.other.app", "com.example.app"), preferences.homeAppOrder)
+        assertEquals(
+            listOf("com.other.app", "com.example.app"),
+            viewModel.state.value.orderedManagedApps().map(InstalledApp::packageName),
+        )
+        // A later Manager start reads the saved order.
+        val reopened = slotsViewModel(
+            TwoAppsRuntimeClient(),
+            twoAppsSource,
+            Dispatchers.Unconfined,
+            preferences,
+        )
+        assertEquals(
+            listOf("com.other.app", "com.example.app"),
+            reopened.state.value.orderedManagedApps().map(InstalledApp::packageName),
+        )
+    }
+
+    @Test
+    fun reorderingNeedsMoreThanOneApp() {
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.Reorder(ReorderIntent.Start))
+
+        assertFalse(viewModel.state.value.reordering)
+    }
+
     private fun configureApp(viewModel: SlotsViewModel) {
         viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
         viewModel.onIntent(UiIntent.ConfirmConfigureApp)
     }
+}
+
+/**
+ * Stands in for the Navigation-Compose host: follows the moves the view model asks for on a
+ * simple back stack and reports the page on top, as ManagerNavHost does.
+ */
+private class FakeNavHost(private val viewModel: SlotsViewModel) {
+    private val stack = mutableListOf(ManagerDestination.Spaces)
+    val moves = mutableListOf<SlotsNavigation>()
+    val top: ManagerDestination
+        get() = stack.last()
+
+    init {
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            viewModel.navigation.collect { follow(it) }
+        }
+        report()
+    }
+
+    /** System or title-bar back: one page, never while an operation runs. */
+    fun back() {
+        if (viewModel.state.value.busy || stack.size == 1) return
+        stack.removeAt(stack.lastIndex)
+        report()
+    }
+
+    private fun follow(navigation: SlotsNavigation) {
+        moves += navigation
+        when (navigation) {
+            is SlotsNavigation.ToPackage -> if (top != ManagerDestination.PackageDetails) {
+                popToSpaces()
+                stack += ManagerDestination.PackageDetails
+            }
+            SlotsNavigation.ToAddApps -> {
+                popToSpaces()
+                stack += ManagerDestination.AddApp
+            }
+            SlotsNavigation.ToRuntimeStatus -> {
+                popToSpaces()
+                stack += ManagerDestination.RuntimeStatus
+            }
+            is SlotsNavigation.ToBackupRestore -> if (top != ManagerDestination.BackupRestore) {
+                stack += ManagerDestination.BackupRestore
+            }
+            SlotsNavigation.ToSpaces -> popToSpaces()
+        }
+        report()
+    }
+
+    private fun popToSpaces() {
+        while (stack.size > 1) stack.removeAt(stack.lastIndex)
+    }
+
+    private fun report() {
+        viewModel.onIntent(UiIntent.DestinationChanged(top))
+    }
+}
+
+private fun recordNavigation(viewModel: SlotsViewModel): MutableList<SlotsNavigation> {
+    val moves = mutableListOf<SlotsNavigation>()
+    CoroutineScope(Dispatchers.Unconfined).launch {
+        viewModel.navigation.collect { moves += it }
+    }
+    return moves
+}
+
+/** Holds the first Probe until [gate] completes, then answers it with [probeReply] if set. */
+private class GatedProbeRuntimeClient(
+    private val probeReply: RuntimeReply? = null,
+) : FakeRuntimeClient(initialPackages = listOf(packageSnapshot())) {
+    val gate = CompletableDeferred<Unit>()
+    private var gated = true
+
+    override suspend fun execute(command: RuntimeCommand): RuntimeReply {
+        if (command == RuntimeCommand.Probe && gated) {
+            gated = false
+            gate.await()
+            if (probeReply != null) {
+                commands += command
+                return probeReply
+            }
+        }
+        return super.execute(command)
+    }
+}
+
+private val twoAppsSource = InstalledAppsSource {
+    listOf(
+        InstalledApp("com.example.app", "Example", signingIdentity = testSigning()),
+        InstalledApp("com.other.app", "Other", signingIdentity = testSigning()),
+    )
+}
+
+private class TwoAppsRuntimeClient : FakeRuntimeClient(initialPackages = listOf(packageSnapshot())) {
+    override suspend fun execute(command: RuntimeCommand): RuntimeReply =
+        if (command == RuntimeCommand.ListPackages) {
+            commands += command
+            RuntimeReply.Packages(
+                listOf(snapshot, snapshot.copy(packageName = "com.other.app")),
+            )
+        } else {
+            super.execute(command)
+        }
 }
 
 private val TEST_LABELS = SpaceLabels(baseSpaceName = "系统原始空间", bindingConfirmation = "绑定")

@@ -6,12 +6,15 @@ core-ktx = "1.19.1"
 json = "20250517"
 kotlin = "2.2.20"
 kotlinx-coroutines = "1.11.0"
+kotlinx-serialization = "1.9.0"
 # iOS 27 Liquid Glass: Kyant0/AndroidLiquidGlass backdrop (AGSL refraction, as in
 # DualSimRouting) and its capsule shapes. Kept on 1.0.6 deliberately: 2.x needs
 # Kotlin 2.4 metadata, newer than this toolchain's Kotlin.
 kyant-backdrop = "1.0.6"
 kyant-shapes = "1.2.0"
 lifecycle = "2.10.0"
+# Type-safe Navigation-Compose routes (@Serializable), hence the serialization plugin below.
+navigation = "2.9.5"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity-compose" }
@@ -24,9 +27,11 @@ androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx
 androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-ktx = { module = "androidx.lifecycle:lifecycle-viewmodel-ktx", version.ref = "lifecycle" }
+androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "navigation" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
 kyant-backdrop = { module = "io.github.kyant0:backdrop", version.ref = "kyant-backdrop" }
 kyant-shapes = { module = "io.github.kyant0:shapes", version.ref = "kyant-shapes" }
 org-json = { module = "org.json:json", version.ref = "json" }
@@ -34,3 +39,4 @@ org-json = { module = "org.json:json", version.ref = "json" }
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

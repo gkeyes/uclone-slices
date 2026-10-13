@@ -53,41 +53,24 @@ internal fun AppListScreen(
     state: SlotsUiState,
     contentPadding: PaddingValues,
     onIntent: (UiIntent) -> Unit,
-    uiPreferences: ManagerUiPreferences,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     val packageByName = remember(state.packages) {
         state.packages.associateBy(PackageSnapshot::packageName)
     }
-    // Manual home order: UI-only, read from local preferences and applied to the list.
-    var savedOrder by remember { mutableStateOf(uiPreferences.homeAppOrder) }
-    val managedApps = remember(state.installedApps, state.packages, query, savedOrder) {
-        HomeOrder.sort(
-            buildAppSections(state.installedApps, state.packages, query).managed,
-            savedOrder,
-        ) { it.packageName }
+    // Manual home order: kept and saved by the view model, which also holds the draft while
+    // the list is being reordered.
+    val managedApps = remember(state.installedApps, state.packages, state.homeAppOrder, query) {
+        state.orderedManagedApps(query)
     }
-    var reordering by rememberSaveable { mutableStateOf(false) }
-    var draft by remember { mutableStateOf(emptyList<String>()) }
-    val currentKeys = remember(managedApps) { managedApps.map(InstalledApp::packageName) }
-    if (reordering && draft.isEmpty() && currentKeys.isNotEmpty()) {
-        // Restored after process death or rotation: start from the saved order again.
-        draft = currentKeys
+    val reordering = state.reordering
+    val draftKeys = remember(state.reorderDraft, state.installedApps, state.packages, state.homeAppOrder) {
+        state.reorderKeys()
     }
-    val draftKeys = remember(draft, currentKeys) { HomeOrder.merge(draft, currentKeys) }
     val appByName = remember(managedApps) { managedApps.associateBy(InstalledApp::packageName) }
     val canReorder = state.initialLoadComplete && !searchOpen && query.isEmpty() && managedApps.size > 1
-    val finishReorder: (Boolean) -> Unit = { save ->
-        if (save) {
-            val merged = HomeOrder.merge(draft, currentKeys)
-            uiPreferences.homeAppOrder = merged
-            savedOrder = merged
-        }
-        reordering = false
-        draft = emptyList()
-    }
-    BackHandler(enabled = reordering) { finishReorder(false) }
+    BackHandler(enabled = reordering) { onIntent(UiIntent.Reorder(ReorderIntent.Cancel)) }
 
     val runtimeHealthy = state.runtimeReady && state.runtimeCompatible
     val activating = state.operation as? OperationUiState.ActivatingSpace
@@ -98,7 +81,7 @@ internal fun AppListScreen(
     val reduced = rememberReducedMotion()
     val listState = rememberLazyListState()
     val reorderState = rememberHomeReorderState(listState) { from, to ->
-        draft = HomeOrder.moveTo(HomeOrder.merge(draft, currentKeys), from, to)
+        onIntent(UiIntent.Reorder(ReorderIntent.MoveTo(from, to)))
     }
 
     ManagerScreen(
@@ -116,13 +99,13 @@ internal fun AppListScreen(
             if (reordering) {
                 AppButton(
                     text = stringResource(R.string.cancel),
-                    onClick = { finishReorder(false) },
+                    onClick = { onIntent(UiIntent.Reorder(ReorderIntent.Cancel)) },
                     kind = ButtonKind.Text,
                     compact = true,
                 )
                 AppButton(
                     text = stringResource(R.string.done),
-                    onClick = { finishReorder(true) },
+                    onClick = { onIntent(UiIntent.Reorder(ReorderIntent.Save)) },
                     compact = true,
                     modifier = Modifier.padding(end = Space.xs),
                 )
@@ -136,10 +119,7 @@ internal fun AppListScreen(
                         searchOpen = !searchOpen
                         if (!searchOpen) query = ""
                     },
-                    onReorder = {
-                        draft = currentKeys
-                        reordering = true
-                    },
+                    onReorder = { onIntent(UiIntent.Reorder(ReorderIntent.Start)) },
                     onIntent = onIntent,
                 )
             }
@@ -164,8 +144,8 @@ internal fun AppListScreen(
                         index = index,
                         lastIndex = draftKeys.lastIndex,
                         state = reorderState,
-                        onMoveUp = { draft = HomeOrder.moveUp(HomeOrder.merge(draft, currentKeys), packageName) },
-                        onMoveDown = { draft = HomeOrder.moveDown(HomeOrder.merge(draft, currentKeys), packageName) },
+                        onMoveUp = { onIntent(UiIntent.Reorder(ReorderIntent.MoveUp(packageName))) },
+                        onMoveDown = { onIntent(UiIntent.Reorder(ReorderIntent.MoveDown(packageName))) },
                         modifier = Modifier.animateItem(
                             placementSpec = if (reduced || reorderState.draggingKey == packageName) {
                                 null

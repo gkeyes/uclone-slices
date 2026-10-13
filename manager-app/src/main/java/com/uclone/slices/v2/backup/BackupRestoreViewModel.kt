@@ -177,6 +177,28 @@ internal class BackupRestoreViewModel(
         }
     }
 
+    // Set once the page named by the navigation route was opened. The ViewModel belongs to that
+    // route's back-stack entry and outlives configuration changes; a recreated page must not open
+    // (and reset) it again.
+    private var routeOpened = false
+
+    /**
+     * Opens the page the BackupRestore route asks for: the backup setup of [packageName] (one
+     * account when [slotId] is set), or the landing page when [packageName] is null. Only the
+     * first call per ViewModel does anything.
+     */
+    fun openRoute(packageName: String?, slotId: String?) {
+        if (routeOpened) return
+        routeOpened = true
+        onIntent(
+            if (packageName == null) {
+                BackupUiIntent.OpenLanding
+            } else {
+                BackupUiIntent.OpenBackup(packageName, slotId)
+            },
+        )
+    }
+
     fun suggestedBackupName(): String {
         val snapshot = state.value
         val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.ROOT).format(Date())

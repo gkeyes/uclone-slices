@@ -24,12 +24,13 @@ internal fun RuntimeStatusScreen(
     state: SlotsUiState,
     contentPadding: PaddingValues,
     onIntent: (UiIntent) -> Unit,
+    onBack: () -> Unit,
 ) {
     val play = rememberStaggerPlay("runtime_status")
     ManagerScreen(
         title = stringResource(R.string.runtime_status_title),
         contentPadding = contentPadding,
-        onBack = { onIntent(UiIntent.NavigateBack) },
+        onBack = onBack,
     ) {
         item(key = "subtitle") {
             Footnote(stringResource(R.string.runtime_status_subtitle))
