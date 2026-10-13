@@ -1,9 +1,9 @@
-name: Validate V2
+name: CI
 
 on:
   pull_request:
   push:
-    branches: ["main", "codex/**", "claude/**"]
+    branches: ["main", "codex/v2-rebuild"]
     # A v* tag is pushed only after the user confirms the candidate; it is the only path
     # that publishes a GitHub Release, and it publishes the bytes this run verified.
     tags: ["v*"]
@@ -12,12 +12,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A superseded PR run is useless; branch and tag runs produce deliveries, so they always finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   NDK_VERSION: "29.0.14206865"
 
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     env:
       HAS_RELEASE_SIGNING: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' && secrets.RELEASE_STORE_PASSWORD != '' && secrets.RELEASE_KEY_ALIAS != '' && secrets.RELEASE_KEY_PASSWORD != '' }}
     steps:
@@ -25,7 +33,18 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          fetch-depth: 0
+
+      - name: Check version alignment and KernelSU scripts
+        run: |
+          ./tools/check-decision-alignment.sh
+          ./tools/test-kernelsu.sh
+
+      - name: Read release version
+        id: version
+        run: |
+          version=$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' manager-app/build.gradle.kts)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Set up JDK 17
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
@@ -54,11 +73,17 @@ jobs:
           echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/uclone-signing/release.p12" >> "$GITHUB_ENV"
           echo "RELEASE_STORE_TYPE=pkcs12" >> "$GITHUB_ENV"
 
+      # Pull requests (including forks without secrets) are validated unsigned; every branch or
+      # tag push must produce the fixed-certificate delivery.
       - name: Require fixed release signing
+        if: github.event_name != 'pull_request'
         run: test "$HAS_RELEASE_SIGNING" = "true"
 
       - name: Resolve Rust toolchain
         run: rustup show active-toolchain
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: Validate Rust
         run: |
@@ -75,40 +100,24 @@ jobs:
           RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: |
-          set -o pipefail
-          ./gradlew --no-daemon :manager-app:testDebugUnitTest :manager-app:lintDebug :manager-app:lintRelease :manager-app:assembleRelease :device-fixture-app:lintFromDebug :device-fixture-app:lintToDebug :device-fixture-app:assembleFromDebug :device-fixture-app:assembleToDebug 2>&1 | tee "$RUNNER_TEMP/gradle-android.log"
+        run: ./gradlew --no-daemon --console=plain :manager-app:testDebugUnitTest :manager-app:lintRelease :manager-app:assembleRelease :device-fixture-app:lintFromDebug :device-fixture-app:lintToDebug :device-fixture-app:assembleFromDebug :device-fixture-app:assembleToDebug
 
-      # Job logs are not always reachable from where the failure is read; the key lines are
-      # repeated as one annotation per source so they show up in the checks API and UI.
-      - name: Summarize Android failures
+      - name: Upload Android reports
         if: failure()
-        run: |
-          annotate() {
-            message=$(sed 's/%/%25/g; s/\r//g' | awk '{printf "%s%%0A", $0}')
-            [ -n "$message" ] && printf '::error title=%s::%s\n' "$1" "$message"
-            return 0
-          }
-          if [ -f "$RUNNER_TEMP/gradle-android.log" ]; then
-            { grep -E '^e: |^w: .*error|What went wrong|> Task .* FAILED|FAILED$|Lint found|Error: |Exception|expected:' \
-              "$RUNNER_TEMP/gradle-android.log" || true; } | head -n 80 | annotate "Gradle"
-          fi
-          for report in manager-app/build/test-results/testDebugUnitTest/*.xml; do
-            [ -f "$report" ] || continue
-            { grep -A4 '<failure' "$report" || true; } | head -n 30
-          done | annotate "Unit tests"
-          for report in manager-app/build/reports/lint-results-*.txt manager-app/build/intermediates/lint_intermediate_text_report/*/*/lint-results-*.txt; do
-            [ -f "$report" ] || continue
-            { grep -B1 -A2 'Error' "$report" || true; } | head -n 60
-          done | annotate "Lint"
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-reports-${{ github.sha }}
+          path: |
+            manager-app/build/reports
+            manager-app/build/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
-      - name: Validate KernelSU startup layer
-        run: |
-          ./tools/check-decision-alignment.sh
-          ./tools/test-kernelsu.sh
-          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./tools/build-kernelsu.sh
+      - name: Build KernelSU module
+        run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./tools/build-kernelsu.sh
 
       - name: Verify fixed Manager signature
+        if: env.HAS_RELEASE_SIGNING == 'true'
         run: |
           test "$(unzip -p manager-app/build/outputs/apk/release/manager-app-release.apk lib/arm64-v8a/libuclone_archive.so | sha256sum | awk '{print $1}')" = "$(cat outputs/helpers/uclone_archive.sha256)"
           APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner" \
@@ -116,17 +125,21 @@ jobs:
             manager-app/build/outputs/apk/release/manager-app-release.apk
 
       - name: Prepare SHA-pinned delivery bundle
+        if: env.HAS_RELEASE_SIGNING == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           DELIVERY="$RUNNER_TEMP/uclone-slices-delivery"
           mkdir -p "$DELIVERY"
-          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-v2-manager-0.2.4-${GITHUB_SHA}.apk"
-          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-v2-kernelsu-0.2.4-${GITHUB_SHA}.zip"
+          install -m 0644 manager-app/build/outputs/apk/release/manager-app-release.apk "$DELIVERY/uclone-slices-manager-${VERSION}-${GITHUB_SHA}.apk"
+          install -m 0644 outputs/uclone-slices-v2-kernelsu.zip "$DELIVERY/uclone-slices-kernelsu-${VERSION}-${GITHUB_SHA}.zip"
           (cd "$DELIVERY" && sha256sum ./*.apk ./*.zip > SHA256SUMS.txt)
 
-      - name: Upload 0.2.4 candidate delivery
+      - name: Upload candidate delivery
+        if: env.HAS_RELEASE_SIGNING == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: uclone-slices-v2-0.2.4-${{ github.sha }}
+          name: uclone-slices-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/uclone-slices-delivery
           if-no-files-found: error
           retention-days: 7
@@ -148,16 +161,17 @@ jobs:
       - name: Download verified delivery
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: uclone-slices-v2-0.2.4-${{ github.sha }}
+          name: uclone-slices-${{ needs.validate.outputs.version }}-${{ github.sha }}
           path: ${{ runner.temp }}/uclone-slices-delivery
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.validate.outputs.version }}
           DELIVERY: ${{ runner.temp }}/uclone-slices-delivery
         run: |
-          test "$TAG" = "v0.2.4"
+          test "$TAG" = "v$VERSION"
           NOTES="docs/releases/$TAG.md"
           test -s "$NOTES"
           (cd "$DELIVERY" && sha256sum -c SHA256SUMS.txt)
@@ -165,6 +179,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --latest \
-            --title "UClone Slices V2 $TAG" \
+            --title "UClone Slices $TAG" \
             --notes-file "$NOTES" \
             "$DELIVERY"/*.apk "$DELIVERY"/*.zip "$DELIVERY"/SHA256SUMS.txt

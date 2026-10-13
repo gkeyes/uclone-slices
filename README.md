@@ -1,11 +1,11 @@
-# UClone Slices V2
+# UClone Slices
 
-[![Validate V2](https://github.com/gkeyes/uclone-slices/actions/workflows/ci.yml/badge.svg)](https://github.com/gkeyes/uclone-slices/actions/workflows/ci.yml)
+[![CI](https://github.com/gkeyes/uclone-slices/actions/workflows/ci.yml/badge.svg)](https://github.com/gkeyes/uclone-slices/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-UClone Slices V2 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
+UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前版本为 **v0.2.4**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 稳定协议 ID 仍为 `0.2.2`：0.2.3 未改变 wire，但 Runtime 修复需要同时刷入 0.2.3 模块。
+当前版本为 **v0.2.4**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 协议 ID 为 `0.2.2`；Manager 与 KernelSU 模块需使用同一版本。
 
 ## 功能
 
@@ -33,10 +33,10 @@ UClone Slices V2 是一款适用于 Root Android / KernelSU 设备的多账号�
 
 ## 下载与安装
 
-Release 产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
+Release 产物由 GitHub Actions 从同一提交 SHA 生成：
 
-1. `uclone-slices-v2-manager-0.2.4-<sha>.apk`
-2. `uclone-slices-v2-kernelsu-0.2.4-<sha>.zip`
+1. `uclone-slices-manager-<version>-<sha>.apk`
+2. `uclone-slices-kernelsu-<version>-<sha>.zip`
 3. `SHA256SUMS.txt`
 
 安装步骤：
@@ -46,9 +46,7 @@ Release 产物由 `Validate V2` GitHub Actions 从同一提交 SHA 生成：
 3. 重启手机并解锁 user0。
 4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.2.2`（协议 ID）。
 
-Fixture 只参与 CI 编译兼容检查，不属于正式交付物，也不用于本轮真机验收。
-
-> 安装前必须比较手机现有 APK 与下载 APK 的证书。若 Runner 签名不同，只能对下载的 Release APK 用已验证匹配手机的 keystore 重新签名；不要卸载或清数据。
+Release APK 使用固定证书签名，CI 会校验证书；覆盖安装即可，不要卸载或清数据。
 
 ## 基本使用
 
@@ -100,7 +98,7 @@ flowchart LR
 - `protocol/fixtures/`：Rust 与 Kotlin 共用的协议 fixtures。
 - `kernelsu/`：KernelSU 模块启动层。
 - `docs/`：开发约束、设置来源、真机验收和 ADR。
-- `tools/`：构建、只读诊断与恢复工具。
+- `tools/`：构建与校验脚本，以及只读设备诊断脚本 `diagnose-runtime.sh`。
 
 ## 构建与验证
 
@@ -110,15 +108,13 @@ flowchart LR
 cargo fmt --all -- --check
 cargo test --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
 ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-manager-helper.sh
 
 ./gradlew --no-daemon \
   :manager-app:testDebugUnitTest \
-  :manager-app:lintDebug \
   :manager-app:lintRelease \
-  :manager-app:assembleDebug \
   :manager-app:assembleRelease \
   :device-fixture-app:lintFromDebug \
   :device-fixture-app:lintToDebug \
@@ -130,7 +126,7 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-manager-helper.sh
 ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 ```
 
-真机验证步骤见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。问题必须先由只读探针或稳定失败测试确认，再修改生产代码。
+真机验证步骤见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。问题必须先由稳定失败的测试或只读诊断确认，再修改生产代码。
 
 ## 数据位置
 
