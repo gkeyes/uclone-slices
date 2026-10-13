@@ -62,6 +62,7 @@ val prepareArchiveHelper by tasks.registering(Copy::class) {
 android {
     namespace = "com.uclone.slices.v2"
     compileSdk = 37
+    buildToolsVersion = "37.0.0"
 
     defaultConfig {
         applicationId = "com.uclone.slices.v2"
