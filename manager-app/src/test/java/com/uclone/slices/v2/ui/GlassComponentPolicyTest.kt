@@ -50,13 +50,17 @@ class GlassComponentPolicyTest {
         }
         assertEquals(emptyList(), offenders)
         assertTrue("miuix" !in buildScript().readText())
+        assertTrue("miuix" !in versionCatalog().readText())
     }
 
     @Test
     fun liquidGlassComesFromTheBackdropLibrary() {
         val build = buildScript().readText()
-        assertTrue("io.github.kyant0:backdrop:" in build)
-        assertTrue("io.github.kyant0:shapes:" in build)
+        assertTrue("libs.kyant.backdrop" in build)
+        assertTrue("libs.kyant.shapes" in build)
+        val catalog = versionCatalog().readText()
+        assertTrue("module = \"io.github.kyant0:backdrop\"" in catalog)
+        assertTrue("module = \"io.github.kyant0:shapes\"" in catalog)
     }
 
     @Test
@@ -111,6 +115,9 @@ class GlassComponentPolicyTest {
     }
 
     private fun buildScript(): File = File(System.getProperty("user.dir"), "build.gradle.kts")
+
+    private fun versionCatalog(): File =
+        File(System.getProperty("user.dir"), "../gradle/libs.versions.toml")
 
     private fun sources(): File {
         val sources = File(System.getProperty("user.dir"), "src/main/java")
