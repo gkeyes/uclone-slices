@@ -524,6 +524,16 @@ pub enum PackageEnabledState {
     DisabledUntilUsed,
 }
 
+impl PackageEnabledState {
+    /// Whether the app may be launched in this state.
+    pub fn allows_launch(self) -> bool {
+        !matches!(
+            self,
+            Self::Disabled | Self::DisabledUser | Self::DisabledUntilUsed
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountIoPhase {

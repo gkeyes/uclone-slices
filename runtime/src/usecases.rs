@@ -1137,17 +1137,11 @@ where
                         logged_conflict(operation, package, "restore_enabled_state", error)
                     })?;
             }
-            let enabled_allows_launch = !matches!(
-                intent.previous_enabled_state,
-                Some(
-                    PackageEnabledState::Disabled
-                        | PackageEnabledState::DisabledUser
-                        | PackageEnabledState::DisabledUntilUsed
-                )
-            );
             if relaunch
                 && intent.previous_was_running
-                && enabled_allows_launch
+                && intent
+                    .previous_enabled_state
+                    .is_none_or(PackageEnabledState::allows_launch)
                 && let Err(error) = self
                     .android
                     .launch_verified(package, &intent.previous_active_slot)
@@ -1433,18 +1427,12 @@ where
                 })?;
         }
         let mut app_started = false;
-        let enabled_allows_launch = !matches!(
-            intent.previous_enabled_state,
-            Some(
-                PackageEnabledState::Disabled
-                    | PackageEnabledState::DisabledUser
-                    | PackageEnabledState::DisabledUntilUsed
-            )
-        );
         if relaunch
             && intent.maintenance_active
             && intent.previous_was_running
-            && enabled_allows_launch
+            && intent
+                .previous_enabled_state
+                .is_none_or(PackageEnabledState::allows_launch)
         {
             match self
                 .android

@@ -169,10 +169,11 @@ impl SystemAndroidOps {
         package_uid_from_rows(self.package_rows()?, package)
     }
 
-    fn running_uids(&self) -> Result<HashSet<u32>, AdapterError> {
+    /// Every process in `/proc` with its owning uid.
+    fn process_uids(&self) -> Result<Vec<(PathBuf, u32)>, AdapterError> {
         let entries =
             fs::read_dir(&self.proc_root).map_err(|error| AdapterError::new(error.to_string()))?;
-        let mut uids = HashSet::new();
+        let mut processes = Vec::new();
         for entry in entries {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -187,10 +188,18 @@ impl SystemAndroidOps {
                 continue;
             }
             if let Some(uid) = process_uid(&entry.path())? {
-                uids.insert(uid);
+                processes.push((entry.path(), uid));
             }
         }
-        Ok(uids)
+        Ok(processes)
+    }
+
+    fn running_uids(&self) -> Result<HashSet<u32>, AdapterError> {
+        Ok(self
+            .process_uids()?
+            .into_iter()
+            .map(|(_process, uid)| uid)
+            .collect())
     }
 
     fn apk_path(&mut self, package: &PackageName) -> Result<PathBuf, AdapterError> {
@@ -244,28 +253,39 @@ impl SystemAndroidOps {
     }
 
     fn package_processes(&self, uid: u32) -> Result<Vec<PathBuf>, AdapterError> {
-        let entries =
-            fs::read_dir(&self.proc_root).map_err(|error| AdapterError::new(error.to_string()))?;
-        let mut processes = Vec::new();
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(AdapterError::new(error.to_string())),
-            };
-            let name = entry.file_name();
-            let Some(pid) = name.to_str() else {
-                continue;
-            };
-            if !pid.bytes().all(|byte| byte.is_ascii_digit()) {
-                continue;
-            }
-            if process_uid(&entry.path())? == Some(uid) {
-                processes.push(entry.path());
-            }
-        }
+        let mut processes = self
+            .process_uids()?
+            .into_iter()
+            .filter(|(_process, owner)| *owner == uid)
+            .map(|(process, _owner)| process)
+            .collect::<Vec<_>>();
         processes.sort();
         Ok(processes)
+    }
+
+    /// The installed identity of `package` running as `uid` from `apk_path`; both data
+    /// directories must exist.
+    fn package_identity(
+        &self,
+        package: &PackageName,
+        uid: u32,
+        apk_path: &Path,
+    ) -> Result<PackageIdentity, AdapterError> {
+        let (canonical_ce, canonical_de) = self.canonical_paths(package);
+        if !canonical_ce.is_dir() || !canonical_de.is_dir() {
+            return Err(AdapterError::new(
+                "package CE/DE directories are not both available",
+            ));
+        }
+        let metadata =
+            fs::metadata(apk_path).map_err(|error| AdapterError::new(error.to_string()))?;
+        PackageIdentity::new(
+            uid,
+            path_text(apk_path)?.to_owned(),
+            metadata.dev(),
+            metadata.ino(),
+        )
+        .map_err(|error| AdapterError::new(error.to_string()))
     }
 
     fn confirm_package_processes_stopped(&self, uid: u32) -> Result<(), AdapterError> {
@@ -464,21 +484,7 @@ impl AndroidOps for SystemAndroidOps {
         let uid = self.package_uid(package)?;
         let apk_path = self.apk_path(package)?;
         let _launcher = self.launcher_component(package)?;
-        let (canonical_ce, canonical_de) = self.canonical_paths(package);
-        if !canonical_ce.is_dir() || !canonical_de.is_dir() {
-            return Err(AdapterError::new(
-                "package CE/DE directories are not both available",
-            ));
-        }
-        let metadata =
-            fs::metadata(&apk_path).map_err(|error| AdapterError::new(error.to_string()))?;
-        let identity = PackageIdentity::new(
-            uid,
-            path_text(&apk_path)?.to_owned(),
-            metadata.dev(),
-            metadata.ino(),
-        )
-        .map_err(|error| AdapterError::new(error.to_string()))?;
+        let identity = self.package_identity(package, uid, &apk_path)?;
         Ok(PackageInspection {
             identity,
             was_running: !self.package_processes(uid)?.is_empty(),
@@ -492,18 +498,12 @@ impl AndroidOps for SystemAndroidOps {
         if packages.is_empty() {
             return Vec::new();
         }
-        let rows = match self.package_rows() {
-            Ok(rows) => rows.to_vec(),
-            Err(error) => {
-                return packages
-                    .iter()
-                    .cloned()
-                    .map(|package| (package, Err(error.clone())))
-                    .collect();
-            }
-        };
-        let running_uids = match self.running_uids() {
-            Ok(uids) => uids,
+        let shared = self
+            .package_rows()
+            .map(<[_]>::to_vec)
+            .and_then(|rows| Ok((rows, self.running_uids()?)));
+        let (rows, running_uids) = match shared {
+            Ok(shared) => shared,
             Err(error) => {
                 return packages
                     .iter()
@@ -516,29 +516,13 @@ impl AndroidOps for SystemAndroidOps {
             .iter()
             .cloned()
             .map(|package| {
-                let inspection = (|| {
-                    let uid = package_uid_from_rows(&rows, &package)?;
+                let inspection = package_uid_from_rows(&rows, &package).and_then(|uid| {
                     let apk_path = self.apk_path(&package)?;
-                    let (canonical_ce, canonical_de) = self.canonical_paths(&package);
-                    if !canonical_ce.is_dir() || !canonical_de.is_dir() {
-                        return Err(AdapterError::new(
-                            "package CE/DE directories are not both available",
-                        ));
-                    }
-                    let metadata = fs::metadata(&apk_path)
-                        .map_err(|error| AdapterError::new(error.to_string()))?;
-                    let identity = PackageIdentity::new(
-                        uid,
-                        path_text(&apk_path)?.to_owned(),
-                        metadata.dev(),
-                        metadata.ino(),
-                    )
-                    .map_err(|error| AdapterError::new(error.to_string()))?;
                     Ok(PackageInspection {
-                        identity,
+                        identity: self.package_identity(&package, uid, &apk_path)?,
                         was_running: running_uids.contains(&uid),
                     })
-                })();
+                });
                 (package, inspection)
             })
             .collect()
