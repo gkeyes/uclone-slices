@@ -1,9 +1,11 @@
 package com.uclone.slices.v2
 
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
@@ -69,6 +71,17 @@ class MainActivity : ComponentActivity() {
                     viewModel.onIntent(UiIntent.AppResumed)
                 }
                 val backupState by backupViewModel.state.collectAsStateWithLifecycle()
+                // Backup passwords and the restore preview (account names, device details) stay
+                // out of screenshots, screen recording and the recents thumbnail.
+                val secure = state.destination == ManagerDestination.BackupRestore
+                DisposableEffect(secure) {
+                    if (secure) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    }
+                    onDispose { }
+                }
                 val dispatchSlotsIntent: (UiIntent) -> Unit = { intent ->
                     when (intent) {
                         is UiIntent.OpenBackupRestore -> {

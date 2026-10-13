@@ -149,13 +149,28 @@ internal class BackupRestoreEngine(
 
     private suspend fun performBackup(job: BackupRestoreJob.Backup) {
         val destination = Uri.parse(job.destinationUri)
+        try {
+            performBackupInto(job, destination)
+        } finally {
+            releasePersistablePermission(context, destination, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
+    }
+
+    private suspend fun performBackupInto(job: BackupRestoreJob.Backup, destination: Uri) {
+        // A document that already had content was picked as "replace"; it is only cleared once
+        // this job has started overwriting it, so a failed backup never destroys an older one.
+        val preexisting = documentHasContent(destination)
+        var writeStarted = false
+        fun discardDocument() {
+            if (!preexisting || writeStarted) truncateOrDeleteDocument(destination)
+        }
         val lease = when (
             val reply = runtime.execute(RuntimeCommand.BeginBackupIo(job.packageName, job.scope))
         ) {
             is RuntimeReply.AccountIoLeaseReply -> reply.lease
             else -> {
                 job.password?.fill('\u0000')
-                truncateOrDeleteDocument(destination)
+                discardDocument()
                 publishRuntimeFailure(reply)
                 return
             }
@@ -163,7 +178,7 @@ internal class BackupRestoreEngine(
         if (lease.kind != AccountIoKind.Backup || lease.sources.isEmpty()) {
             job.password?.fill('\u0000')
             withContext(NonCancellable) { abort(lease.ioToken) }
-            truncateOrDeleteDocument(destination)
+            discardDocument()
             BackupRestoreJobRegistry.publish(BackupJobState.Failure("operation_failed"))
             return
         }
@@ -198,6 +213,7 @@ internal class BackupRestoreEngine(
             ) { done, total -> publishBytes(BackupJobKind.Backup, done, total) }
             result = when (helperResult) {
                 is ArchiveHelperResult.Success -> {
+                    writeStarted = true
                     copyToDocument(outputFile, destination)
                     documentComplete = true
                     BackupJobState.BackupComplete(
@@ -214,7 +230,7 @@ internal class BackupRestoreEngine(
             output?.delete()
             job.password?.fill('\u0000')
             withContext(NonCancellable) {
-                if (!documentComplete) truncateOrDeleteDocument(destination)
+                if (!documentComplete) discardDocument()
                 val finalization = runtime.execute(
                     backupFinalizationCommand(lease.ioToken, documentComplete),
                 )
@@ -227,6 +243,20 @@ internal class BackupRestoreEngine(
     }
 
     private suspend fun performInspect(job: BackupRestoreJob.Inspect) {
+        try {
+            inspectArchive(job)
+        } finally {
+            // The archive is either rejected or copied into the cache by now; the restore itself
+            // reads that copy, so the read grant on the user's document is no longer needed.
+            releasePersistablePermission(
+                context,
+                Uri.parse(job.sourceUri),
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        }
+    }
+
+    private suspend fun inspectArchive(job: BackupRestoreJob.Inspect) {
         var input: File? = null
         var retainPassword = false
         try {
@@ -511,6 +541,10 @@ internal class BackupRestoreEngine(
             }
         } ?: throw IOException("document unavailable")
     }
+
+    private fun documentHasContent(uri: Uri): Boolean = runCatching {
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize > 0 } ?: false
+    }.getOrDefault(false)
 
     private fun truncateOrDeleteDocument(uri: Uri) {
         runCatching {
