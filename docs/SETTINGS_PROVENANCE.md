@@ -31,8 +31,8 @@
 | `base` 后从 `slot-1` 递增的内部槽 ID | V2 聚合模型的确定性标识规则；槽 ID 对 Manager 是不透明字符串 | 聚合测试和共享 fixtures |
 | 创建页默认选择空白槽 | 固定旧版行为基线中的真实创建入口默认值 | ViewModel 完整链路测试 |
 | Rust 1.95、edition 2024 | 旧版固定基线 `2ae26765…/slot-runtime/Cargo.toml`；V2 已在本机完整通过 | format、test、Clippy、doc |
-| AGP 9.4.1（内置 Kotlin）、Kotlin 2.2.20、Gradle 9.8.1、JDK 17、compileSdk 37、targetSdk 36、minSdk 29、Compose 依赖版本 | 同一旧版固定提交的根构建和 Manager 构建文件；这里只沿用已通过的工具链，不沿用旧架构 | Gradle test、lint、assemble |
-| Gradle 8.13 | 与当前 AGP 组合完成本机构建；wrapper 是唯一 Gradle 版本源 | `./gradlew` 构建 |
+| AGP 9.4.1（内置 Kotlin）、Kotlin 2.2.20、JDK 17、compileSdk 37、targetSdk 36、minSdk 29、Compose BOM 2026.09.00、core-ktx 1.19.1 | 2026-10-13 工具链升级合并 Dependabot #20–#23：新版 Compose BOM 与 core-ktx 要求 compileSdk 37；AGP 9 内置 Kotlin 取代 `org.jetbrains.kotlin.android` 插件，Kotlin 2.2.20 是其支持的最低 KGP；targetSdk 不变 | Gradle test、lint、assemble、远端 CI |
+| Gradle 9.8.1 | 2026-10-13 随 AGP 9.4.1 升级（Dependabot #23 的 wrapper 文件）；wrapper 是唯一 Gradle 版本源 | `./gradlew` 构建、远端 CI |
 | GitHub runner `ubuntu-24.04` | CI 明确固定 Linux runner，避免首个基线随 `ubuntu-latest` 漂移；不是产品运行限制 | 首次远端 CI 尚待真机门禁后验证 |
 | Android build-tools `37.0.0` | 与项目 `compileSdk 37` 配套安装，避免 CI 隐式选择不同 build-tools | Android assemble、首次远端 CI |
 | NDK 29.0.14206865、Android API 29、aarch64 | 旧版固定提交的 Android arm64 构建链和设备可行性证据；V2 已完成交叉编译 | KernelSU ZIP 构建和完整性检查 |

@@ -148,6 +148,7 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.kotlinx.coroutines.android)
 
-    testImplementation(kotlin("test"))
+    // AGP 9 built-in Kotlin does not infer the kotlin-test JUnit variant, so name it.
+    testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.org.json)
 }
