@@ -594,12 +594,13 @@ fn restore_backup_inner(
             require_empty_real_directory(&destination.ce_path)?;
             require_empty_real_directory(&destination.de_path)?;
         }
-        ensure_restore_capacity(
-            destinations
-                .iter()
-                .flat_map(|destination| [&destination.ce_path, &destination.de_path]),
-            manifest.logical_size,
-        )?;
+        ensure_restore_capacity(manifest.accounts.iter().flat_map(|account| {
+            let destination = destination_map[account.archive_account_id.as_str()];
+            [
+                (&destination.ce_path, &account.ce),
+                (&destination.de_path, &account.de),
+            ]
+        }))?;
         let expected = manifest_entry_index(&manifest);
         let mut seen = BTreeSet::new();
         let mut entry_count = 0_usize;
@@ -1728,21 +1729,55 @@ fn open_regular_nofollow(path: &Path) -> Result<File, ArchiveError> {
 ///
 /// `f_bavail` leaves out the blocks the filesystem reserves for root, so a restore running as root
 /// fails cleanly instead of eating into that reserve and filling `/data` completely.
+/// Free space a restore must leave on each filesystem so the system stays usable afterwards.
+const RESTORE_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Refuses a restore that cannot fit before anything is written. Each domain is charged to the
+/// filesystem it lands on, every file is rounded up to whole blocks, every entry also costs one
+/// block of metadata and one inode, and a reserve keeps the filesystem usable afterwards.
 fn ensure_restore_capacity<'a>(
-    roots: impl IntoIterator<Item = &'a PathBuf>,
-    required: u64,
+    domains: impl IntoIterator<Item = (&'a PathBuf, &'a DomainManifest)>,
 ) -> Result<(), ArchiveError> {
-    let mut devices = BTreeSet::new();
-    for root in roots {
-        if !devices.insert(fs::metadata(root).map_err(io_error)?.dev()) {
-            continue;
+    struct Demand {
+        stats: rustix::fs::StatVfs,
+        bytes: u64,
+        inodes: u64,
+    }
+    let mut devices = BTreeMap::<u64, Demand>::new();
+    for (root, manifest) in domains {
+        let device = fs::metadata(root).map_err(io_error)?.dev();
+        let demand = match devices.entry(device) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(Demand {
+                stats: rustix::fs::statvfs(root.as_path()).map_err(io_error)?,
+                bytes: RESTORE_RESERVE_BYTES,
+                inodes: 0,
+            }),
+        };
+        let block = demand.stats.f_frsize;
+        for entry in &manifest.entries {
+            demand.bytes = demand
+                .bytes
+                .saturating_add(allocated_bytes(entry.size, block));
         }
-        let stats = rustix::fs::statvfs(root.as_path()).map_err(io_error)?;
-        if required > stats.f_bavail.saturating_mul(stats.f_frsize) {
+        demand.inodes = demand.inodes.saturating_add(manifest.entries.len() as u64);
+    }
+    for demand in devices.values() {
+        let free_bytes = demand.stats.f_bavail.saturating_mul(demand.stats.f_frsize);
+        // Filesystems without a fixed inode table report zero total inodes.
+        let inodes_short = demand.stats.f_files != 0 && demand.inodes > demand.stats.f_favail;
+        if demand.bytes > free_bytes || inodes_short {
             return Err(ArchiveError::InsufficientStorage);
         }
     }
     Ok(())
+}
+
+/// Bytes a file of `size` occupies: whole data blocks plus one block of metadata, so even an
+/// empty file or a directory is never free.
+fn allocated_bytes(size: u64, block: u64) -> u64 {
+    let block = block.max(1);
+    size.div_ceil(block).saturating_add(1).saturating_mul(block)
 }
 
 fn require_real_directory(path: &Path) -> Result<(), ArchiveError> {
@@ -2130,11 +2165,35 @@ mod tests {
         let temp = tempfile::tempdir().map_err(io_error)?;
         let root = temp.path().to_path_buf();
 
-        ensure_restore_capacity([&root, &root], 0)?;
+        let domain = |sizes: &[u64]| DomainManifest {
+            state: DomainState::Data,
+            logical_size: sizes.iter().sum(),
+            entries: sizes
+                .iter()
+                .enumerate()
+                .map(|(index, size)| ManifestEntry {
+                    path: format!("file{index}"),
+                    kind: ManifestEntryKind::File,
+                    size: *size,
+                    sha256: None,
+                    link_target: None,
+                    mode: 0o600,
+                    mtime_seconds: 0,
+                })
+                .collect(),
+        };
+        let small = domain(&[0, 1]);
+        ensure_restore_capacity([(&root, &small), (&root, &small)])?;
+        let huge = domain(&[u64::MAX / 2]);
         assert!(matches!(
-            ensure_restore_capacity([&root], u64::MAX),
+            ensure_restore_capacity([(&root, &small), (&root, &huge)]),
             Err(ArchiveError::InsufficientStorage),
         ));
+        // Empty files and directories still cost a block, and partial blocks round up.
+        assert_eq!(allocated_bytes(0, 4096), 4096);
+        assert_eq!(allocated_bytes(1, 4096), 8192);
+        assert_eq!(allocated_bytes(4096, 4096), 8192);
+        assert_eq!(allocated_bytes(u64::MAX, 4096), u64::MAX);
         Ok(())
     }
 
