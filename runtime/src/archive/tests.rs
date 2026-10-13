@@ -2,6 +2,28 @@
 
 use super::*;
 
+fn ignore_progress(_done: u64, _total: u64) {}
+
+fn create_backup(request: BackupRequest) -> Result<ArchiveManifest, ArchiveError> {
+    create_backup_with_progress(request, None, &mut Progress::new(&mut ignore_progress))
+}
+
+fn create_backup_for_owner(
+    request: BackupRequest,
+    uid: u32,
+    gid: u32,
+) -> Result<ArchiveManifest, ArchiveError> {
+    create_backup_with_progress(
+        request,
+        Some((uid, gid)),
+        &mut Progress::new(&mut ignore_progress),
+    )
+}
+
+fn restore_backup(request: RestoreRequest) -> Result<ArchiveManifest, ArchiveError> {
+    restore_backup_with_progress(request, &mut Progress::new(&mut ignore_progress))
+}
+
 fn request(root: &Path, encrypted: bool) -> BackupRequest {
     let ce = root.join("source/ce");
     let de = root.join("source/de");

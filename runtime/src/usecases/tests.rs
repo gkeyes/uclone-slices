@@ -156,7 +156,7 @@ fn runtime() -> TestRuntime {
 fn with_slot() -> (TestRuntime, SlotId) {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let snapshot = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -193,8 +193,8 @@ fn listing_skips_a_failed_package_and_keeps_healthy_packages() {
         MemorySlotStorage::default(),
         android,
     );
-    runtime.enroll(failed.clone(), false, None).unwrap();
-    runtime.enroll(healthy.clone(), false, None).unwrap();
+    runtime.enroll(failed.clone(), None).unwrap();
+    runtime.enroll(healthy.clone(), None).unwrap();
     let (packages, slots, mut android) = runtime.into_parts();
     android.fail_next(AndroidFailure::Inspect);
     let mut runtime = Runtime::new(packages, slots, android);
@@ -214,9 +214,9 @@ fn listing_skips_a_failed_package_and_keeps_healthy_packages() {
 fn enrolling_an_existing_package_reloads_it() {
     let package = package();
     let mut runtime = runtime();
-    let first = runtime.enroll(package.clone(), false, None).unwrap();
+    let first = runtime.enroll(package.clone(), None).unwrap();
 
-    let second = runtime.enroll(package, false, None).unwrap();
+    let second = runtime.enroll(package, None).unwrap();
 
     assert_eq!(second, first);
 }
@@ -501,9 +501,7 @@ fn legacy_identity_change_stays_listed_until_confirmed_without_losing_slots() {
 fn same_signing_identity_rebinds_future_apk_replacements_without_confirmation() {
     let package = package();
     let mut runtime = runtime();
-    runtime
-        .enroll(package.clone(), false, Some(signing()))
-        .unwrap();
+    runtime.enroll(package.clone(), Some(signing())).unwrap();
     let created = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -555,12 +553,8 @@ fn package_listing_marks_only_the_app_whose_apk_identity_changed() {
         MemorySlotStorage::default(),
         android,
     );
-    runtime
-        .enroll(changed.clone(), false, Some(signing()))
-        .unwrap();
-    runtime
-        .enroll(untouched.clone(), false, Some(signing()))
-        .unwrap();
+    runtime.enroll(changed.clone(), Some(signing())).unwrap();
+    runtime.enroll(untouched.clone(), Some(signing())).unwrap();
     let (packages, slots, mut android) = runtime.into_parts();
     android.change_identity(&changed);
     let mut runtime = Runtime::new(packages, slots, android);
@@ -590,9 +584,7 @@ fn package_listing_marks_only_the_app_whose_apk_identity_changed() {
 fn signer_mismatch_protects_old_slots_without_android_side_effects() {
     let package = package();
     let mut runtime = runtime();
-    runtime
-        .enroll(package.clone(), false, Some(signing()))
-        .unwrap();
+    runtime.enroll(package.clone(), Some(signing())).unwrap();
     let created = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -621,9 +613,7 @@ fn signer_mismatch_protects_old_slots_without_android_side_effects() {
 fn uid_change_is_never_accepted_even_with_the_same_signing_identity() {
     let package = package();
     let mut runtime = runtime();
-    runtime
-        .enroll(package.clone(), false, Some(signing()))
-        .unwrap();
+    runtime.enroll(package.clone(), Some(signing())).unwrap();
     let created = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -659,9 +649,7 @@ fn uid_change_is_never_accepted_even_with_the_same_signing_identity() {
 fn incomplete_slot_pair_blocks_rebind_before_the_journal_or_mount_changes() {
     let package = package();
     let mut runtime = runtime();
-    runtime
-        .enroll(package.clone(), false, Some(signing()))
-        .unwrap();
+    runtime.enroll(package.clone(), Some(signing())).unwrap();
     let created = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -690,9 +678,7 @@ fn incomplete_slot_pair_blocks_rebind_before_the_journal_or_mount_changes() {
 fn inconsistent_view_blocks_rebind_before_the_journal_or_mount_changes() {
     let package = package();
     let mut runtime = runtime();
-    runtime
-        .enroll(package.clone(), false, Some(signing()))
-        .unwrap();
+    runtime.enroll(package.clone(), Some(signing())).unwrap();
     let created = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -753,9 +739,7 @@ fn legacy_identity_match_silently_adds_the_sidecar_and_inventory_backup() {
 fn interrupted_rebind_keeps_the_journal_and_resumes_without_launching() {
     let package = package();
     let mut runtime = runtime();
-    runtime
-        .enroll(package.clone(), false, Some(signing()))
-        .unwrap();
+    runtime.enroll(package.clone(), Some(signing())).unwrap();
     let created = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -791,23 +775,10 @@ fn interrupted_rebind_keeps_the_journal_and_resumes_without_launching() {
 }
 
 #[test]
-fn old_destructive_reset_command_is_rejected() {
-    let package = package();
-    let (mut runtime, target) = with_slot();
-
-    assert_eq!(
-        runtime.enroll(package.clone(), true, None),
-        Err(RuntimeError::InvalidRequest)
-    );
-    let (_packages, slots, _android) = runtime.into_parts();
-    assert!(slots.contains(&package, &target));
-}
-
-#[test]
 fn save_intent_failure_does_not_touch_slot_storage() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let (mut packages, slots, android) = runtime.into_parts();
     packages.fail_next_save();
     let mut runtime = Runtime::new(packages, slots, android);
@@ -823,7 +794,7 @@ fn save_intent_failure_does_not_touch_slot_storage() {
 fn insufficient_clone_capacity_is_reported_before_any_side_effect() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let (packages, mut slots, android) = runtime.into_parts();
     slots.fail_next(SlotFailure::MaterializeCapacity);
     let saves_before = packages.save_calls();
@@ -861,7 +832,7 @@ fn one_unreadable_account_io_intent_does_not_block_other_packages_or_boot() {
         MemorySlotStorage::default(),
         android,
     );
-    runtime.enroll(healthy.clone(), false, None).unwrap();
+    runtime.enroll(healthy.clone(), None).unwrap();
     let broken = PackageName::new("com.other.app").unwrap();
     let broken_root = root.path().join("packages").join(broken.as_str());
     std::fs::create_dir_all(&broken_root).unwrap();
@@ -890,7 +861,7 @@ fn each_domain_materialization_failure_aborts_creation() {
     for failure in [SlotFailure::MaterializeCe, SlotFailure::MaterializeDe] {
         let package = package();
         let mut runtime = runtime();
-        runtime.enroll(package.clone(), false, None).unwrap();
+        runtime.enroll(package.clone(), None).unwrap();
         let (packages, mut slots, android) = runtime.into_parts();
         slots.fail_next(failure);
         let mut runtime = Runtime::new(packages, slots, android);
@@ -908,7 +879,7 @@ fn each_domain_materialization_failure_aborts_creation() {
 fn stale_target_discard_failure_aborts_before_materialization() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let (packages, mut slots, android) = runtime.into_parts();
     slots.fail_next(SlotFailure::Discard);
     let mut runtime = Runtime::new(packages, slots, android);
@@ -925,7 +896,7 @@ fn stale_target_discard_failure_aborts_before_materialization() {
 fn interrupted_creation_discards_pair_and_restores_running_app() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let (mut packages, mut slots, mut android) = runtime.into_parts();
     let mut aggregate = packages.load(&package).unwrap().unwrap();
     let slot = aggregate
@@ -950,7 +921,7 @@ fn interrupted_creation_discards_pair_and_restores_running_app() {
 fn clone_base_checks_the_real_view_as_well_as_the_aggregate() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let (packages, slots, mut android) = runtime.into_parts();
     android.set_view(&package, ObservedView::Slot(SlotId::numbered(8)));
     let mut runtime = Runtime::new(packages, slots, android);
@@ -1177,7 +1148,7 @@ fn interactive_restore_never_uses_the_reboot_launch_setting() {
 fn base_never_auto_launches_even_when_enabled() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     runtime.set_launch_after_reboot(&package, true).unwrap();
     let (packages, slots, mut android) = runtime.into_parts();
     android.force_stop(&package).unwrap();
@@ -1213,7 +1184,7 @@ fn package_listing_restores_views_without_launching_apps() {
     );
     let mut targets = Vec::new();
     for package in [&opted_in, &opted_out] {
-        runtime.enroll(package.clone(), false, None).unwrap();
+        runtime.enroll(package.clone(), None).unwrap();
         let target = runtime
             .create_slot(package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
             .unwrap()
@@ -1257,7 +1228,7 @@ fn boot_reconcile_launches_only_opted_in_non_base_packages() {
     );
     let mut targets = Vec::new();
     for package in [&opted_in, &opted_out] {
-        runtime.enroll(package.clone(), false, None).unwrap();
+        runtime.enroll(package.clone(), None).unwrap();
         let target = runtime
             .create_slot(package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
             .unwrap()
@@ -1267,7 +1238,7 @@ fn boot_reconcile_launches_only_opted_in_non_base_packages() {
         runtime.activate_slot(package, &target).unwrap();
         targets.push((package.clone(), target));
     }
-    runtime.enroll(base.clone(), false, None).unwrap();
+    runtime.enroll(base.clone(), None).unwrap();
     runtime.set_launch_after_reboot(&opted_in, true).unwrap();
     runtime.set_launch_after_reboot(&base, true).unwrap();
     let (packages, slots, mut android) = runtime.into_parts();
@@ -1304,7 +1275,7 @@ fn boot_reconcile_continues_after_one_package_fails() {
     );
     let mut targets = Vec::new();
     for package in [&first, &second] {
-        runtime.enroll(package.clone(), false, None).unwrap();
+        runtime.enroll(package.clone(), None).unwrap();
         let target = runtime
             .create_slot(package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
             .unwrap()
@@ -1439,7 +1410,7 @@ fn unenroll_from_active_slot_returns_to_base_and_removes_every_slot() {
 fn unenroll_from_base_and_repeated_unenroll_are_idempotent() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
 
     runtime.unenroll(&package).unwrap();
     runtime.unenroll(&package).unwrap();
@@ -1877,7 +1848,7 @@ fn failed_boot_recovery_is_reported_and_retried_on_the_next_reconcile() {
 fn restore_lease_setup_failure_keeps_the_intent_when_staging_cleanup_fails() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-1").unwrap();
     runtime.packages.fail_next_save();
     runtime.slots.fail_next(SlotFailure::Cleanup);
@@ -1921,7 +1892,7 @@ fn restore_lease_setup_failure_keeps_the_intent_when_staging_cleanup_fails() {
 
 fn begin_new_slot_restore(runtime: &mut TestRuntime) -> (AccountIoToken, ArchiveAccountId) {
     let package = package();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-1").unwrap();
     let lease = runtime
         .begin_restore_io(
@@ -2029,7 +2000,7 @@ fn boot_recovers_an_interrupted_backup_before_normal_slot_convergence_without_la
 fn restore_blocks_launch_before_exposing_base_or_maintenance_views() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-0").unwrap();
     let lease = runtime
         .begin_restore_io(
@@ -2075,7 +2046,7 @@ fn restore_blocks_launch_before_exposing_base_or_maintenance_views() {
 fn restore_policy_is_persisted_in_schema_two_while_schema_one_defaults_to_replace() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-policy").unwrap();
     let policy = RestorePolicy::PreservePaths {
         paths: vec![RestorePath {
@@ -2134,7 +2105,7 @@ fn insufficient_base_rollback_capacity_preserves_ready_intent_and_staging() {
         CapacityDeniedStorage::default(),
         android,
     );
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-capacity").unwrap();
     let transfer_id = TransferId::new("transfer-capacity").unwrap();
     let lease = runtime
@@ -2204,7 +2175,7 @@ fn insufficient_base_capacity_from_an_active_slot_can_abort_to_the_previous_view
         CapacityDeniedStorage::default(),
         android,
     );
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let created = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -2281,7 +2252,7 @@ fn base_capacity_check_leaves_maintenance_after_an_earlier_slot_restore() {
         CapacityDeniedStorage::default(),
         android,
     );
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let slot_archive = ArchiveAccountId::new("account-1").unwrap();
     let base_archive = ArchiveAccountId::new("base").unwrap();
     let lease = runtime
@@ -2333,7 +2304,7 @@ fn base_capacity_check_leaves_maintenance_after_an_earlier_slot_restore() {
 fn single_account_restore_replaces_base_without_launching_the_app() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-0").unwrap();
     let lease = runtime
         .begin_restore_io(
@@ -2378,7 +2349,7 @@ fn single_account_restore_replaces_base_without_launching_the_app() {
 fn abort_after_final_cleanup_failure_finishes_the_committed_restore() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-1").unwrap();
     let lease = runtime
         .begin_restore_io(
@@ -2433,7 +2404,7 @@ fn abort_after_final_cleanup_failure_finishes_the_committed_restore() {
 fn boot_recovery_after_final_cleanup_failure_preserves_the_committed_restore() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-1").unwrap();
     let lease = runtime
         .begin_restore_io(
@@ -2487,7 +2458,7 @@ fn boot_recovery_after_final_cleanup_failure_preserves_the_committed_restore() {
 fn base_restore_leaves_the_maintenance_view_before_replacing_base() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("base").unwrap();
     let lease = runtime
         .begin_restore_io(
@@ -2612,7 +2583,7 @@ fn boot_recovery_leaves_maintenance_before_rolling_back_base() {
 fn restored_new_account_is_committed_to_the_ordinary_aggregate_only_after_data_success() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-1").unwrap();
     let lease = runtime
         .begin_restore_io(
@@ -2653,7 +2624,7 @@ fn restored_new_account_is_committed_to_the_ordinary_aggregate_only_after_data_s
 fn abort_before_the_first_restore_commit_does_not_stop_or_relaunch_the_app() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let archive_id = ArchiveAccountId::new("account-0").unwrap();
     let lease = runtime
         .begin_restore_io(
@@ -2692,7 +2663,7 @@ fn abort_before_the_first_restore_commit_does_not_stop_or_relaunch_the_app() {
 fn abort_after_maintenance_never_relaunches_a_previously_disabled_package() {
     let package = package();
     let mut runtime = runtime();
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let (packages, slots, mut android) = runtime.into_parts();
     android.set_enabled_state(&package, PackageEnabledState::DisabledUser);
     let mut runtime = Runtime::new(packages, slots, android);

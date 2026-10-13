@@ -203,6 +203,7 @@ pub struct SigningIdentity {
 }
 
 impl SigningIdentity {
+    #[cfg(test)]
     pub fn new(kind: SigningKind, sha256: Vec<String>) -> Result<Self, ModelError> {
         let identity = Self { kind, sha256 };
         identity.validate()?;

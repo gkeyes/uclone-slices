@@ -19,8 +19,6 @@ pub enum Command {
     Enroll {
         package: PackageName,
         #[serde(default)]
-        reset: bool,
-        #[serde(default)]
         signing: Option<SigningIdentity>,
     },
     RebindPackage {
@@ -102,11 +100,7 @@ pub enum ErrorCode {
     IdentityMismatch,
     OperationFailed,
     IoBusy,
-    BackupInvalid,
-    BackupPasswordRequired,
-    BackupAuthFailed,
     InsufficientStorage,
-    BackupIncompatible,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,7 +173,7 @@ fn decode_command(line: &str, expected_build_id: &str) -> Result<Command, Decode
         "probe" => &["op"][..],
         "list_packages" => &["op", "client_build_id"][..],
         "get_package" => &["op", "package", "client_build_id"][..],
-        "enroll" => &["op", "package", "reset", "signing", "client_build_id"][..],
+        "enroll" => &["op", "package", "signing", "client_build_id"][..],
         "rebind_package" => &[
             "op",
             "package",
@@ -222,13 +216,6 @@ fn decode_command(line: &str, expected_build_id: &str) -> Result<Command, Decode
             return Err(DecodeError::ClientBuildMismatch);
         }
     }
-    if operation == "enroll"
-        && object
-            .get("reset")
-            .is_some_and(|reset| reset != &serde_json::Value::Bool(true))
-    {
-        return Err(DecodeError::InvalidRequest);
-    }
     if operation == "rebind_package"
         && object
             .get("trust_legacy")
@@ -254,12 +241,8 @@ where
         Command::GetPackage { package } => runtime
             .get_package(&package)
             .map(|package| SuccessPayload::Package { package }),
-        Command::Enroll {
-            package,
-            reset,
-            signing,
-        } => runtime
-            .enroll(package, reset, signing)
+        Command::Enroll { package, signing } => runtime
+            .enroll(package, signing)
             .map(|package| SuccessPayload::Package { package }),
         Command::RebindPackage {
             package,
@@ -342,11 +325,7 @@ fn error_code(error: RuntimeError) -> ErrorCode {
         RuntimeError::IdentityMismatch => ErrorCode::IdentityMismatch,
         RuntimeError::OperationFailed => ErrorCode::OperationFailed,
         RuntimeError::IoBusy => ErrorCode::IoBusy,
-        RuntimeError::BackupInvalid => ErrorCode::BackupInvalid,
-        RuntimeError::BackupPasswordRequired => ErrorCode::BackupPasswordRequired,
-        RuntimeError::BackupAuthFailed => ErrorCode::BackupAuthFailed,
         RuntimeError::InsufficientStorage => ErrorCode::InsufficientStorage,
-        RuntimeError::BackupIncompatible => ErrorCode::BackupIncompatible,
     }
 }
 

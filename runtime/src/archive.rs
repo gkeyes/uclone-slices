@@ -335,8 +335,6 @@ impl<'a> Progress<'a> {
     }
 }
 
-fn ignore_progress(_done: u64, _total: u64) {}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchiveSource {
@@ -431,22 +429,6 @@ pub fn write_response(
     writer.write_all(b"\n").map_err(io_error)
 }
 
-pub fn create_backup(request: BackupRequest) -> Result<ArchiveManifest, ArchiveError> {
-    create_backup_with_progress(request, None, &mut Progress::new(&mut ignore_progress))
-}
-
-pub fn create_backup_for_owner(
-    request: BackupRequest,
-    uid: u32,
-    gid: u32,
-) -> Result<ArchiveManifest, ArchiveError> {
-    create_backup_with_progress(
-        request,
-        Some((uid, gid)),
-        &mut Progress::new(&mut ignore_progress),
-    )
-}
-
 /// Creates the archive, reporting progress over both passes: hashing for the manifest, then
 /// streaming every file into the archive while hashing it again against that manifest.
 pub fn create_backup_with_progress(
@@ -537,10 +519,6 @@ fn read_manifest_entry<R: Read>(
         serde_json::from_slice(&bytes).map_err(|_error| ArchiveError::Invalid)?;
     validate_manifest(&manifest)?;
     Ok(manifest)
-}
-
-pub fn restore_backup(request: RestoreRequest) -> Result<ArchiveManifest, ArchiveError> {
-    restore_backup_with_progress(request, &mut Progress::new(&mut ignore_progress))
 }
 
 pub fn restore_backup_with_progress(

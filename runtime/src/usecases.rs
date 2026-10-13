@@ -30,16 +30,8 @@ pub enum RuntimeError {
     OperationFailed,
     #[error("package account I/O is busy")]
     IoBusy,
-    #[error("backup is invalid")]
-    BackupInvalid,
-    #[error("backup password is required")]
-    BackupPasswordRequired,
-    #[error("backup authentication failed")]
-    BackupAuthFailed,
     #[error("insufficient storage")]
     InsufficientStorage,
-    #[error("backup is incompatible")]
-    BackupIncompatible,
 }
 
 #[derive(Debug)]
@@ -703,13 +695,9 @@ where
     pub fn enroll(
         &mut self,
         package: PackageName,
-        reset: bool,
         signing: Option<SigningIdentity>,
     ) -> Result<PackageSnapshot, RuntimeError> {
         self.ensure_no_account_io(&package)?;
-        if reset {
-            return Err(RuntimeError::InvalidRequest);
-        }
         if let Some(signing) = &signing {
             signing.validate().map_err(model_error)?;
         }

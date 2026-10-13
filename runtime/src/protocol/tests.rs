@@ -166,7 +166,7 @@ fn old_reset_enroll_is_rejected_without_deleting_slots() {
         MemorySlotStorage::default(),
         android,
     );
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     let created = runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
@@ -302,7 +302,7 @@ fn runtime_with_slot() -> Runtime<MemoryPackageStore, MemorySlotStorage, MemoryA
         MemorySlotStorage::default(),
         android,
     );
-    runtime.enroll(package.clone(), false, None).unwrap();
+    runtime.enroll(package.clone(), None).unwrap();
     runtime
         .create_slot(&package, DisplayName::new("Work").unwrap(), SeedMode::Blank)
         .unwrap();
