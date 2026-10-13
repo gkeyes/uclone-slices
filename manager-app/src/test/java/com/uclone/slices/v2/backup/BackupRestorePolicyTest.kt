@@ -237,6 +237,32 @@ class BackupRestorePolicyTest {
     }
 
     @Test
+    fun theRoutePageIsOpenedOnlyOncePerViewModel() {
+        val client = AccountIoRecoveryRuntimeClient(statuses = mutableListOf(pendingAccountIo()))
+        val viewModel = recoveryViewModel(client)
+
+        viewModel.openRoute("com.example.app", "slot-1")
+        viewModel.onIntent(BackupUiIntent.PasswordChanged("secret"))
+        // A recreated page (rotation) asks again; the page and what was typed stay.
+        viewModel.openRoute("com.example.app", "slot-1")
+
+        assertEquals(BackupRestorePage.BackupSetup, viewModel.state.value.page)
+        assertEquals("slot-1", viewModel.state.value.slotId)
+        assertEquals("secret", viewModel.state.value.password)
+        assertEquals(listOf<RuntimeCommand>(RuntimeCommand.ListAccountIoStatus), client.commands)
+    }
+
+    @Test
+    fun theRouteWithoutAPackageOpensTheLandingPage() {
+        val client = AccountIoRecoveryRuntimeClient(statuses = mutableListOf(pendingAccountIo()))
+        val viewModel = recoveryViewModel(client)
+
+        viewModel.openRoute(null, null)
+
+        assertEquals(BackupRestorePage.Landing, viewModel.state.value.page)
+    }
+
+    @Test
     fun recoveryAbortsOnlyTheExplicitlyConfirmedListedTokenThenRefreshes() {
         val status = pendingAccountIo()
         val client = AccountIoRecoveryRuntimeClient(statuses = mutableListOf(status))

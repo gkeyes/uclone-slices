@@ -4,11 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -16,10 +14,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.uclone.slices.v2.apps.PackageManagerInstalledApps
 import com.uclone.slices.v2.backup.BackupRestoreJobRegistry
 import com.uclone.slices.v2.backup.BackupRestoreViewModel
-import com.uclone.slices.v2.backup.BackupUiIntent
-import com.uclone.slices.v2.runtime.RootRuntimeClient
 import com.uclone.slices.v2.runtime.RootRuntimeMaintenance
-import com.uclone.slices.v2.ui.ManagerDestination
 import com.uclone.slices.v2.ui.SharedPreferencesManagerUiPreferences
 import com.uclone.slices.v2.ui.SlicesScreen
 import com.uclone.slices.v2.ui.SlicesTheme
@@ -34,6 +29,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val applicationContext = applicationContext
+        // Every Runtime command of the screens and the backup service goes through this one
+        // serialized connection.
+        val runtime = applicationContext.runtimeRepository
         val uiPreferences = SharedPreferencesManagerUiPreferences(applicationContext)
         if (savedInstanceState == null) {
             lifecycleScope.launch(Dispatchers.IO) {
@@ -46,7 +44,7 @@ class MainActivity : ComponentActivity() {
                     viewModelFactory {
                         initializer {
                             SlotsViewModel(
-                                RootRuntimeClient(),
+                                runtime,
                                 PackageManagerInstalledApps(applicationContext),
                                 Dispatchers.IO,
                                 uiPreferences,
@@ -61,65 +59,28 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                // Used by the backup and restore route, whose back-stack entry owns the
+                // ViewModel it creates.
                 val backupFactory = remember {
                     viewModelFactory {
                         initializer {
                             BackupRestoreViewModel(
                                 applicationContext,
-                                RootRuntimeClient(),
+                                runtime,
                                 PackageManagerInstalledApps(applicationContext),
                                 Dispatchers.IO,
                             )
                         }
                     }
                 }
+                // Shared by every spaces route (home, Add App, package page, Runtime status).
                 val viewModel: SlotsViewModel = viewModel(factory = factory)
-                val backupViewModel: BackupRestoreViewModel = viewModel(factory = backupFactory)
-                val state by viewModel.state.collectAsStateWithLifecycle()
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
                     viewModel.onIntent(UiIntent.AppResumed)
                 }
-                val backupState by backupViewModel.state.collectAsStateWithLifecycle()
-                // Remembered so SlicesScreen gets a stable callback. `state` is a delegated
-                // property of a remembered State, so every read below sees the latest value.
-                val dispatchSlotsIntent: (UiIntent) -> Unit = remember(viewModel, backupViewModel) {
-                    { intent: UiIntent ->
-                        when (intent) {
-                            is UiIntent.OpenBackupRestore -> {
-                                if (intent.packageName == null) {
-                                    backupViewModel.onIntent(BackupUiIntent.OpenLanding)
-                                } else {
-                                    backupViewModel.onIntent(
-                                        BackupUiIntent.OpenBackup(
-                                            intent.packageName,
-                                            intent.slotId,
-                                        ),
-                                    )
-                                }
-                            }
-                            UiIntent.NavigateBack -> if (
-                                state.destination == ManagerDestination.BackupRestore
-                            ) {
-                                backupViewModel.onIntent(BackupUiIntent.Leave)
-                            }
-                            else -> Unit
-                        }
-                        viewModel.onIntent(intent)
-                        if (
-                            intent == UiIntent.NavigateBack &&
-                            state.destination == ManagerDestination.BackupRestore
-                        ) {
-                            viewModel.onIntent(UiIntent.Refresh)
-                        }
-                    }
-                }
                 SlicesScreen(
-                    state = state,
-                    backupState = backupState,
-                    onIntent = dispatchSlotsIntent,
-                    onBackupIntent = backupViewModel::onIntent,
-                    suggestedBackupName = backupViewModel::suggestedBackupName,
-                    uiPreferences = uiPreferences,
+                    viewModel = viewModel,
+                    backupViewModelFactory = backupFactory,
                 )
             }
         }

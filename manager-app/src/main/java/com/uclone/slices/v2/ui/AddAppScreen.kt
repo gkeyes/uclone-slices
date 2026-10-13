@@ -24,6 +24,7 @@ internal fun AddAppScreen(
     state: SlotsUiState,
     contentPadding: PaddingValues,
     onIntent: (UiIntent) -> Unit,
+    onBack: () -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val availableApps = remember(state.installedApps, state.packages, query) {
@@ -36,7 +37,7 @@ internal fun AddAppScreen(
     ManagerScreen(
         title = stringResource(R.string.add_app),
         contentPadding = contentPadding,
-        onBack = { onIntent(UiIntent.NavigateBack) },
+        onBack = onBack,
         itemSpacing = 0.dp,
     ) {
         item(key = "subtitle") {

@@ -6,7 +6,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -221,7 +220,7 @@ internal fun Segmented(
     val haptic = LocalHapticFeedback.current
     val reduced = rememberReducedMotion()
     val shape = RoundedCornerShape(Radius.control)
-    val indicator = if (isSystemInDarkTheme()) Color(0xFF636366) else Color.White
+    val indicator = ThemeColors.segmentIndicator
     BoxWithConstraints(
         modifier
             .fillMaxWidth()

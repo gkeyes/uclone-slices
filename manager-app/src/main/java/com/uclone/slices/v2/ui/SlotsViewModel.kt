@@ -23,10 +23,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -42,8 +45,21 @@ internal class SlotsViewModel(
     private val mutableState = MutableStateFlow(
         SlotsUiState(
             configuredAccountsExpanded = uiPreferences.configuredAccountsExpanded,
+            homeAppOrder = uiPreferences.homeAppOrder,
         ),
     )
+    private val navigationEvents = Channel<SlotsNavigation>(Channel.UNLIMITED)
+
+    /**
+     * Moves for the nav host, each delivered once. Buffered, so a move requested while no
+     * collector is attached (between configuration changes) is made when one attaches again.
+     */
+    val navigation: Flow<SlotsNavigation> = navigationEvents.receiveAsFlow()
+
+    // The screen on top of the navigation back stack, as last reported by the nav host. Only read
+    // to decide what a result means for the visible page; navigation itself is the nav host's.
+    @Volatile
+    private var destination = ManagerDestination.Spaces
     private val noticeIds = AtomicLong()
     private val operationLock = Any()
     private var operationActive = false
@@ -100,17 +116,10 @@ internal class SlotsViewModel(
                 }
             }
             UiIntent.OpenAddApps -> openAddApps()
-            UiIntent.OpenRuntimeStatus -> navigateTo(ManagerDestination.RuntimeStatus)
-            is UiIntent.OpenBackupRestore -> {
-                if (!state.value.busy) {
-                    mutableState.update {
-                        it.copy(
-                            backupReturnDestination = it.destination,
-                            destination = ManagerDestination.BackupRestore,
-                        )
-                    }
-                }
-            }
+            UiIntent.OpenRuntimeStatus -> navigateTo(SlotsNavigation.ToRuntimeStatus)
+            is UiIntent.OpenBackupRestore -> navigateTo(
+                SlotsNavigation.ToBackupRestore(intent.packageName, intent.slotId),
+            )
             is UiIntent.OpenPackage -> openPackage(intent.packageName)
             is UiIntent.SetConfiguredAccountsExpanded -> {
                 uiPreferences.configuredAccountsExpanded = intent.expanded
@@ -122,7 +131,8 @@ internal class SlotsViewModel(
                 setLaunchAfterReboot(intent.packageName, intent.enabled)
             is UiIntent.QuickActivateSlot ->
                 quickActivateSlot(intent.packageName, intent.slotId)
-            UiIntent.NavigateBack -> navigateBack()
+            is UiIntent.DestinationChanged -> destinationChanged(intent.destination)
+            is UiIntent.Reorder -> reorder(intent.intent)
             is UiIntent.RequestConfigureApp -> requestConfigureApp(intent.packageName)
             UiIntent.ConfirmConfigureApp -> confirmConfigureApp()
             UiIntent.DismissConfigureApp -> mutableState.update {
@@ -175,14 +185,69 @@ internal class SlotsViewModel(
         scope.cancel()
     }
 
-    private fun navigateTo(destination: ManagerDestination) {
+    private fun navigate(navigation: SlotsNavigation) {
+        navigationEvents.trySend(navigation)
+    }
+
+    /** A move the user asked for; dropped while an operation runs, like every other tap. */
+    private fun navigateTo(navigation: SlotsNavigation) {
         if (state.value.busy) return
-        mutableState.update { it.copy(destination = destination) }
+        navigate(navigation)
+    }
+
+    private fun destinationChanged(destination: ManagerDestination) {
+        val previous = this.destination
+        this.destination = destination
+        // Back on the spaces list from another page (a recreated host reports the same page
+        // again, which changes nothing): the package page is gone, drop what belonged to it.
+        if (destination == ManagerDestination.Spaces && previous != ManagerDestination.Spaces) {
+            mutableState.update { current ->
+                current.copy(
+                    selected = null,
+                    seed = SeedMode.Blank,
+                    registrationRecovery = null,
+                    pendingRename = null,
+                    pendingDelete = null,
+                )
+            }
+        }
+    }
+
+    private fun reorder(intent: ReorderIntent) {
+        when (intent) {
+            ReorderIntent.Start -> mutableState.update { current ->
+                val keys = current.orderedManagedApps().map(InstalledApp::packageName)
+                if (keys.size > 1) current.copy(reorderDraft = keys) else current
+            }
+            is ReorderIntent.MoveTo -> editDraft {
+                HomeOrder.moveTo(it, intent.packageName, intent.target)
+            }
+            is ReorderIntent.MoveUp -> editDraft { HomeOrder.moveUp(it, intent.packageName) }
+            is ReorderIntent.MoveDown -> editDraft { HomeOrder.moveDown(it, intent.packageName) }
+            ReorderIntent.Cancel -> mutableState.update { it.copy(reorderDraft = null) }
+            ReorderIntent.Save -> {
+                val snapshot = state.value
+                if (snapshot.reorderDraft == null) return
+                val order = snapshot.reorderKeys()
+                uiPreferences.homeAppOrder = order
+                mutableState.update { it.copy(homeAppOrder = order, reorderDraft = null) }
+            }
+        }
+    }
+
+    private fun editDraft(edit: (List<String>) -> List<String>) {
+        mutableState.update { current ->
+            if (current.reorderDraft == null) {
+                current
+            } else {
+                current.copy(reorderDraft = edit(current.reorderKeys()))
+            }
+        }
     }
 
     private fun openAddApps() {
         if (state.value.busy) return
-        navigateTo(ManagerDestination.AddApp)
+        navigate(SlotsNavigation.ToAddApps)
         val snapshot = state.value
         if (!snapshot.appCatalogLoaded && !snapshot.appCatalogLoading) {
             loadAppCatalog()
@@ -265,29 +330,6 @@ internal class SlotsViewModel(
         }
     }
 
-    private fun navigateBack() {
-        if (state.value.busy) return
-        mutableState.update { current ->
-            when (current.destination) {
-                ManagerDestination.Spaces -> current
-                ManagerDestination.AddApp,
-                ManagerDestination.RuntimeStatus,
-                -> current.copy(destination = ManagerDestination.Spaces)
-                ManagerDestination.BackupRestore -> current.copy(
-                    destination = current.backupReturnDestination,
-                )
-                ManagerDestination.PackageDetails -> current.copy(
-                    destination = ManagerDestination.Spaces,
-                    selected = null,
-                    seed = SeedMode.Blank,
-                    registrationRecovery = null,
-                    pendingRename = null,
-                    pendingDelete = null,
-                )
-            }
-        }
-    }
-
     private fun openPackage(packageName: String) {
         val snapshot = state.value
         if (!snapshot.runtimeReady) {
@@ -309,10 +351,10 @@ internal class SlotsViewModel(
             mutableState.update {
                 it.copy(
                     selected = configured,
-                    destination = ManagerDestination.PackageDetails,
                     posted = post(UiNotice.RuntimeVersionMismatch),
                 )
             }
+            navigate(SlotsNavigation.ToPackage(packageName))
             return
         }
         if (configured.bindingState == BindingState.LegacyConfirmationRequired) {
@@ -329,10 +371,10 @@ internal class SlotsViewModel(
         mutableState.update {
             it.copy(
                 selected = configured,
-                destination = ManagerDestination.PackageDetails,
                 seed = SeedMode.Blank,
             )
         }
+        navigate(SlotsNavigation.ToPackage(packageName))
         runOperation(OperationUiState.OpeningPackage(packageName)) {
             applyPackageReply(
                 reply = client.execute(RuntimeCommand.GetPackage(packageName)),
@@ -728,11 +770,6 @@ internal class SlotsViewModel(
                         buildId = probe.buildId,
                         packages = if (compatible) it.packages else emptyList(),
                         selected = if (compatible) it.selected else null,
-                        destination = if (compatible) {
-                            it.destination
-                        } else {
-                            ManagerDestination.Spaces
-                        },
                         posted = if (compatible) {
                             it.posted
                         } else {
@@ -742,6 +779,8 @@ internal class SlotsViewModel(
                 }
                 if (compatible) {
                     refreshPackages()
+                } else if (destination != ManagerDestination.Spaces) {
+                    navigate(SlotsNavigation.ToSpaces)
                 }
             }
             is RuntimeReply.Error -> showError(probe.code)
@@ -758,7 +797,7 @@ internal class SlotsViewModel(
         // The refresh dropped the catalog; reload it when the Add App page is still showing it.
         val current = state.value
         if (
-            current.destination == ManagerDestination.AddApp &&
+            destination == ManagerDestination.AddApp &&
             !current.appCatalogLoaded &&
             !current.appCatalogLoading
         ) {
@@ -800,11 +839,14 @@ internal class SlotsViewModel(
                 } else {
                     reply.packages
                 }
+                var packagePageGone = false
                 mutableState.update { current ->
                     val selectedPackage = current.selected?.packageName
                     val selected = packages.firstOrNull {
                         it.packageName == selectedPackage
                     }
+                    packagePageGone = destination == ManagerDestination.PackageDetails &&
+                        selected == null
                     current.copy(
                         packages = packages.sortedBy(PackageSnapshot::packageName),
                         selected = selected,
@@ -813,19 +855,12 @@ internal class SlotsViewModel(
                         } else {
                             SeedMode.Blank
                         },
-                        destination = if (
-                            current.destination == ManagerDestination.PackageDetails &&
-                            selected == null
-                        ) {
-                            ManagerDestination.Spaces
-                        } else {
-                            current.destination
-                        },
                         pendingRename = null,
                         pendingDelete = null,
                         pendingUnenroll = null,
                     )
                 }
+                if (packagePageGone) navigate(SlotsNavigation.ToSpaces)
             }
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
@@ -912,24 +947,28 @@ internal class SlotsViewModel(
         successNotice: UiNotice?,
     ) {
         when (reply) {
-            is RuntimeReply.Package -> mutableState.update { current ->
-                val packages = current.packages
-                    .filterNot { it.packageName == reply.packageSnapshot.packageName } +
-                    reply.packageSnapshot
-                current.copy(
-                    packages = packages.sortedBy(PackageSnapshot::packageName),
-                    selected = reply.packageSnapshot,
-                    destination = ManagerDestination.PackageDetails,
-                    seed = if (reply.packageSnapshot.activeSlot == BASE_SLOT_ID) {
-                        current.seed
-                    } else {
-                        SeedMode.Blank
-                    },
-                    posted = successNotice?.let(::post),
-                    registrationRecovery = null,
-                    pendingRename = null,
-                    pendingDelete = null,
-                )
+            is RuntimeReply.Package -> {
+                mutableState.update { current ->
+                    val packages = current.packages
+                        .filterNot { it.packageName == reply.packageSnapshot.packageName } +
+                        reply.packageSnapshot
+                    current.copy(
+                        packages = packages.sortedBy(PackageSnapshot::packageName),
+                        selected = reply.packageSnapshot,
+                        seed = if (reply.packageSnapshot.activeSlot == BASE_SLOT_ID) {
+                            current.seed
+                        } else {
+                            SeedMode.Blank
+                        },
+                        posted = successNotice?.let(::post),
+                        registrationRecovery = null,
+                        pendingRename = null,
+                        pendingDelete = null,
+                    )
+                }
+                if (destination != ManagerDestination.PackageDetails) {
+                    navigate(SlotsNavigation.ToPackage(reply.packageSnapshot.packageName))
+                }
             }
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()
@@ -987,25 +1026,23 @@ internal class SlotsViewModel(
         reply: RuntimeReply,
     ) {
         when (reply) {
-            RuntimeReply.Ack -> mutableState.update { current ->
-                val removedSelected = current.selected?.packageName == packageName
-                current.copy(
-                    packages = current.packages.filterNot {
-                        it.packageName == packageName
-                    },
-                    selected = if (removedSelected) null else current.selected,
-                    destination = if (
-                        removedSelected &&
-                        current.destination == ManagerDestination.PackageDetails
-                    ) {
-                        ManagerDestination.Spaces
-                    } else {
-                        current.destination
-                    },
-                    posted = post(UiNotice.AppUnenrolled(appLabel)),
-                    registrationRecovery = null,
-                    pendingUnenroll = null,
-                )
+            RuntimeReply.Ack -> {
+                var removedSelected = false
+                mutableState.update { current ->
+                    removedSelected = current.selected?.packageName == packageName
+                    current.copy(
+                        packages = current.packages.filterNot {
+                            it.packageName == packageName
+                        },
+                        selected = if (removedSelected) null else current.selected,
+                        posted = post(UiNotice.AppUnenrolled(appLabel)),
+                        registrationRecovery = null,
+                        pendingUnenroll = null,
+                    )
+                }
+                if (removedSelected && destination == ManagerDestination.PackageDetails) {
+                    navigate(SlotsNavigation.ToSpaces)
+                }
             }
             is RuntimeReply.Error -> showError(reply.code)
             RuntimeReply.TransportFailure -> showTransportFailure()

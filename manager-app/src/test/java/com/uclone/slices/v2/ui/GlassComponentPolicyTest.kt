@@ -98,6 +98,17 @@ class GlassComponentPolicyTest {
     }
 
     @Test
+    fun tokensTakeTheirColoursFromTheThemeLocal() {
+        // Surfaces, Tone and the accent colours resolve through LocalSlicesColors, which only the
+        // theme decides; the tokens never look at the system setting themselves.
+        val ui = File(sources(), "com/uclone/slices/v2/ui")
+        val tokens = File(ui, "Tokens.kt").readText()
+        assertTrue("isSystemInDarkTheme" !in tokens)
+        assertTrue("LocalSlicesColors.current" in tokens)
+        assertTrue("LocalSlicesColors provides" in File(ui, "SlicesTheme.kt").readText())
+    }
+
+    @Test
     fun pageContentNeverSamplesTheGlassItIsRecordedInto() {
         // ManagerScreen records its list for the title bar; the list itself must see no backdrop,
         // or a glass button inside it would draw the layer it is part of.

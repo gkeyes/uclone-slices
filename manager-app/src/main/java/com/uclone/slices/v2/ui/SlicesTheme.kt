@@ -117,6 +117,7 @@ private val SlicesShapes = Shapes(
 internal fun SlicesTheme(content: @Composable () -> Unit) {
     val darkTheme = isSystemInDarkTheme()
     val materialColors = remember(darkTheme) { if (darkTheme) DarkColors else LightColors }
+    val slicesColors = if (darkTheme) DarkSlicesColors else LightSlicesColors
     // Read the animator scale once for the whole tree; the user can only change it in system
     // settings, so coming back to the app is when it may have changed.
     val context = LocalContext.current
@@ -125,20 +126,23 @@ internal fun SlicesTheme(content: @Composable () -> Unit) {
         reducedMotion = readReducedMotion(context)
     }
     val playedStaggers = rememberSaveable(saver = PlayedStaggersSaver) { mutableSetOf<String>() }
-    MaterialTheme(
-        colorScheme = materialColors,
-        typography = SlicesTypography,
-        shapes = SlicesShapes,
-    ) {
-        // Material 3 Text and Icon take their default colour from LocalContentColor, which is
-        // black unless a Material Surface sets it. No Material Surface is used, so the theme root
-        // provides the iOS label colour or every Text without an explicit colour stays black in
-        // dark mode.
-        CompositionLocalProvider(
-            LocalContentColor provides TextPrimary,
-            LocalReducedMotion provides reducedMotion,
-            LocalPlayedStaggers provides playedStaggers,
-            content = content,
-        )
+    // The Slices colours go in first: the Material bridge below reads TextPrimary from them.
+    CompositionLocalProvider(LocalSlicesColors provides slicesColors) {
+        MaterialTheme(
+            colorScheme = materialColors,
+            typography = SlicesTypography,
+            shapes = SlicesShapes,
+        ) {
+            // Material 3 Text and Icon take their default colour from LocalContentColor, which is
+            // black unless a Material Surface sets it. No Material Surface is used, so the theme root
+            // provides the iOS label colour or every Text without an explicit colour stays black in
+            // dark mode.
+            CompositionLocalProvider(
+                LocalContentColor provides TextPrimary,
+                LocalReducedMotion provides reducedMotion,
+                LocalPlayedStaggers provides playedStaggers,
+                content = content,
+            )
+        }
     }
 }

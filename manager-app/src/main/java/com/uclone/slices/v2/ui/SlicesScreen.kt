@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -23,6 +24,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,28 +37,52 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavDestination.Companion.hasRoute
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.toRoute
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.backup.BackupRestoreScreen
-import com.uclone.slices.v2.backup.BackupRestoreUiState
+import com.uclone.slices.v2.backup.BackupRestoreViewModel
 import com.uclone.slices.v2.backup.BackupUiIntent
 
 @Composable
 internal fun SlicesScreen(
-    state: SlotsUiState,
-    backupState: BackupRestoreUiState,
-    onIntent: (UiIntent) -> Unit,
-    onBackupIntent: (BackupUiIntent) -> Unit,
-    suggestedBackupName: () -> String,
-    uiPreferences: ManagerUiPreferences,
+    viewModel: SlotsViewModel,
+    backupViewModelFactory: ViewModelProvider.Factory,
 ) {
-    BackHandler(
-        enabled = state.destination != ManagerDestination.Spaces &&
-            !state.busy &&
-            !backupState.running,
-    ) {
-        onIntent(UiIntent.NavigateBack)
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    // Remembered so the pages get stable callbacks. `state` is a delegated property of a
+    // remembered State, so every read inside them sees the latest value.
+    val onIntent: (UiIntent) -> Unit = remember(viewModel) {
+        { intent: UiIntent -> viewModel.onIntent(intent) }
     }
+    val navController = rememberNavController()
+    val hostLifecycle = LocalLifecycleOwner.current
+    // Moves the view model asks for, and what is on top reported back to it.
+    LaunchedEffect(viewModel, navController) {
+        viewModel.navigation.collect { navController.follow(it) }
+    }
+    LaunchedEffect(viewModel, navController) {
+        navController.currentBackStackEntryFlow.collect { entry ->
+            viewModel.onIntent(UiIntent.DestinationChanged(entry.managerDestination()))
+        }
+    }
+    val backStackEntry by navController.currentBackStackEntryAsState()
+    val atSpaces = backStackEntry?.destination?.hasRoute<SpacesRoute>() != false
+    // Pages above the spaces list go back one page, never while an operation runs. Backup and
+    // restore handles its own back (it leaves its job state first and asks for a refresh).
+    val navigateBack: () -> Unit = remember(navController) {
+        { if (!state.busy) navController.popPage() }
+    }
+
     val reduced = rememberReducedMotion()
     // The pages are recorded here; the sheets, the operation alert and the top notice drawn above
     // them refract that recording. They sit outside it, so glass never samples itself.
@@ -71,62 +99,87 @@ internal fun SlicesScreen(
                 .fillMaxSize()
                 .glassSource(pageBackdrop),
         ) {
-            AnimatedContent(
-                targetState = state.destination,
-                transitionSpec = {
-                    iosPush(
-                        forward = targetState.depth() >= initialState.depth(),
-                        reduced = reduced,
-                    )
-                },
-                label = "manager_destination",
+            NavHost(
+                navController = navController,
+                startDestination = SpacesRoute,
                 modifier = Modifier.fillMaxSize(),
-            ) { destination ->
-                val contentPadding = systemBars
-                when (destination) {
-                    ManagerDestination.Spaces -> AppListScreen(
-                        state = state,
-                        contentPadding = contentPadding,
-                        onIntent = onIntent,
-                        uiPreferences = uiPreferences,
-                    )
-                    ManagerDestination.AddApp -> AddAppScreen(
-                        state = state,
-                        contentPadding = contentPadding,
-                        onIntent = onIntent,
-                    )
-                    ManagerDestination.PackageDetails -> state.selected?.let { selected ->
-                        PackageDetailScreen(
+                enterTransition = { iosPush(forward = true, reduced = reduced).targetContentEnter },
+                exitTransition = { iosPush(forward = true, reduced = reduced).initialContentExit },
+                popEnterTransition = {
+                    iosPush(forward = false, reduced = reduced).targetContentEnter
+                },
+                popExitTransition = {
+                    iosPush(forward = false, reduced = reduced).initialContentExit
+                },
+            ) {
+                composable<SpacesRoute> { entry ->
+                    HostLifecycle(hostLifecycle) {
+                        RefreshAfterBackup(entry) { onIntent(UiIntent.Refresh) }
+                        AppListScreen(
                             state = state,
-                            packageSnapshot = selected,
-                            installedApp = state.installedApps.firstOrNull {
-                                it.packageName == selected.packageName
-                            },
-                            contentPadding = contentPadding,
+                            contentPadding = systemBars,
                             onIntent = onIntent,
                         )
                     }
-                    ManagerDestination.BackupRestore -> {
-                        // Lives as long as this page is composed, so the window stays secure
-                        // through the page's exit transition too.
-                        SecureWindowEffect()
-                        BackupRestoreScreen(
-                            state = backupState,
-                            slotsState = state,
-                            contentPadding = contentPadding,
-                            onBack = { onIntent(UiIntent.NavigateBack) },
-                            onIntent = onBackupIntent,
-                            suggestedBackupName = suggestedBackupName,
+                }
+                composable<AddAppRoute> {
+                    HostLifecycle(hostLifecycle) {
+                        AddAppScreen(
+                            state = state,
+                            contentPadding = systemBars,
+                            onIntent = onIntent,
+                            onBack = navigateBack,
                         )
                     }
-                    ManagerDestination.RuntimeStatus -> RuntimeStatusScreen(
-                        state = state,
-                        contentPadding = contentPadding,
-                        onIntent = onIntent,
-                    )
+                }
+                composable<PackageDetailsRoute> { entry ->
+                    HostLifecycle(hostLifecycle) {
+                        RefreshAfterBackup(entry) { onIntent(UiIntent.Refresh) }
+                        // Kept while the page slides out after the view model has let it go.
+                        val selected = rememberRetained(state.selected)
+                        if (selected != null) {
+                            PackageDetailScreen(
+                                state = state,
+                                packageSnapshot = selected,
+                                installedApp = state.installedApps.firstOrNull {
+                                    it.packageName == selected.packageName
+                                },
+                                contentPadding = systemBars,
+                                onIntent = onIntent,
+                                onBack = navigateBack,
+                            )
+                        }
+                    }
+                }
+                composable<BackupRestoreRoute> { entry ->
+                    HostLifecycle(hostLifecycle) {
+                        BackupRestoreDestination(
+                            route = entry.toRoute<BackupRestoreRoute>(),
+                            // False while the page slides out: back then belongs to the page below.
+                            active = backStackEntry?.id == entry.id,
+                            factory = backupViewModelFactory,
+                            slotsState = state,
+                            contentPadding = systemBars,
+                            onLeave = { navController.returnFromBackup() },
+                        )
+                    }
+                }
+                composable<RuntimeStatusRoute> {
+                    HostLifecycle(hostLifecycle) {
+                        RuntimeStatusScreen(
+                            state = state,
+                            contentPadding = systemBars,
+                            onIntent = onIntent,
+                            onBack = navigateBack,
+                        )
+                    }
                 }
             }
         }
+        // Registered after the NavHost's own handler, so it decides: no page change while an
+        // operation runs. Pages and sheets that handle back themselves (backup and restore,
+        // reordering, sheets) are composed under the same lifecycle later still and outrank it.
+        BackHandler(enabled = !atSpaces, onBack = navigateBack)
 
         CompositionLocalProvider(LocalGlassBackdrop provides pageBackdrop) {
             RootOverlays(
@@ -138,6 +191,45 @@ internal fun SlicesScreen(
             )
         }
     }
+}
+
+/**
+ * Backup and restore with its own view model, scoped to this back-stack entry. Back (system or
+ * the title bar) leaves its job state and returns to the page it was opened from, which then
+ * refreshes; never while a job or a spaces operation runs.
+ */
+@Composable
+private fun BackupRestoreDestination(
+    route: BackupRestoreRoute,
+    active: Boolean,
+    factory: ViewModelProvider.Factory,
+    slotsState: SlotsUiState,
+    contentPadding: PaddingValues,
+    onLeave: () -> Unit,
+) {
+    val backupViewModel: BackupRestoreViewModel = viewModel(factory = factory)
+    val backupState by backupViewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(backupViewModel) {
+        backupViewModel.openRoute(route.packageName, route.slotId)
+    }
+    val leave: () -> Unit = {
+        if (active && !slotsState.busy && !backupState.running) {
+            backupViewModel.onIntent(BackupUiIntent.Leave)
+            onLeave()
+        }
+    }
+    BackHandler(enabled = active, onBack = leave)
+    // Lives as long as this page is composed, so the window stays secure through the page's exit
+    // transition too.
+    SecureWindowEffect()
+    BackupRestoreScreen(
+        state = backupState,
+        slotsState = slotsState,
+        contentPadding = contentPadding,
+        onBack = leave,
+        onIntent = backupViewModel::onIntent,
+        suggestedBackupName = backupViewModel::suggestedBackupName,
+    )
 }
 
 /** Sheets, the blocking operation alert and the top notice, drawn above the recorded pages. */
@@ -218,16 +310,6 @@ private fun RootOverlays(
         onIntent = onIntent,
         modifier = noticeModifier,
     )
-}
-
-/** Navigation depth: forward pushes slide in from the end, back slides the other way. */
-private fun ManagerDestination.depth(): Int = when (this) {
-    ManagerDestination.Spaces -> 0
-    ManagerDestination.AddApp,
-    ManagerDestination.RuntimeStatus,
-    ManagerDestination.PackageDetails,
-    -> 1
-    ManagerDestination.BackupRestore -> 2
 }
 
 @Composable

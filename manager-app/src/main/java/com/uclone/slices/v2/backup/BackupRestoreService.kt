@@ -19,10 +19,10 @@ import com.uclone.slices.v2.runtime.AccountIoScope
 import com.uclone.slices.v2.runtime.ArchiveScope
 import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.RestoreItemState
-import com.uclone.slices.v2.runtime.RootRuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeCommand
 import com.uclone.slices.v2.runtime.RuntimeReply
+import com.uclone.slices.v2.runtimeRepository
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -56,7 +56,7 @@ internal class BackupRestoreService : Service() {
         serviceScope.launch {
             val engine = BackupRestoreEngine(
                 applicationContext,
-                RootRuntimeClient(),
+                applicationContext.runtimeRepository,
                 RootArchiveHelper(applicationContext),
                 onBytesProgress = ::showProgress,
             )
