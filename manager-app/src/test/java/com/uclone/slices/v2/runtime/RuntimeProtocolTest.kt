@@ -4,7 +4,6 @@ import com.uclone.slices.v2.BuildConfig
 import org.json.JSONObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
 import kotlin.test.assertTrue
 
 class RuntimeProtocolTest {
@@ -137,10 +136,37 @@ class RuntimeProtocolTest {
     }
 
     @Test
-    fun unknownErrorCodeIsNotACompatibilityAlias() {
-        assertFails {
-            RuntimeProtocol.decode("""{"error":{"code":"future_error"}}""")
-        }
+    fun unknownErrorCodeIsAFailedOperationNotATransportFailure() {
+        assertEquals(
+            RuntimeReply.Error(ErrorCode.OperationFailed),
+            RuntimeProtocol.decode("""{"error":{"code":"future_error"}}"""),
+        )
+    }
+
+    @Test
+    fun unknownBindingStateIsKeptButNeverOperable() {
+        val response = RuntimeProtocol.decode(
+            """{"ok":{"package":{"package":"com.example.app","active_slot":"base","slots":[],"binding_state":"future_state"}}}""",
+        ) as RuntimeReply.Package
+
+        assertEquals(BindingState.Unsupported, response.packageSnapshot.bindingState)
+    }
+
+    @Test
+    fun knownBindingStatesNeverDecodeAsUnsupported() {
+        BindingState.entries
+            .filter { it != BindingState.Unsupported }
+            .forEach { state -> assertEquals(state, BindingState.fromWire(state.wire)) }
+        assertEquals(BindingState.Unsupported, BindingState.fromWire(""))
+    }
+
+    @Test
+    fun unknownRestoreItemStateIsReportedAsFailed() {
+        val response = RuntimeProtocol.decode(
+            """{"ok":{"archive_account_id":"base","target_slot":"base","state":"future_state"}}""",
+        ) as RuntimeReply.RestoreItem
+
+        assertEquals(RestoreItemState.Failed, response.result.state)
     }
 
     @Test

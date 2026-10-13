@@ -139,6 +139,7 @@ class BackupRestorePolicyTest {
         assertFalse(backupBindingAllows(BindingState.LegacyUnbound))
         assertFalse(backupBindingAllows(BindingState.RebindRequired))
         assertFalse(backupBindingAllows(BindingState.LegacyConfirmationRequired))
+        assertFalse(backupBindingAllows(BindingState.Unsupported))
     }
 
     @Test

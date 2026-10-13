@@ -112,8 +112,11 @@ internal class BackupRestoreViewModel(
     private val installedApps: InstalledAppsSource,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val injectedScope: CoroutineScope? = null,
-    private val profileCatalog: BackupProfileCatalog = BackupProfileCatalog.load(context),
+    profileCatalogLoader: () -> BackupProfileCatalog = { BackupProfileCatalog.load(context) },
 ) : ViewModel() {
+    // Reading the bundled profiles touches assets, so it happens on first use, which is always on
+    // [dispatcher], never while the ViewModel is created on the main thread.
+    private val profileCatalog: BackupProfileCatalog by lazy(profileCatalogLoader)
     private val mutableState = MutableStateFlow(BackupRestoreUiState())
     val state: StateFlow<BackupRestoreUiState> = mutableState.asStateFlow()
     private val coroutineScope: CoroutineScope
@@ -435,11 +438,13 @@ internal class BackupRestoreViewModel(
             app.signingIdentity,
         )
         val restoreProfile = if (signatureMatches) {
-            profileCatalog.resolve(
-                preview.manifest.packageName,
-                preview.manifest.profile,
-                app.signingIdentity,
-            )
+            withContext(dispatcher) {
+                profileCatalog.resolve(
+                    preview.manifest.packageName,
+                    preview.manifest.profile,
+                    app.signingIdentity,
+                )
+            }
         } else {
             null
         }

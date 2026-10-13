@@ -11,13 +11,19 @@ import androidx.compose.material3.darkColorScheme as materialDarkColorScheme
 import androidx.compose.material3.lightColorScheme as materialLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme as miuixDarkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme as miuixLightColorScheme
@@ -190,6 +196,13 @@ internal fun SlicesTheme(content: @Composable () -> Unit) {
     val materialColors = remember(darkTheme, accent) {
         if (darkTheme) darkMaterialColors(accent) else lightMaterialColors(accent)
     }
+    // Read the animator scale once for the whole tree; the user can only change it in system
+    // settings, so coming back to the app is when it may have changed.
+    val context = LocalContext.current
+    var reducedMotion by remember(context) { mutableStateOf(readReducedMotion(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        reducedMotion = readReducedMotion(context)
+    }
     MiuixTheme(
         colors = miuixColors,
     ) {
@@ -204,6 +217,7 @@ internal fun SlicesTheme(content: @Composable () -> Unit) {
             // colour stays black in dark mode.
             CompositionLocalProvider(
                 LocalContentColor provides MiuixTheme.colorScheme.onSurface,
+                LocalReducedMotion provides reducedMotion,
                 content = content,
             )
         }

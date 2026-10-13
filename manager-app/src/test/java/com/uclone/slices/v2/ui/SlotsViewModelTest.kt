@@ -3,6 +3,7 @@ package com.uclone.slices.v2.ui
 import com.uclone.slices.v2.BuildConfig
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
+import com.uclone.slices.v2.apps.OptimizedInstalledAppsSource
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.ErrorCode
 import com.uclone.slices.v2.runtime.PackageSnapshot
@@ -800,6 +801,51 @@ class SlotsViewModelTest {
         assertEquals("ucloned start", viewModel.state.value.runtimeLog)
     }
 
+    @Test
+    fun catalogLoadedDuringARefreshIsNotOverwrittenByTheManagedAppList() {
+        val client = HoldingListRuntimeClient()
+        val apps = RefreshingCatalogSource()
+        val viewModel = SlotsViewModel(client, apps, Dispatchers.Unconfined)
+        // The first catalog read starts a refresh that then waits on ListPackages; whichever side
+        // lands first, the Add App page must end with the full catalog, not the managed list.
+        apps.duringFirstCatalog = {
+            client.holdList = CompletableDeferred()
+            viewModel.onIntent(UiIntent.Refresh)
+        }
+
+        viewModel.onIntent(UiIntent.OpenAddApps)
+        client.holdList?.complete(Unit)
+
+        val state = viewModel.state.value
+        assertTrue(state.appCatalogLoaded)
+        assertFalse(state.appCatalogLoading)
+        assertEquals(2, apps.catalogReads)
+        assertEquals(
+            setOf("com.example.app", "com.other.app"),
+            state.installedApps.map(InstalledApp::packageName).toSet(),
+        )
+    }
+
+    @Test
+    fun restartingTheRuntimeDropsALogReadOfTheOldProcess() {
+        val maintenance = FakeRuntimeMaintenance(restarts = true, log = "old process")
+        val viewModel = SlotsViewModel(
+            FakeRuntimeClient(),
+            appSource,
+            Dispatchers.Unconfined,
+            MemoryManagerUiPreferences(),
+            maintenance,
+        )
+        val logRead = CompletableDeferred<Unit>()
+        maintenance.beforeLog = { logRead.await() }
+
+        viewModel.onIntent(UiIntent.LoadRuntimeLog)
+        viewModel.onIntent(UiIntent.RestartRuntime)
+        logRead.complete(Unit)
+
+        assertNull(viewModel.state.value.runtimeLog)
+    }
+
     private fun configureApp(viewModel: SlotsViewModel) {
         viewModel.onIntent(UiIntent.RequestConfigureApp("com.example.app"))
         viewModel.onIntent(UiIntent.ConfirmConfigureApp)
@@ -1044,13 +1090,52 @@ private class FakeRuntimeMaintenance(
     private val log: String? = null,
 ) : RuntimeMaintenance {
     var restartCalls = 0
+    var beforeLog: (suspend () -> Unit)? = null
 
     override suspend fun restartRuntime(): Boolean {
         restartCalls += 1
         return restarts
     }
 
-    override suspend fun readLogTail(): String? = log
+    override suspend fun readLogTail(): String? {
+        beforeLog?.invoke()
+        return log
+    }
+}
+
+private class HoldingListRuntimeClient : FakeRuntimeClient(
+    initialPackages = listOf(packageSnapshot()),
+) {
+    var holdList: CompletableDeferred<Unit>? = null
+
+    override suspend fun execute(command: RuntimeCommand): RuntimeReply {
+        if (command == RuntimeCommand.ListPackages) holdList?.await()
+        return super.execute(command)
+    }
+}
+
+private class RefreshingCatalogSource : InstalledAppsSource, OptimizedInstalledAppsSource {
+    var duringFirstCatalog: (() -> Unit)? = null
+    var catalogReads = 0
+
+    override fun load(): List<InstalledApp> = loadCatalog()
+
+    override fun loadPackages(packageNames: Set<String>): List<InstalledApp> =
+        catalog().filter { it.packageName in packageNames }
+
+    override fun loadCatalog(): List<InstalledApp> {
+        catalogReads += 1
+        duringFirstCatalog?.let { refresh ->
+            duringFirstCatalog = null
+            refresh()
+        }
+        return catalog()
+    }
+
+    private fun catalog() = listOf(
+        InstalledApp("com.example.app", "Example", signingIdentity = testSigning()),
+        InstalledApp("com.other.app", "Other"),
+    )
 }
 
 private class BlockingGetPackageRuntimeClient : FakeRuntimeClient(
