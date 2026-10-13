@@ -21,6 +21,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -476,6 +478,58 @@ class SlotsViewModelTest {
 
         assertEquals(UiNotice.RuntimeUnavailable, viewModel.state.value.notice)
         assertFalse(viewModel.state.value.runtimeReady)
+    }
+
+    @Test
+    fun repeatedFailurePostsTheNoticeAgain() {
+        val client = FakeRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.TransportFailure
+        viewModel.onIntent(UiIntent.Refresh)
+        val first = assertNotNull(viewModel.state.value.posted)
+
+        client.nextReply = RuntimeReply.TransportFailure
+        viewModel.onIntent(UiIntent.Refresh)
+        val second = assertNotNull(viewModel.state.value.posted)
+
+        assertEquals(UiNotice.RuntimeUnavailable, first.notice)
+        assertEquals(UiNotice.RuntimeUnavailable, second.notice)
+        assertNotEquals(first.id, second.id)
+    }
+
+    @Test
+    fun expiredNoticeDoesNotDismissTheOneThatReplacedIt() {
+        val client = FakeRuntimeClient()
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.TransportFailure
+        viewModel.onIntent(UiIntent.Refresh)
+        val first = assertNotNull(viewModel.state.value.posted)
+        client.nextReply = RuntimeReply.TransportFailure
+        viewModel.onIntent(UiIntent.Refresh)
+        val second = assertNotNull(viewModel.state.value.posted)
+
+        viewModel.onIntent(UiIntent.DismissNotice(first.id))
+        assertEquals(second, viewModel.state.value.posted)
+
+        viewModel.onIntent(UiIntent.DismissNotice(second.id))
+        assertNull(viewModel.state.value.posted)
+    }
+
+    @Test
+    fun navigationKeepsTheVisibleNotice() {
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+        val viewModel = SlotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
+        viewModel.onIntent(UiIntent.SetLaunchAfterReboot("com.example.app", true))
+        val posted = assertNotNull(viewModel.state.value.posted)
+
+        viewModel.onIntent(UiIntent.OpenRuntimeStatus)
+        assertEquals(ManagerDestination.RuntimeStatus, viewModel.state.value.destination)
+        assertEquals(posted, viewModel.state.value.posted)
+
+        viewModel.onIntent(UiIntent.NavigateBack)
+        assertEquals(ManagerDestination.Spaces, viewModel.state.value.destination)
+        assertEquals(posted, viewModel.state.value.posted)
     }
 
     @Test

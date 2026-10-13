@@ -13,6 +13,8 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize as _;
 
+use crate::links::link_resolves_inside;
+
 const MAGIC: &[u8; 8] = b"UCSBKP01";
 const FLAG_ENCRYPTED: u8 = 1;
 const MAX_CONTROL_FRAME_BYTES: u64 = 4 * 1024 * 1024;
@@ -592,6 +594,13 @@ fn restore_backup_inner(
             require_empty_real_directory(&destination.ce_path)?;
             require_empty_real_directory(&destination.de_path)?;
         }
+        ensure_restore_capacity(manifest.accounts.iter().flat_map(|account| {
+            let destination = destination_map[account.archive_account_id.as_str()];
+            [
+                (&destination.ce_path, &account.ce),
+                (&destination.de_path, &account.de),
+            ]
+        }))?;
         let expected = manifest_entry_index(&manifest);
         let mut seen = BTreeSet::new();
         let mut entry_count = 0_usize;
@@ -804,7 +813,7 @@ fn hash_domain_files(
         if entry.kind != ManifestEntryKind::File {
             continue;
         }
-        let file = File::open(safe_join(root, Path::new(&entry.path))?).map_err(io_error)?;
+        let file = open_regular_beneath(root, Path::new(&entry.path))?;
         let mut reader = HashingReader::new(file.take(entry.size), progress);
         std::io::copy(&mut reader, &mut std::io::sink()).map_err(io_error)?;
         let (digest, read) = reader.finish();
@@ -981,7 +990,10 @@ fn collect_directory_entries(
             });
         } else if metadata.file_type().is_symlink() {
             let target = fs::read_link(&path).map_err(io_error)?;
-            if target.is_absolute() || !relative_link_stays_inside(context.root, &path, &target) {
+            if target.is_absolute()
+                || !relative_link_stays_inside(context.root, &path, &target)
+                || !link_resolves_inside(context.root, &path).map_err(io_error)?
+            {
                 return Err(ArchiveError::Invalid);
             }
             entries.push(ManifestEntry {
@@ -1029,7 +1041,10 @@ fn collect_excluded_stats(
             }
         } else if metadata.file_type().is_symlink() {
             let target = fs::read_link(&path).map_err(io_error)?;
-            if target.is_absolute() || !relative_link_stays_inside(root, &path, &target) {
+            if target.is_absolute()
+                || !relative_link_stays_inside(root, &path, &target)
+                || !link_resolves_inside(root, &path).map_err(io_error)?
+            {
                 return Err(ArchiveError::Invalid);
             }
         } else {
@@ -1133,7 +1148,7 @@ fn append_domain<W: Write>(
                 header.set_cksum();
                 // Hash while streaming instead of re-reading the file before appending it.
                 // A mismatch fails the whole archive, which is still an unpublished temp file.
-                let file = File::open(source).map_err(io_error)?;
+                let file = open_regular_beneath(root, Path::new(&entry.path))?;
                 let mut reader = HashingReader::new(file.take(entry.size), progress);
                 builder
                     .append_data(&mut header, archive_path, &mut reader)
@@ -1712,6 +1727,127 @@ fn ensure_safe_parent(root: &Path, output: &Path) -> Result<(), ArchiveError> {
     Ok(())
 }
 
+/// Opens a file that the scan saw as a regular file at `relative` under `root`, refusing it if
+/// anything on the way has since been replaced. Every directory below `root` is opened with
+/// `O_NOFOLLOW` relative to the one before it, so a parent the app swaps for a symbolic link
+/// cannot redirect root outside the tree, and the file itself is opened non-blocking so a FIFO
+/// swapped in for it fails the type check instead of hanging the helper.
+fn open_regular_beneath(root: &Path, relative: &Path) -> Result<File, ArchiveError> {
+    use rustix::fs::{Mode, OFlags};
+
+    validate_relative_path(relative)?;
+    let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let mut directory = rustix::fs::open(root, directory_flags, Mode::empty()).map_err(io_error)?;
+    let mut components = relative.components().peekable();
+    let name = loop {
+        let Some(Component::Normal(name)) = components.next() else {
+            return Err(ArchiveError::Invalid);
+        };
+        if components.peek().is_none() {
+            break name;
+        }
+        directory = rustix::fs::openat(
+            &directory,
+            name,
+            directory_flags | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
+        .map_err(io_error)?;
+    };
+    let file = File::from(
+        rustix::fs::openat(
+            &directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io_error)?,
+    );
+    let metadata = file.metadata().map_err(io_error)?;
+    if !metadata.file_type().is_file() || metadata.nlink() != 1 {
+        return Err(ArchiveError::Invalid);
+    }
+    Ok(file)
+}
+
+/// Free space a restore must leave on each filesystem so the system stays usable afterwards.
+const RESTORE_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Refuses a restore that cannot fit before anything is written. Each domain is charged to the
+/// filesystem it lands on, every file is rounded up to whole blocks, every entry also costs one
+/// block of metadata and one inode, and a reserve keeps the filesystem usable afterwards.
+fn ensure_restore_capacity<'a>(
+    domains: impl IntoIterator<Item = (&'a PathBuf, &'a DomainManifest)>,
+) -> Result<(), ArchiveError> {
+    struct Demand {
+        stats: rustix::fs::StatVfs,
+        bytes: u64,
+        inodes: u64,
+    }
+    let mut devices = BTreeMap::<u64, Demand>::new();
+    for (root, manifest) in domains {
+        let device = fs::metadata(root).map_err(io_error)?.dev();
+        let demand = match devices.entry(device) {
+            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::btree_map::Entry::Vacant(entry) => entry.insert(Demand {
+                stats: rustix::fs::statvfs(root.as_path()).map_err(io_error)?,
+                bytes: RESTORE_RESERVE_BYTES,
+                inodes: 0,
+            }),
+        };
+        let block = demand.stats.f_frsize;
+        for entry in &manifest.entries {
+            demand.bytes = demand
+                .bytes
+                .saturating_add(allocated_bytes(entry.size, block));
+        }
+        // Extraction also creates any parent directory the manifest does not list itself.
+        let implied = implied_parent_count(manifest);
+        demand.bytes = demand
+            .bytes
+            .saturating_add(implied.saturating_mul(allocated_bytes(0, block)));
+        demand.inodes = demand
+            .inodes
+            .saturating_add(manifest.entries.len() as u64)
+            .saturating_add(implied);
+    }
+    for demand in devices.values() {
+        let free_bytes = demand.stats.f_bavail.saturating_mul(demand.stats.f_frsize);
+        // Filesystems without a fixed inode table report zero total inodes.
+        let inodes_short = demand.stats.f_files != 0 && demand.inodes > demand.stats.f_favail;
+        if demand.bytes > free_bytes || inodes_short {
+            return Err(ArchiveError::InsufficientStorage);
+        }
+    }
+    Ok(())
+}
+
+/// Number of parent directories extraction must create because the manifest has no entry for them.
+fn implied_parent_count(manifest: &DomainManifest) -> u64 {
+    let listed = manifest
+        .entries
+        .iter()
+        .map(|entry| Path::new(entry.path.as_str()))
+        .collect::<BTreeSet<_>>();
+    let mut implied = BTreeSet::new();
+    for entry in &manifest.entries {
+        for parent in Path::new(entry.path.as_str()).ancestors().skip(1) {
+            if parent.as_os_str().is_empty() || listed.contains(parent) {
+                continue;
+            }
+            implied.insert(parent);
+        }
+    }
+    implied.len() as u64
+}
+
+/// Bytes a file of `size` occupies: whole data blocks plus one block of metadata, so even an
+/// empty file or a directory is never free.
+fn allocated_bytes(size: u64, block: u64) -> u64 {
+    let block = block.max(1);
+    size.div_ceil(block).saturating_add(1).saturating_mul(block)
+}
+
 fn require_real_directory(path: &Path) -> Result<(), ArchiveError> {
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
     (metadata.file_type().is_dir() && !metadata.file_type().is_symlink())
@@ -2090,6 +2226,86 @@ mod tests {
         );
         assert!(fs::read_dir(ce).unwrap().next().is_none());
         assert!(fs::read_dir(de).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn restore_that_does_not_fit_is_refused_before_writing() -> Result<(), ArchiveError> {
+        let temp = tempfile::tempdir().map_err(io_error)?;
+        let root = temp.path().to_path_buf();
+
+        let domain = |sizes: &[u64]| DomainManifest {
+            state: DomainState::Data,
+            logical_size: sizes.iter().sum(),
+            entries: sizes
+                .iter()
+                .enumerate()
+                .map(|(index, size)| ManifestEntry {
+                    path: format!("file{index}"),
+                    kind: ManifestEntryKind::File,
+                    size: *size,
+                    sha256: None,
+                    link_target: None,
+                    mode: 0o600,
+                    mtime_seconds: 0,
+                })
+                .collect(),
+        };
+        let small = domain(&[0, 1]);
+        ensure_restore_capacity([(&root, &small), (&root, &small)])?;
+        let huge = domain(&[u64::MAX / 2]);
+        assert!(matches!(
+            ensure_restore_capacity([(&root, &small), (&root, &huge)]),
+            Err(ArchiveError::InsufficientStorage),
+        ));
+        // Empty files and directories still cost a block, and partial blocks round up.
+        assert_eq!(allocated_bytes(0, 4096), 4096);
+        assert_eq!(allocated_bytes(1, 4096), 8192);
+        assert_eq!(allocated_bytes(4096, 4096), 8192);
+        assert_eq!(allocated_bytes(u64::MAX, 4096), u64::MAX);
+        // `a/b/c` alone implies `a` and `a/b`; a listed directory is not counted twice.
+        let mut nested = domain(&[1]);
+        nested.entries[0].path = "a/b/c".to_owned();
+        assert_eq!(implied_parent_count(&nested), 2);
+        let mut listed_parent = nested.clone();
+        listed_parent.entries.push(ManifestEntry {
+            path: "a".to_owned(),
+            kind: ManifestEntryKind::Directory,
+            ..nested.entries[0].clone()
+        });
+        assert_eq!(implied_parent_count(&listed_parent), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn file_swapped_for_a_symlink_after_the_scan_is_not_read() -> Result<(), ArchiveError> {
+        let temp = tempfile::tempdir().map_err(io_error)?;
+        fs::write(temp.path().join("secret"), b"secret").map_err(io_error)?;
+        symlink("secret", temp.path().join("swapped")).map_err(io_error)?;
+
+        fs::create_dir(temp.path().join("dir")).map_err(io_error)?;
+        fs::write(temp.path().join("dir/inner"), b"inner").map_err(io_error)?;
+        symlink("dir", temp.path().join("linked-dir")).map_err(io_error)?;
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            temp.path().join("fifo"),
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .map_err(io_error)?;
+
+        let root = temp.path();
+        assert!(open_regular_beneath(root, Path::new("secret")).is_ok());
+        assert!(open_regular_beneath(root, Path::new("dir/inner")).is_ok());
+        assert!(open_regular_beneath(root, Path::new("swapped")).is_err());
+        // A parent swapped for a link is refused even though the final name is a regular file.
+        assert!(open_regular_beneath(root, Path::new("linked-dir/inner")).is_err());
+        // A FIFO fails the type check at once instead of blocking for a writer.
+        assert!(matches!(
+            open_regular_beneath(root, Path::new("fifo")),
+            Err(ArchiveError::Invalid),
+        ));
+        Ok(())
     }
 
     #[test]

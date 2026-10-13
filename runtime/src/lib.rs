@@ -1,6 +1,7 @@
 mod adapters;
 pub mod archive;
 mod composition;
+mod links;
 mod model;
 mod ports;
 mod protocol;

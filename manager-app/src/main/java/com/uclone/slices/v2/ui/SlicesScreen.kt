@@ -2,16 +2,7 @@ package com.uclone.slices.v2.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ContentTransform
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,16 +13,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -46,7 +33,6 @@ import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.backup.BackupRestoreScreen
 import com.uclone.slices.v2.backup.BackupRestoreUiState
 import com.uclone.slices.v2.backup.BackupUiIntent
-import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
 
@@ -108,14 +94,19 @@ internal fun SlicesScreen(
                             onIntent = onIntent,
                         )
                     }
-                    ManagerDestination.BackupRestore -> BackupRestoreScreen(
-                        state = backupState,
-                        slotsState = state,
-                        contentPadding = contentPadding,
-                        onBack = { onIntent(UiIntent.NavigateBack) },
-                        onIntent = onBackupIntent,
-                        suggestedBackupName = suggestedBackupName,
-                    )
+                    ManagerDestination.BackupRestore -> {
+                        // Lives as long as this page is composed, so the window stays secure
+                        // through the page's exit transition too.
+                        SecureWindowEffect()
+                        BackupRestoreScreen(
+                            state = backupState,
+                            slotsState = state,
+                            contentPadding = contentPadding,
+                            onBack = { onIntent(UiIntent.NavigateBack) },
+                            onIntent = onBackupIntent,
+                            suggestedBackupName = suggestedBackupName,
+                        )
+                    }
                     ManagerDestination.RuntimeStatus -> RuntimeStatusScreen(
                         state = state,
                         contentPadding = contentPadding,
@@ -191,14 +182,11 @@ internal fun SlicesScreen(
             )
         }
 
-        NoticeHost(
-            notice = state.notice,
+        TopNoticeHost(
+            posted = state.posted,
             onIntent = onIntent,
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(start = Space.sm, top = Space.xs, end = Space.sm)
                 .zIndex(10f),
         )
     }
@@ -558,186 +546,4 @@ internal fun RuntimeStatusCard(
             enabled = enabled,
         )
     }
-}
-
-@Composable
-private fun NoticeHost(
-    notice: UiNotice?,
-    onIntent: (UiIntent) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    LaunchedEffect(notice) {
-        val current = notice ?: return@LaunchedEffect
-        delay(
-            when {
-                isSuccessNotice(current) -> 3_200L
-                isRetryNotice(current) -> 5_200L
-                else -> 4_400L
-            },
-        )
-        onIntent(UiIntent.DismissNotice)
-    }
-    val reduced = rememberReducedMotion()
-
-    AnimatedContent(
-        targetState = notice,
-        transitionSpec = {
-            if (reduced) {
-                ContentTransform(EnterTransition.None, ExitTransition.None, sizeTransform = null)
-            } else {
-                ContentTransform(
-                    targetContentEnter = slideInVertically(Motion.offset) { -it - 24 } +
-                        fadeIn(Motion.effects()),
-                    initialContentExit = slideOutVertically(Motion.exit()) { -it / 2 } +
-                        fadeOut(Motion.exit()),
-                    sizeTransform = SizeTransform(clip = false) { _, _ -> Motion.size },
-                )
-            }
-        },
-        contentAlignment = Alignment.TopCenter,
-        label = "floating_notice",
-        modifier = modifier,
-    ) { current ->
-        current?.let {
-            FloatingNoticeCard(
-                notice = it,
-                onIntent = onIntent,
-            )
-        }
-    }
-}
-
-@Composable
-private fun FloatingNoticeCard(
-    notice: UiNotice,
-    onIntent: (UiIntent) -> Unit,
-) {
-    val success = isSuccessNotice(notice)
-    val retry = isRetryNotice(notice)
-    val tone = if (success) Tone.Success else Tone.Danger
-    val headline = noticeHeadline(notice)
-    val supporting = if (notice is UiNotice.SpaceActivated && notice.switched) {
-        stringResource(R.string.success_switch_launch_hint)
-    } else {
-        null
-    }
-    val shape = RoundedCornerShape(Radius.row + Space.xxs)
-    Row(
-        modifier = Modifier
-            .widthIn(max = 560.dp)
-            .fillMaxWidth()
-            .graphicsLayer {
-                shadowElevation = 6.dp.toPx()
-                this.shape = shape
-                clip = true
-            }
-            .background(Surfaces.raised)
-            .border(0.5.dp, Surfaces.hairline, shape)
-            .padding(
-                start = 10.dp,
-                top = 10.dp,
-                end = if (retry) Space.xxs else 14.dp,
-                bottom = 10.dp,
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(RoundedCornerShape(Radius.small))
-                .background(tone.container()),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = if (success) "✓" else "!",
-                color = tone.onContainer(),
-                fontSize = TypeScale.headline,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = Space.sm),
-        ) {
-            Text(
-                text = headline,
-                color = TextPrimary,
-                fontSize = TypeScale.subhead,
-                fontWeight = FontWeight.SemiBold,
-                lineHeight = 20.sp,
-            )
-            supporting?.let {
-                Text(
-                    text = it,
-                    color = TextSecondary,
-                    fontSize = TypeScale.caption,
-                    lineHeight = 17.sp,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-        }
-        if (retry) {
-            AppButton(
-                text = stringResource(R.string.retry),
-                onClick = { onIntent(UiIntent.Refresh) },
-                kind = ButtonKind.Text,
-                compact = true,
-            )
-        }
-    }
-}
-
-private fun isSuccessNotice(notice: UiNotice): Boolean =
-    notice is UiNotice.RuntimeRestarted ||
-        notice is UiNotice.ConfigurationCompleted ||
-        notice is UiNotice.ConfigurationRebound ||
-        notice is UiNotice.SpaceCreated ||
-        notice is UiNotice.SpaceActivated ||
-        notice is UiNotice.SpaceRenamed ||
-        notice is UiNotice.SpaceDeleted ||
-        notice is UiNotice.AppUnenrolled
-
-private fun isRetryNotice(notice: UiNotice): Boolean =
-    notice is UiNotice.LocalAppsUnavailable ||
-        notice is UiNotice.RuntimeUnavailable ||
-        notice is UiNotice.MissingEntity ||
-        notice is UiNotice.StateChanged ||
-        notice is UiNotice.OperationFailed
-
-@Composable
-private fun noticeHeadline(notice: UiNotice): String =
-    if (notice is UiNotice.SpaceActivated && notice.switched) {
-        stringResource(R.string.success_switched_title, notice.name)
-    } else {
-        noticeMessage(notice)
-    }
-
-@Composable
-private fun noticeMessage(notice: UiNotice): String = when (notice) {
-    UiNotice.LocalAppsUnavailable -> stringResource(R.string.error_local_apps)
-    UiNotice.RuntimeUnavailable -> stringResource(R.string.error_runtime_unavailable)
-    UiNotice.InvalidInput -> stringResource(R.string.error_invalid_input)
-    UiNotice.MissingEntity -> stringResource(R.string.error_missing_entity)
-    UiNotice.StateChanged -> stringResource(R.string.error_state_changed)
-    UiNotice.OperationFailed -> stringResource(R.string.error_operation_failed)
-    UiNotice.IdentityProtected -> stringResource(R.string.error_identity_protected)
-    UiNotice.SigningUnavailable -> stringResource(R.string.error_signing_unavailable)
-    UiNotice.RuntimeVersionMismatch -> stringResource(R.string.error_runtime_version_mismatch)
-    UiNotice.AccountIoBusy -> stringResource(R.string.error_account_io_busy)
-    UiNotice.StorageInsufficient -> stringResource(R.string.error_storage_insufficient)
-    UiNotice.RuntimeRestartFailed -> stringResource(R.string.error_runtime_restart_failed)
-    UiNotice.RuntimeRestarted -> stringResource(R.string.success_runtime_restarted)
-    UiNotice.ConfigurationCompleted -> stringResource(R.string.success_configured)
-    UiNotice.ConfigurationRebound -> stringResource(R.string.success_rebound)
-    is UiNotice.SpaceCreated -> stringResource(R.string.success_created, notice.name)
-    is UiNotice.SpaceActivated -> if (notice.switched) {
-        stringResource(R.string.success_switched, notice.name)
-    } else {
-        stringResource(R.string.success_launched, notice.name)
-    }
-    is UiNotice.SpaceRenamed -> stringResource(R.string.success_renamed, notice.name)
-    is UiNotice.SpaceDeleted -> stringResource(R.string.success_deleted, notice.name)
-    is UiNotice.AppUnenrolled ->
-        stringResource(R.string.success_unenrolled, notice.appLabel)
 }
