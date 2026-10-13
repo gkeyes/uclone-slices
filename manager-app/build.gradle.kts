@@ -31,7 +31,7 @@ val archiveHelperChecksum = if (
 }
 val generatedArchiveHelper = layout.buildDirectory.dir("generated/archive-helper-jni")
 
-val prepareArchiveHelper by tasks.registering(Copy::class) {
+val prepareArchiveHelper = tasks.register<Copy>("prepareArchiveHelper") {
     from(archiveHelperBinary)
     into(generatedArchiveHelper.map { it.dir("arm64-v8a") })
     rename { "libuclone_archive.so" }
@@ -108,11 +108,11 @@ android {
 
     sourceSets {
         getByName("release") {
-            jniLibs.srcDir(generatedArchiveHelper.get().asFile)
+            jniLibs.directories.add(generatedArchiveHelper.get().asFile.path)
         }
         getByName("test") {
-            resources.srcDir("../protocol/fixtures")
-            resources.srcDir("src/main/assets")
+            resources.directories.add("../protocol/fixtures")
+            resources.directories.add("src/main/assets")
         }
     }
 
