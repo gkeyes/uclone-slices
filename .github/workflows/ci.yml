@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: ["main", "codex/**", "claude/**"]
+    branches: ["main"]
     # A v* tag is pushed only after the user confirms the candidate; it is the only path
     # that publishes a GitHub Release, and it publishes the bytes this run verified.
     tags: ["v*"]

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -36,7 +37,6 @@ import com.uclone.slices.v2.runtime.PackageSnapshot
 import com.uclone.slices.v2.runtime.SeedMode
 import com.uclone.slices.v2.runtime.SlotSnapshot
 import kotlinx.coroutines.delay
-import androidx.compose.material3.Text
 
 @Composable
 internal fun PackageDetailScreen(
@@ -236,7 +236,11 @@ private fun CurrentSpaceCard(
             }
         }
         Spacer(Modifier.height(Space.md))
-        StatusChip(text = stringResource(R.string.currently_using), tone = Tone.Success)
+        StatusChip(
+            text = stringResource(R.string.currently_using),
+            tone = Tone.Success,
+            animateText = false,
+        )
         AnimatedContent(
             targetState = activeSlot,
             transitionSpec = fadeThrough(),
@@ -244,7 +248,7 @@ private fun CurrentSpaceCard(
         ) { slot ->
             Column {
                 Text(
-                    text = slot?.let(::spaceDisplayName) ?: stringResource(R.string.unknown_space),
+                    text = slot?.let { localizedSpaceName(it) } ?: stringResource(R.string.unknown_space),
                     color = TextPrimary,
                     fontSize = TypeScale.title,
                     fontWeight = FontWeight.SemiBold,
@@ -288,7 +292,7 @@ private fun OtherSpaceCard(
 ) {
     GroupCard(modifier = modifier) {
         ListRow(
-            title = spaceDisplayName(slot),
+            title = localizedSpaceName(slot),
             summary = if (slot.id == BASE_SLOT_ID) {
                 stringResource(R.string.system_space_description)
             } else {

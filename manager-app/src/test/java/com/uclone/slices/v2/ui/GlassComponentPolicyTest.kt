@@ -50,13 +50,17 @@ class GlassComponentPolicyTest {
         }
         assertEquals(emptyList(), offenders)
         assertTrue("miuix" !in buildScript().readText())
+        assertTrue("miuix" !in versionCatalog().readText())
     }
 
     @Test
     fun liquidGlassComesFromTheBackdropLibrary() {
         val build = buildScript().readText()
-        assertTrue("io.github.kyant0:backdrop:" in build)
-        assertTrue("io.github.kyant0:shapes:" in build)
+        assertTrue("libs.kyant.backdrop" in build)
+        assertTrue("libs.kyant.shapes" in build)
+        val catalog = versionCatalog().readText()
+        assertTrue("module = \"io.github.kyant0:backdrop\"" in catalog)
+        assertTrue("module = \"io.github.kyant0:shapes\"" in catalog)
     }
 
     @Test
@@ -88,8 +92,8 @@ class GlassComponentPolicyTest {
         assertTrue("val card = 26.dp" in tokens, "grouped cards use a 26dp radius")
         assertTrue("val rowMinHeight = 52.dp" in tokens, "grouped rows are about 52dp")
         assertTrue("val button = 999.dp" in tokens, "buttons are capsules")
-        val components = File(ui, "Components.kt").readText()
-        assertTrue("SwitchWidth = 62.dp" in components && "SwitchHeight = 28.dp" in components)
+        val rows = File(ui, "Rows.kt").readText()
+        assertTrue("SwitchWidth = 62.dp" in rows && "SwitchHeight = 28.dp" in rows)
         assertTrue(".size(62f.dp, 28f.dp)" in File(ui, "liquid/LiquidToggle.kt").readText())
     }
 
@@ -97,7 +101,7 @@ class GlassComponentPolicyTest {
     fun pageContentNeverSamplesTheGlassItIsRecordedInto() {
         // ManagerScreen records its list for the title bar; the list itself must see no backdrop,
         // or a glass button inside it would draw the layer it is part of.
-        val components = File(sources(), "com/uclone/slices/v2/ui/Components.kt").readText()
+        val components = File(sources(), "com/uclone/slices/v2/ui/ScreenScaffold.kt").readText()
         val scaffold = components.substringAfter("internal fun ManagerScreen(").substringBefore("private fun TopBar(")
         val provideNull = scaffold.indexOf("CompositionLocalProvider(LocalGlassBackdrop provides null)")
         val record = scaffold.indexOf(".glassSource(backdrop)")
@@ -111,6 +115,9 @@ class GlassComponentPolicyTest {
     }
 
     private fun buildScript(): File = File(System.getProperty("user.dir"), "build.gradle.kts")
+
+    private fun versionCatalog(): File =
+        File(System.getProperty("user.dir"), "../gradle/libs.versions.toml")
 
     private fun sources(): File {
         val sources = File(System.getProperty("user.dir"), "src/main/java")

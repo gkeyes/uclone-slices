@@ -2,9 +2,9 @@ package com.uclone.slices.v2.backup
 
 import android.content.Context
 import com.uclone.slices.v2.BuildConfig
+import com.uclone.slices.v2.runtime.startRootShell
 import java.io.DataOutputStream
 import java.io.File
-import java.io.OutputStream
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
@@ -12,7 +12,7 @@ import kotlinx.coroutines.runInterruptible
 internal class RootArchiveHelper(
     private val context: Context,
     private val processStarter: (String) -> Process = { command ->
-        ProcessBuilder("su", "-c", command).start()
+        startRootShell(command)
     },
 ) {
     suspend fun backup(
@@ -36,9 +36,6 @@ internal class RootArchiveHelper(
             try {
                 if (!installVerifiedHelper()) return@runInterruptible ArchiveHelperResult.TransportFailure
                 val process = processStarter(HELPER_COMMAND)
-                val stderrReader = Thread {
-                    process.errorStream.use { it.copyTo(DiscardOutput) }
-                }.apply(Thread::start)
                 try {
                     DataOutputStream(process.outputStream).use { output ->
                         output.writeInt(control.size)
@@ -59,7 +56,6 @@ internal class RootArchiveHelper(
                         result
                     }
                     val exitCode = process.waitFor()
-                    stderrReader.join()
                     if (response == null || response.length > MAX_RESPONSE_CHARS) {
                         ArchiveHelperResult.TransportFailure
                     } else {
@@ -92,6 +88,13 @@ internal class RootArchiveHelper(
         val destinationDirectory = shellQuote(HELPER_DIRECTORY)
         val destination = shellQuote(HELPER_PATH)
         val command = buildString {
+            // Helpers installed by other Manager versions are never run again; remove them first.
+            // A failed cleanup does not stop the install.
+            append("for old in ")
+            append(shellQuote(HELPER_ROOT))
+            append("/*; do [ \"\$old\" = ")
+            append(destinationDirectory)
+            append(" ] || rm -rf \"\$old\"; done; ")
             append("umask 077 && mkdir -p ")
             append(destinationDirectory)
             append(" && chown 0:0 ")
@@ -111,12 +114,8 @@ internal class RootArchiveHelper(
         }
         val process = processStarter(command)
         process.outputStream.close()
-        val stderrReader = Thread {
-            process.errorStream.use { it.copyTo(DiscardOutput) }
-        }.apply(Thread::start)
         val output = process.inputStream.bufferedReader().use { it.readLine().orEmpty() }
         val exitCode = process.waitFor()
-        stderrReader.join()
         return exitCode == 0 && output.substringBefore(' ') == expected
     }
 
@@ -140,13 +139,9 @@ internal class RootArchiveHelper(
     private companion object {
         const val MAX_RESPONSE_CHARS = 4 * 1024 * 1024
         const val BUNDLED_NAME = "libuclone_archive.so"
-        const val HELPER_DIRECTORY =
-            "/data/adb/uclone-slices-v2/manager-helper/${BuildConfig.VERSION_NAME}"
+        const val HELPER_ROOT = "/data/adb/uclone-slices-v2/manager-helper"
+        const val HELPER_DIRECTORY = "$HELPER_ROOT/${BuildConfig.VERSION_NAME}"
         const val HELPER_PATH = "$HELPER_DIRECTORY/uclone_archive"
         const val HELPER_COMMAND = "exec /system/bin/nsenter -t 1 -m -- $HELPER_PATH"
     }
-}
-
-private object DiscardOutput : OutputStream() {
-    override fun write(value: Int) = Unit
 }

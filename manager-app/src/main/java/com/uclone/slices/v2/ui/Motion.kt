@@ -15,6 +15,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -136,16 +138,25 @@ internal fun Modifier.pressFeedback(
         .then(gesture)
 }
 
-/** Screens whose first-entrance stagger already played in this process. */
-private val playedStaggers = mutableSetOf<String>()
+/**
+ * Screens whose first-entrance stagger already played. [SlicesTheme] keeps one set for the
+ * activity and saves it across recreation; outside the theme each caller remembers its own.
+ */
+internal val LocalPlayedStaggers = staticCompositionLocalOf<MutableSet<String>?> { null }
+
+internal val PlayedStaggersSaver = Saver<MutableSet<String>, ArrayList<String>>(
+    save = { ArrayList(it) },
+    restore = { it.toMutableSet() },
+)
 
 /**
- * True during the first entrance of [screen] in this process. It turns false shortly after, so
- * items that scroll into view later (or the screen on a later visit) do not replay it.
+ * True during the first entrance of [screen]. It turns false shortly after, so items that scroll
+ * into view later (or the screen on a later visit) do not replay it.
  */
 @Composable
 internal fun rememberStaggerPlay(screen: String): Boolean {
-    val first = remember(screen) { playedStaggers.add(screen) }
+    val played = LocalPlayedStaggers.current ?: remember { mutableSetOf<String>() }
+    val first = remember(screen) { played.add(screen) }
     var active by remember(screen) { mutableStateOf(first) }
     if (active) {
         LaunchedEffect(screen) {
@@ -196,7 +207,7 @@ internal fun rollingNumber(): AnimatedContentTransitionScope<String>.() -> Conte
     val direction = if (up) 1 else -1
     ContentTransform(
         targetContentEnter = slideInVertically(Motion.offset) { it / 2 * direction } + fadeIn(Motion.effects()),
-        initialContentExit = androidx.compose.animation.slideOutVertically(Motion.offset) { -it / 2 * direction } +
+        initialContentExit = slideOutVertically(Motion.offset) { -it / 2 * direction } +
             fadeOut(Motion.effects()),
         sizeTransform = SizeTransform(clip = false) { _, _ -> Motion.size },
     )

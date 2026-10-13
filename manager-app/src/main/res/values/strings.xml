@@ -3,7 +3,6 @@
     <string name="spaces_title">数据空间</string>
     <string name="refresh">刷新</string>
     <string name="retry">重试</string>
-    <string name="dismiss">知道了</string>
     <string name="back">返回</string>
     <string name="back_to_apps">返回应用列表</string>
     <string name="cancel">取消</string>
@@ -107,6 +106,7 @@
     <string name="restore_account_mapping">账号恢复位置</string>
     <string name="restore_as_new_account">恢复为新分账号</string>
     <string name="system_original_space">系统原始空间</string>
+    <string name="list_separator">、</string>
     <string name="base_restore_fixed">备份中的系统原始空间固定覆盖当前系统原始空间</string>
     <string name="restore_target">恢复到：%1$s</string>
     <string name="change_restore_target">更改恢复位置</string>
@@ -192,7 +192,6 @@
     <string name="load_runtime_log">查看日志</string>
     <string name="runtime_log_empty">暂无日志</string>
     <string name="search">搜索</string>
-    <string name="environment_status">运行环境状态</string>
 
     <string name="operation_refreshing">正在刷新空间状态</string>
     <string name="operation_preparing_configuration">正在读取应用信息</string>
@@ -238,7 +237,8 @@
     <string name="rebind_affected_spaces">将保留并恢复：%1$s</string>
     <string name="rebind_no_named_spaces">当前没有已命名的独立空间，配置记录仍会保留。</string>
     <string name="rebind_data_preserved">账号名称、CE/DE 数据、当前账号和重启启动开关均不会删除；重新绑定不会启动应用。</string>
-    <string name="rebind_confirmation_label">输入“绑定”以确认</string>
+    <string name="rebind_confirmation_label">输入“%1$s”以确认</string>
+    <string name="rebind_confirmation_word">绑定</string>
     <string name="rebind_confirmation_hint">仅在确认这是同一个可信应用时继续</string>
     <string name="rebind_confirm">保留分空间并重新绑定</string>
     <string name="sort_apps">排序</string>

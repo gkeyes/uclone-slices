@@ -96,7 +96,8 @@ import com.uclone.slices.v2.R
 
 /*
  * iOS 27 controls drawn with Compose foundation only: grouped panels, fields, progress, menus and
- * account chips. Glass chrome (title bar, sheets, alerts) lives in Components.kt / Glass.kt.
+ * account chips. Glass chrome (title bar, sheets, alerts) lives in ScreenScaffold.kt, Sheets.kt and
+ * Glass.kt.
  */
 
 /**

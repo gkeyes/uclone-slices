@@ -8,28 +8,28 @@ import androidx.lifecycle.viewModelScope
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.apps.InstalledAppsSource
 import com.uclone.slices.v2.apps.loadAppOptimized
-import com.uclone.slices.v2.runtime.AccountIoStatus
 import com.uclone.slices.v2.runtime.AccountIoScope
+import com.uclone.slices.v2.runtime.AccountIoStatus
 import com.uclone.slices.v2.runtime.ArchiveScope
 import com.uclone.slices.v2.runtime.ArchivedAccountKind
 import com.uclone.slices.v2.runtime.ArchivedState
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.PackageSnapshot
-import com.uclone.slices.v2.runtime.RestoreMapping
 import com.uclone.slices.v2.runtime.RestoreDomain
+import com.uclone.slices.v2.runtime.RestoreMapping
 import com.uclone.slices.v2.runtime.RestorePath
 import com.uclone.slices.v2.runtime.RestorePolicy
 import com.uclone.slices.v2.runtime.RestoreTarget
 import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeCommand
 import com.uclone.slices.v2.runtime.RuntimeReply
-import com.uclone.slices.v2.runtime.SigningKind
 import com.uclone.slices.v2.runtime.SigningIdentity
+import com.uclone.slices.v2.runtime.SigningKind
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -502,7 +502,8 @@ internal class BackupRestoreViewModel(
         val mapping = current.mappings.firstOrNull {
             it.archiveAccountId == archiveAccountId
         } ?: return
-        if (mapping.archiveKind == ArchiveAccountKind.Base || target is RestoreTarget.Existing && target.slotId == "base") {
+        val targetsBase = target is RestoreTarget.Existing && target.slotId == "base"
+        if (mapping.archiveKind == ArchiveAccountKind.Base || targetsBase) {
             return
         }
         if (target is RestoreTarget.Existing && current.mappings.any {
@@ -594,7 +595,9 @@ internal class BackupRestoreViewModel(
                         current.copy(
                             accountIoStatuses = reply.statuses,
                             pendingAccountIoRecovery = current.pendingAccountIoRecovery
-                                ?.takeIf { pending -> reply.statuses.any { it.ioToken == pending.ioToken } },
+                                ?.takeIf { pending ->
+                                    reply.statuses.any { it.ioToken == pending.ioToken }
+                                },
                             accountIoRecoveryError = null,
                             recoveringAccountIo = false,
                         )

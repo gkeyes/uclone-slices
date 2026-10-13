@@ -26,7 +26,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -280,6 +279,7 @@ private fun DeleteSpaceSheet(
                 text = stringResource(R.string.delete_space_data_warning),
                 tone = Tone.Danger,
                 gutter = false,
+                animateText = false,
             )
             SheetNote(stringResource(R.string.delete_space_current_preserved))
         }
@@ -306,7 +306,7 @@ private fun UnenrollAppSheet(
     } else {
         stringResource(
             R.string.unenroll_affected_spaces,
-            unenrollment.affectedSpaces.joinToString("、"),
+            joinSpaceNames(unenrollment.affectedSpaces),
         )
     }
     BottomSheet(
@@ -408,12 +408,13 @@ private fun RegistrationRecoverySheet(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val confirmationWord = stringResource(R.string.rebind_confirmation_word)
     val affectedSummary = if (recovery.affectedSpaces.isEmpty()) {
         stringResource(R.string.rebind_no_named_spaces)
     } else {
         stringResource(
             R.string.rebind_affected_spaces,
-            recovery.affectedSpaces.joinToString("、"),
+            joinSpaceNames(recovery.affectedSpaces),
         )
     }
     BottomSheet(
@@ -428,7 +429,7 @@ private fun RegistrationRecoverySheet(
             SlicesInputField(
                 value = recovery.confirmation,
                 onValueChange = { if (visible) onConfirmationChanged(it) },
-                label = stringResource(R.string.rebind_confirmation_label),
+                label = stringResource(R.string.rebind_confirmation_label, confirmationWord),
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(
@@ -444,7 +445,7 @@ private fun RegistrationRecoverySheet(
             confirmText = stringResource(R.string.rebind_confirm),
             onCancel = { if (visible) onDismiss() },
             onConfirm = { if (visible) onConfirm() },
-            confirmEnabled = recovery.confirmation == BINDING_CONFIRMATION,
+            confirmEnabled = recovery.confirmation == confirmationWord,
         )
     }
 }
@@ -519,60 +520,6 @@ private fun OperationDialog(visible: Boolean, operation: OperationUiState) {
             fontSize = TypeScale.subhead,
             lineHeight = 20.sp,
             textAlign = TextAlign.Center,
-        )
-    }
-}
-
-/**
- * Runtime problem card shown on top of lists while the Runtime is unavailable or incompatible: a
- * full-width row with a tonal status plate that opens the Runtime page.
- */
-@Composable
-internal fun RuntimeStatusCard(
-    runtimeReady: Boolean,
-    runtimeCompatible: Boolean,
-    busy: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val tone = when {
-        busy -> Tone.Info
-        runtimeReady && runtimeCompatible -> Tone.Success
-        else -> Tone.Warning
-    }
-    val title = when {
-        busy -> stringResource(R.string.environment_processing)
-        runtimeReady && !runtimeCompatible ->
-            stringResource(R.string.environment_version_mismatch)
-        runtimeReady -> stringResource(R.string.environment_ready)
-        else -> stringResource(R.string.environment_unavailable)
-    }
-    val description = when {
-        runtimeReady && !runtimeCompatible ->
-            stringResource(R.string.environment_version_mismatch_description)
-        runtimeReady -> stringResource(R.string.environment_ready_description)
-        else -> stringResource(R.string.environment_unavailable_description)
-    }
-    GroupCard(modifier = modifier, color = tone.container()) {
-        ListRow(
-            title = title,
-            summary = description,
-            icon = painterResource(R.drawable.ic_layers),
-            iconTone = tone,
-            leading = {
-                Box(
-                    Modifier
-                        .size(30.dp)
-                        .clip(RoundedCornerShape(Radius.icon))
-                        .background(Surfaces.card.copy(alpha = .6f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    StatusDot(tone)
-                }
-            },
-            onClick = onClick,
-            enabled = enabled,
         )
     }
 }

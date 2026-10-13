@@ -9,6 +9,7 @@ import com.uclone.slices.v2.runtime.ArchivedState
 import com.uclone.slices.v2.runtime.RestoreBatchResult
 import com.uclone.slices.v2.runtime.RestoreMapping
 import com.uclone.slices.v2.runtime.SigningIdentity
+import com.uclone.slices.v2.runtime.SigningKind
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +25,7 @@ internal sealed interface BackupRestoreJob {
         val scope: AccountIoScope,
         val destinationUri: String,
         val password: CharArray?,
-        val signingKind: com.uclone.slices.v2.runtime.SigningKind,
+        val signingKind: SigningKind,
         val signingSha256: List<String>,
         val appVersion: String,
         val appVersionCode: Long,

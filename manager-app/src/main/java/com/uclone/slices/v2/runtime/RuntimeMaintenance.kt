@@ -1,6 +1,5 @@
 package com.uclone.slices.v2.runtime
 
-import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 
@@ -22,7 +21,7 @@ internal class NoRuntimeMaintenance : RuntimeMaintenance {
 
 class RootRuntimeMaintenance internal constructor(
     private val processStarter: (String) -> Process = { command ->
-        ProcessBuilder("su", "-c", command).start()
+        startRootShell(command)
     },
 ) : RuntimeMaintenance {
     override suspend fun restartRuntime(): Boolean =
@@ -41,12 +40,8 @@ class RootRuntimeMaintenance internal constructor(
         }
         try {
             process.outputStream.close()
-            val stderrReader = Thread {
-                process.errorStream.use { it.copyTo(MaintenanceDiscardOutput) }
-            }.apply(Thread::start)
             val stdout = process.inputStream.bufferedReader().use { it.readText() }
             val exitCode = process.waitFor()
-            stderrReader.join()
             CommandResult(exitCode, stdout)
         } catch (interrupted: InterruptedException) {
             throw interrupted
@@ -77,8 +72,4 @@ class RootRuntimeMaintenance internal constructor(
             "for f in $RUNTIME_ROOT/ucloned.log.1 $RUNTIME_ROOT/ucloned.log; do " +
                 "[ -f \"\$f\" ] && tail -n 40 \"\$f\"; done; true"
     }
-}
-
-private object MaintenanceDiscardOutput : OutputStream() {
-    override fun write(value: Int) = Unit
 }

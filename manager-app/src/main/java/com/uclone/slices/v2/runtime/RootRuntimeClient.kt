@@ -1,12 +1,11 @@
 package com.uclone.slices.v2.runtime
 
-import java.io.OutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 
 class RootRuntimeClient internal constructor(
     private val processStarter: () -> Process = {
-        ProcessBuilder("su", "-c", RPC_COMMAND).start()
+        startRootShell(RPC_COMMAND)
     },
 ) : RuntimeClient {
     override suspend fun execute(command: RuntimeCommand): RuntimeReply =
@@ -18,16 +17,12 @@ class RootRuntimeClient internal constructor(
             } catch (_: Exception) {
                 return@runInterruptible RuntimeReply.TransportFailure
             }
-            val stderrReader = Thread {
-                process.errorStream.use { it.copyTo(DiscardOutput) }
-            }.apply(Thread::start)
             try {
                 process.outputStream.use {
                     it.write((RuntimeProtocol.encode(command) + "\n").toByteArray())
                 }
                 val output = process.inputStream.bufferedReader().use { it.readText() }
                 val exitCode = process.waitFor()
-                stderrReader.join()
                 if (exitCode != 0) {
                     RuntimeReply.TransportFailure
                 } else {
@@ -47,8 +42,4 @@ class RootRuntimeClient internal constructor(
     private companion object {
         const val RPC_COMMAND = "/data/adb/modules/uclone-slices-v2/bin/slotctl rpc"
     }
-}
-
-private object DiscardOutput : OutputStream() {
-    override fun write(value: Int) = Unit
 }

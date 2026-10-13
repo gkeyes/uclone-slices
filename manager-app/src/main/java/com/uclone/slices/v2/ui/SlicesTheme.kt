@@ -13,9 +13,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -24,9 +25,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 
 /*
- * The Manager draws its own iOS 27 components (Components.kt, Glass.kt, liquid/). Material 3 is
- * only a bridge for static Text and Icon: their default text style and content colour come from
- * here. Colours follow the system light / dark setting; there is no theme or style picker.
+ * The Manager draws its own iOS 27 components (ScreenScaffold.kt, Rows.kt, Buttons.kt, Sheets.kt,
+ * StatusViews.kt, Controls.kt, Glass.kt, liquid/). Material 3 is only a bridge for static Text and
+ * Icon: their default text style and content colour come from here. Colours follow the system
+ * light / dark setting; there is no theme or style picker.
  */
 
 private val LightColors = materialLightColorScheme(
@@ -122,6 +124,7 @@ internal fun SlicesTheme(content: @Composable () -> Unit) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         reducedMotion = readReducedMotion(context)
     }
+    val playedStaggers = rememberSaveable(saver = PlayedStaggersSaver) { mutableSetOf<String>() }
     MaterialTheme(
         colorScheme = materialColors,
         typography = SlicesTypography,
@@ -134,6 +137,7 @@ internal fun SlicesTheme(content: @Composable () -> Unit) {
         CompositionLocalProvider(
             LocalContentColor provides TextPrimary,
             LocalReducedMotion provides reducedMotion,
+            LocalPlayedStaggers provides playedStaggers,
             content = content,
         )
     }
