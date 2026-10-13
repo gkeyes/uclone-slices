@@ -1,7 +1,10 @@
 package com.uclone.slices.v2.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.expandVertically
@@ -21,6 +24,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,8 +47,6 @@ import com.uclone.slices.v2.R
 import com.uclone.slices.v2.apps.InstalledApp
 import com.uclone.slices.v2.runtime.BindingState
 import com.uclone.slices.v2.runtime.PackageSnapshot
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 
 @Composable
 internal fun AppListScreen(
@@ -380,8 +384,8 @@ private fun ExpandToggle(expanded: Boolean, onToggle: () -> Unit) {
     )
     Row(
         modifier = Modifier
-            .pressFeedback(true, Motion.PressedScale, androidx.compose.foundation.shape.RoundedCornerShape(Radius.chip))
-            .clip(androidx.compose.foundation.shape.RoundedCornerShape(Radius.chip))
+            .pressFeedback(true, Motion.PressedScale, RoundedCornerShape(Radius.chip))
+            .clip(RoundedCornerShape(Radius.chip))
             .clickable(
                 role = Role.Button,
                 interactionSource = null,
@@ -468,7 +472,7 @@ private fun ManagedAppCard(
                         tint = Accent,
                         modifier = Modifier.size(15.dp),
                     )
-                    androidx.compose.animation.AnimatedContent(
+                    AnimatedContent(
                         targetState = stringResource(
                             R.string.configured_app_summary,
                             independentSpaceCount(snapshot),
@@ -530,12 +534,12 @@ private fun ManagedAppCard(
         AnimatedVisibility(
             visible = accountsExpanded,
             enter = if (reduced) {
-                androidx.compose.animation.EnterTransition.None
+                EnterTransition.None
             } else {
                 expandVertically(Motion.size) + fadeIn(Motion.effects())
             },
             exit = if (reduced) {
-                androidx.compose.animation.ExitTransition.None
+                ExitTransition.None
             } else {
                 shrinkVertically(Motion.size) + fadeOut(Motion.effects())
             },

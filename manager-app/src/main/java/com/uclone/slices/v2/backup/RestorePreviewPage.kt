@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -165,7 +166,7 @@ internal fun RestorePreviewContent(
         item(key = "mappings") {
             GroupCard {
                 state.mappings.forEach { mapping ->
-                    androidx.compose.runtime.key(mapping.archiveAccountId) {
+                    key(mapping.archiveAccountId) {
                         MappingRow(mapping, state, onIntent)
                     }
                 }

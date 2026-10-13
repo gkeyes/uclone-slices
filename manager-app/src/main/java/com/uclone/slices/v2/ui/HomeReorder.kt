@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -31,8 +33,10 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -218,9 +222,9 @@ internal fun ReorderRow(
     val handleText = stringResource(R.string.drag_to_reorder)
     val shape = RoundedCornerShape(Radius.row)
     val packageName = app.packageName
-    val dragCallbacks: suspend androidx.compose.ui.input.pointer.PointerInputScope.(Boolean) -> Unit =
+    val dragCallbacks: suspend PointerInputScope.(Boolean) -> Unit =
         { afterLongPress ->
-            val onStart: (androidx.compose.ui.geometry.Offset) -> Unit = {
+            val onStart: (Offset) -> Unit = {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 state.start(packageName)
             }
@@ -282,7 +286,7 @@ internal fun ReorderRow(
     ) {
         AppIcon(app.label, app.icon, 36.dp)
         Column(Modifier.weight(1f)) {
-            androidx.compose.material3.Text(
+            Text(
                 text = app.label,
                 color = TextPrimary,
                 fontSize = TypeScale.body,
@@ -290,7 +294,7 @@ internal fun ReorderRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            androidx.compose.material3.Text(
+            Text(
                 text = stringResource(R.string.independent_space_count, accountCount),
                 color = TextSecondary,
                 fontSize = TypeScale.caption,
@@ -313,7 +317,7 @@ internal fun ReorderRow(
                 .semantics { contentDescription = handleText },
             contentAlignment = Alignment.Center,
         ) {
-            androidx.compose.material3.Icon(
+            Icon(
                 painter = painterResource(R.drawable.ic_drag_handle),
                 contentDescription = null,
                 tint = if (dragging) Accent else TextTertiary,

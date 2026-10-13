@@ -15,6 +15,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -196,7 +197,7 @@ internal fun rollingNumber(): AnimatedContentTransitionScope<String>.() -> Conte
     val direction = if (up) 1 else -1
     ContentTransform(
         targetContentEnter = slideInVertically(Motion.offset) { it / 2 * direction } + fadeIn(Motion.effects()),
-        initialContentExit = androidx.compose.animation.slideOutVertically(Motion.offset) { -it / 2 * direction } +
+        initialContentExit = slideOutVertically(Motion.offset) { -it / 2 * direction } +
             fadeOut(Motion.effects()),
         sizeTransform = SizeTransform(clip = false) { _, _ -> Motion.size },
     )

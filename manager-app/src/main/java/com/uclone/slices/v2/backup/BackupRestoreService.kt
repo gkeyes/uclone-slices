@@ -3,18 +3,22 @@ package com.uclone.slices.v2.backup
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.StatFs
+import android.provider.DocumentsContract
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.uclone.slices.v2.R
 import com.uclone.slices.v2.runtime.AccountIoKind
+import com.uclone.slices.v2.runtime.AccountIoScope
 import com.uclone.slices.v2.runtime.ArchiveScope
 import com.uclone.slices.v2.runtime.ErrorCode
+import com.uclone.slices.v2.runtime.RestoreItemState
 import com.uclone.slices.v2.runtime.RootRuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeClient
 import com.uclone.slices.v2.runtime.RuntimeCommand
@@ -127,7 +131,7 @@ internal class BackupRestoreService : Service() {
 }
 
 internal class BackupRestoreEngine(
-    private val context: android.content.Context,
+    private val context: Context,
     private val runtime: RuntimeClient,
     private val helper: RootArchiveHelper,
     private val onBytesProgress: (percent: Int) -> Unit = {},
@@ -200,7 +204,7 @@ internal class BackupRestoreEngine(
                     androidVersion = Build.VERSION.RELEASE,
                     device = "${Build.MANUFACTURER} ${Build.MODEL}",
                     createdAtMillis = System.currentTimeMillis(),
-                    scope = if (job.scope is com.uclone.slices.v2.runtime.AccountIoScope.Account) {
+                    scope = if (job.scope is AccountIoScope.Account) {
                         ArchiveScope.Account
                     } else {
                         ArchiveScope.AllAccounts
@@ -433,7 +437,7 @@ internal class BackupRestoreEngine(
                     is RuntimeReply.RestoreItem -> {
                         anyRestored = anyRestored ||
                             committed.result.state ==
-                            com.uclone.slices.v2.runtime.RestoreItemState.Restored
+                            RestoreItemState.Restored
                     }
                     else -> {
                         publishRuntimeFailure(committed)
@@ -446,7 +450,7 @@ internal class BackupRestoreEngine(
                 is RuntimeReply.RestoreBatch -> {
                     token = null
                     anyRestored = finished.result.items.any {
-                        it.state == com.uclone.slices.v2.runtime.RestoreItemState.Restored
+                        it.state == RestoreItemState.Restored
                     }
                     BackupRestoreJobRegistry.publish(
                         BackupJobState.RestoreComplete(finished.result),
@@ -557,7 +561,7 @@ internal class BackupRestoreEngine(
             context.contentResolver.openFileDescriptor(uri, "rwt")?.close()
         }
         runCatching {
-            android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri)
+            DocumentsContract.deleteDocument(context.contentResolver, uri)
         }
     }
 
