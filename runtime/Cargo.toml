@@ -4,7 +4,7 @@ version = "0.2.4"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
-description = "Minimal runtime for UClone Slices V2"
+description = "Root runtime for UClone Slices"
 publish = false
 
 [dependencies]
