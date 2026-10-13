@@ -4,7 +4,7 @@ use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, Capabilities, ObservedView,
     PackageAggregate, PackageBinding, PackageEnabledState, PackageIdentity, PackageInspection,
     PackageName, RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging, SeedMode, Slot,
-    SlotId, TransferId,
+    SlotId, TransferId, TrashHold, TrashIntent,
 };
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
@@ -13,6 +13,7 @@ pub(crate) struct MemoryPackageStore {
     packages: BTreeMap<PackageName, PackageAggregate>,
     bindings: BTreeMap<PackageName, PackageBinding>,
     rebind_intents: BTreeMap<PackageName, RebindIntent>,
+    trash_intents: BTreeMap<PackageName, TrashIntent>,
     account_io_intents: BTreeMap<PackageName, AccountIoIntent>,
     account_io_results: BTreeMap<PackageName, RestoreBatchResult>,
     backups: BTreeMap<PackageName, (PackageAggregate, Vec<SlotId>)>,
@@ -20,6 +21,7 @@ pub(crate) struct MemoryPackageStore {
     failed_save_calls: BTreeSet<usize>,
     remove_calls: usize,
     failed_remove_calls: BTreeSet<usize>,
+    unreadable_trash_intents: BTreeSet<PackageName>,
 }
 
 impl MemoryPackageStore {
@@ -33,6 +35,10 @@ impl MemoryPackageStore {
 
     pub(crate) fn save_calls(&self) -> usize {
         self.save_calls
+    }
+
+    pub(crate) fn make_trash_intent_unreadable(&mut self, package: PackageName) {
+        self.unreadable_trash_intents.insert(package);
     }
 
     pub(crate) fn fail_next_remove(&mut self) {
@@ -103,6 +109,25 @@ impl PackageStore for MemoryPackageStore {
         Ok(())
     }
 
+    fn load_trash_intent(
+        &self,
+        package: &PackageName,
+    ) -> Result<Option<TrashIntent>, AdapterError> {
+        if self.unreadable_trash_intents.contains(package) {
+            return Err(AdapterError::new("injected unreadable trash intent"));
+        }
+        Ok(self.trash_intents.get(package).cloned())
+    }
+
+    fn save_trash_intent(&mut self, intent: &TrashIntent) -> Result<(), AdapterError> {
+        intent
+            .validate()
+            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+        self.trash_intents
+            .insert(intent.package.clone(), intent.clone());
+        Ok(())
+    }
+
     fn list_account_io_intents(&self) -> Result<Vec<AccountIoIntent>, AdapterError> {
         Ok(self.account_io_intents.values().cloned().collect())
     }
@@ -157,6 +182,7 @@ impl PackageStore for MemoryPackageStore {
         self.packages.remove(package);
         self.bindings.remove(package);
         self.rebind_intents.remove(package);
+        self.trash_intents.remove(package);
         self.account_io_intents.remove(package);
         self.account_io_results.remove(package);
         Ok(())
@@ -171,8 +197,10 @@ pub(crate) enum SlotFailure {
     Discard,
     DiscardCe,
     DiscardDe,
-    DiscardPackageCe,
-    DiscardPackageDe,
+    TrashPackageCe,
+    TrashPackageDe,
+    FinalizeTrashDe,
+    PurgeTrash,
     Cleanup,
 }
 
@@ -182,6 +210,14 @@ pub(crate) struct MemorySlotStorage {
     staging: BTreeSet<(PackageName, AccountIoToken, ArchiveAccountId)>,
     maintenance: BTreeSet<(PackageName, AccountIoToken)>,
     replacements: BTreeMap<(PackageName, AccountIoToken, SlotId), Option<(bool, bool)>>,
+    /// Slot domains of an unenroll in progress, not yet expiring.
+    pending: BTreeMap<(PackageName, SlotId), (bool, bool)>,
+    /// Trash directory name of each slot domain moved to the trash by unenroll, which the
+    /// memory store never expires.
+    trash: BTreeMap<(PackageName, SlotId), (Option<String>, Option<String>)>,
+    trash_names_reserved: std::cell::Cell<u64>,
+    purge_calls: usize,
+    last_purge_held: Vec<TrashHold>,
     failures: VecDeque<SlotFailure>,
 }
 
@@ -204,6 +240,36 @@ impl MemorySlotStorage {
         slot: &SlotId,
     ) -> Option<(bool, bool)> {
         self.domains.get(&(package.clone(), slot.clone())).copied()
+    }
+
+    pub(crate) fn trashed(&self, package: &PackageName, slot: &SlotId) -> Option<(bool, bool)> {
+        self.trash
+            .get(&(package.clone(), slot.clone()))
+            .map(|(ce, de)| (ce.is_some(), de.is_some()))
+    }
+
+    pub(crate) fn trash_names(
+        &self,
+        package: &PackageName,
+        slot: &SlotId,
+    ) -> Option<(Option<String>, Option<String>)> {
+        self.trash.get(&(package.clone(), slot.clone())).cloned()
+    }
+
+    pub(crate) fn last_purge_held(&self) -> &[TrashHold] {
+        &self.last_purge_held
+    }
+
+    pub(crate) fn pending_trash(
+        &self,
+        package: &PackageName,
+        slot: &SlotId,
+    ) -> Option<(bool, bool)> {
+        self.pending.get(&(package.clone(), slot.clone())).copied()
+    }
+
+    pub(crate) fn purge_calls(&self) -> usize {
+        self.purge_calls
     }
 
     pub(crate) fn fail_next(&mut self, failure: SlotFailure) {
@@ -280,28 +346,98 @@ impl SlotStorage for MemorySlotStorage {
         }
     }
 
-    fn discard_package(&mut self, package: &PackageName) -> Result<(), AdapterError> {
-        let ce_failed = self.take_failure(SlotFailure::DiscardPackageCe);
-        let de_failed = self.take_failure(SlotFailure::DiscardPackageDe);
-        for ((stored_package, _slot), pair) in &mut self.domains {
+    fn stage_package_trash(&mut self, package: &PackageName) -> Result<(bool, bool), AdapterError> {
+        let ce_failed = self.take_failure(SlotFailure::TrashPackageCe);
+        let de_failed = self.take_failure(SlotFailure::TrashPackageDe);
+        for ((stored_package, slot), pair) in &mut self.domains {
             if stored_package != package {
                 continue;
             }
-            if !ce_failed {
+            let pending = self
+                .pending
+                .entry((package.clone(), slot.clone()))
+                .or_insert((false, false));
+            if !ce_failed && pair.0 {
                 pair.0 = false;
+                pending.0 = true;
             }
-            if !de_failed {
+            if !de_failed && pair.1 {
                 pair.1 = false;
+                pending.1 = true;
             }
         }
         self.domains.retain(|_, pair| *pair != (false, false));
+        self.pending.retain(|_, pair| *pair != (false, false));
         if ce_failed {
-            Err(AdapterError::new("injected CE package discard failure"))
-        } else if de_failed {
-            Err(AdapterError::new("injected DE package discard failure"))
-        } else {
-            Ok(())
+            return Err(AdapterError::new("injected CE package trash failure"));
         }
+        if de_failed {
+            return Err(AdapterError::new("injected DE package trash failure"));
+        }
+        Ok(self
+            .pending
+            .iter()
+            .filter(|((stored_package, _slot), _pair)| stored_package == package)
+            .fold((false, false), |found, (_key, pair)| {
+                (found.0 || pair.0, found.1 || pair.1)
+            }))
+    }
+
+    fn reserve_trash_name(&self, _package: &PackageName) -> Result<String, AdapterError> {
+        // Every call is a new second, so a retry that reserved again would be visible.
+        let reserved = self.trash_names_reserved.get();
+        self.trash_names_reserved.set(reserved + 1);
+        Ok((1_000 + reserved).to_string())
+    }
+
+    fn finalize_package_trash(&mut self, intent: &TrashIntent) -> Result<(), AdapterError> {
+        let de_failed = self.take_failure(SlotFailure::FinalizeTrashDe);
+        let package = &intent.package;
+        for ((stored_package, slot), pair) in &mut self.pending {
+            if stored_package != package {
+                continue;
+            }
+            let trashed = self
+                .trash
+                .entry((package.clone(), slot.clone()))
+                .or_insert((None, None));
+            if pair.0 {
+                pair.0 = false;
+                trashed.0 = Some(intent.name.clone());
+            }
+            if pair.1 && !de_failed {
+                pair.1 = false;
+                trashed.1 = Some(intent.name.clone());
+            }
+        }
+        self.pending.retain(|_, pair| *pair != (false, false));
+        if de_failed {
+            return Err(AdapterError::new("injected DE trash finalize failure"));
+        }
+        let name = Some(intent.name.as_str());
+        let (ce_done, de_done) = self
+            .trash
+            .iter()
+            .filter(|((stored_package, _slot), _names)| stored_package == package)
+            .fold((false, false), |done, (_key, (ce, de))| {
+                (
+                    done.0 || ce.as_deref() == name,
+                    done.1 || de.as_deref() == name,
+                )
+            });
+        if (intent.ce && !ce_done) || (intent.de && !de_done) {
+            return Err(AdapterError::state_conflict("trashed slot data is missing"));
+        }
+        Ok(())
+    }
+
+    fn purge_trash(&mut self, held: &[TrashHold]) -> Result<(), AdapterError> {
+        self.purge_calls += 1;
+        self.last_purge_held = held.to_vec();
+        if self.take_failure(SlotFailure::PurgeTrash) {
+            return Err(AdapterError::new("injected trash purge failure"));
+        }
+        Ok(())
     }
 
     fn require_complete_pair(

@@ -25,7 +25,7 @@
     <string name="original_space">原始空间</string>
     <string name="configured_app_actions">应用操作</string>
     <string name="launch_after_reboot_action">重启后自动切换并打开 App</string>
-    <string name="unenroll_app_action">取消配置并删除分空间</string>
+    <string name="unenroll_app_action">取消配置并移除分空间</string>
     <string name="available_apps">可配置应用</string>
     <string name="configured_app_summary">%1$d 个独立空间 · 当前使用 %2$s</string>
     <string name="binding_ready">身份绑定正常</string>
@@ -166,12 +166,12 @@
     <string name="delete_space_confirm">永久删除</string>
     <string name="unenroll_app_title">取消配置？</string>
     <string name="unenroll_app_message">%1$s · %2$s</string>
-    <string name="unenroll_affected_spaces">将永久删除：%1$s</string>
+    <string name="unenroll_affected_spaces">将移入回收区，7 天后永久删除：%1$s</string>
     <string name="unenroll_no_spaces">该应用没有独立空间，将只删除配置记录。</string>
     <string name="unenroll_base_preserved">应用本身及系统原始空间中的数据会保留。</string>
-    <string name="unenroll_confirmation_toggle">我已了解并确认永久删除上述分空间</string>
+    <string name="unenroll_confirmation_toggle">我已了解上述分空间会在 7 天后永久删除</string>
     <string name="unenroll_confirmation_toggle_no_spaces">我确认取消该应用配置</string>
-    <string name="unenroll_confirm">取消配置并删除</string>
+    <string name="unenroll_confirm">取消配置并移除</string>
 
     <string name="runtime_status_title">运行环境</string>
     <string name="runtime_status_subtitle">查看 Manager 当前能够确认的 Runtime 状态</string>
@@ -230,7 +230,7 @@
     <string name="success_launched">已启动“%1$s”</string>
     <string name="success_renamed">已重命名为“%1$s”</string>
     <string name="success_deleted">已删除“%1$s”及其数据</string>
-    <string name="success_unenrolled">已取消“%1$s”的配置并删除分空间</string>
+    <string name="success_unenrolled">已取消“%1$s”的配置，分空间已移入回收区，7 天后删除</string>
 
     <string name="rebind_title">保留分空间并重新绑定？</string>
     <string name="rebind_message">%1$s 来自 0.1.6 的旧配置，缺少签名记录。确认当前应用可信后可无损恢复。</string>

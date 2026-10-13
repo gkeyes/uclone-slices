@@ -2,6 +2,7 @@
 //! repeats the runtime and storage roots; a test keeps them in step.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Package name of the Manager app.
 pub const MANAGER_PACKAGE: &str = "com.uclone.slices.v2";
@@ -35,6 +36,13 @@ pub const LEGACY_USER_CE_ROOT: &str = "/data/data";
 pub(crate) const TRANSFERS_DIR: &str = "transfers";
 pub(crate) const MAINTENANCE_DIR: &str = "maintenance";
 pub(crate) const ROLLBACK_DIR: &str = "rollback";
+/// Slot data of unenrolled packages, as `<storage root>/trash/<unix seconds>[-N]/<package>`.
+pub(crate) const TRASH_DIR: &str = "trash";
+/// Below [`TRASH_DIR`]: data of an unenroll still in progress, which never expires.
+pub(crate) const TRASH_PENDING_DIR: &str = "pending";
+
+/// How long unenrolled slot data stays in the trash before it is deleted for good.
+pub(crate) const TRASH_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Mount roots in `/proc/self/mountinfo` that contain these markers come from the runtime.
 pub(crate) const SLOTS_MOUNT_MARKER: &str = "/uclone-slices-v2/slots/";

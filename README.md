@@ -5,7 +5,7 @@
 
 UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前版本为 **v0.2.4**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 协议 ID 为 `0.2.2`；Manager 与 KernelSU 模块需使用同一版本。
+当前版本为 **v0.2.5**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 协议 ID 为 `0.2.3`；Manager 与 KernelSU 模块需使用同一版本。
 
 ## 功能
 
@@ -44,7 +44,7 @@ Release 产物由 GitHub Actions 从同一提交 SHA 生成：
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.2.2`（协议 ID）。
+4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.2.3`（协议 ID）。
 
 Release APK 使用固定证书签名，CI 会校验证书；覆盖安装即可，不要卸载或清数据。
 
@@ -58,9 +58,9 @@ Release APK 使用固定证书签名，CI 会校验证书；覆盖安装即可�
 6. 已配置 App 的菜单可开启“重启后自动切换并打开 App”；默认关闭时重启恢复只切换空间，不启动 App。
 7. 首页标题栏的“备份”图标进入“备份与恢复”，可备份全部账号、单独备份 Base 或单独备份一个分账号，页面和通知显示完成百分比。
 8. 恢复时选择 `.ucsbackup`，输入密码并核对来源；Base 目标固定，分账号可覆盖现有分账号或恢复为新分账号。
-9. 同一菜单可执行“取消配置并删除分空间”。
+9. 同一菜单可执行“取消配置并移除分空间”。
 
-取消配置只删除 UClone 管理的独立 CE/DE 空间和登记记录，不卸载 App，也不删除系统原始数据。
+取消配置会切回 Base 并移除登记记录，UClone 管理的独立 CE/DE 空间不会立即删除，而是移入回收区保留 7 天，之后由 Runtime 在开机协调或下一次取消配置时永久删除。取消配置不卸载 App，也不删除系统原始数据。
 
 ## 架构
 
@@ -126,6 +126,7 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 ## 数据位置
 
 - 聚合状态：`/data/adb/uclone-slices-v2/packages/<package>/aggregate.json`
+- 取消配置回收区记录：`/data/adb/uclone-slices-v2/packages/<package>/trash-intent.json`
 - 签名身份：`/data/adb/uclone-slices-v2/packages/<package>/binding-v1.json`
 - 重绑 journal：`/data/adb/uclone-slices-v2/packages/<package>/rebind-intent.json`
 - 备份/恢复 journal：`/data/adb/uclone-slices-v2/packages/<package>/account-io-intent-v1.json`
@@ -135,8 +136,9 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 - DE 空间：`/data/misc_de/0/uclone-slices-v2/slots/<package>/<slot>`
 - Runtime socket：`/data/adb/uclone-slices-v2/runtime.sock`
 - 恢复暂存和回滚：CE/DE UClone 根下的 `transfers`、`maintenance`、`rollback`，事务完成或恢复后统一清理。
+- 回收区：取消配置时先把 CE、DE 各自的 `slots/<package>` 在同一文件系统内重命名到 CE/DE UClone 根下的 `trash/pending/<package>`（不会过期）；两个域都移入后，Runtime 选定一个两域都未使用的 `<Unix 秒>[-<序号>]` 名称并先写入 `packages/<package>/trash-intent.json`，再把两域分别重命名为 `trash/<该名称>/<package>`；确认每个原本有数据的域都已到位后，把各域 `trash/<该名称>/<package>` 的修改时间设为当前时间（7 天从这一刻起算，迟到的重试也能保留完整 7 天），再移除登记（连同该记录）。中途中断时，登记保持“取消配置中”，下次加载或开机协调会从已完成的步骤继续，并沿用已记录的名称。开机协调和每次成功取消配置后清理回收区：时间戳名称和子项修改时间都超过 7 天的、以合法包名命名的子项被删除，目录清空后再删除自身；进行中的取消配置所记录的那一个条目（读不出记录时为该包的全部条目）、`pending`、名称不符合 `<数字>` 或 `<数字>-<数字>` 的条目和非包名子项保持不动，删除不跟随符号链接。
 
-Runtime 根目录、CE/DE 的 UClone 根、`slots` 和包名父目录均为 `root:root 0700`；socket 为 `root:root 0600`。slot 本身及其内容继续使用目标 App 的 UID、原 mode 和 MCS 标签。
+Runtime 根目录、CE/DE 的 UClone 根、`slots`、`trash`、`trash/pending`、`trash/<时间戳>` 和包名父目录均为 `root:root 0700`；socket 为 `root:root 0600`。slot 本身及其内容继续使用目标 App 的 UID、原 mode 和 MCS 标签。
 
 备份格式、安全边界和恢复事务详见 [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md)。GitHub Release 仅在用户完成真机验收并明确确认后发布。
 

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use super::*;
 use crate::adapters::{MemoryAndroidOps, MemoryPackageStore, MemorySlotStorage};
 
-const CLIENT_BUILD_ID: &str = "0.2.2";
+const CLIENT_BUILD_ID: &str = "0.2.3";
 
 #[test]
 fn shared_fixtures_cover_the_core_command_flow() {
@@ -97,7 +97,7 @@ fn unenroll_rejects_fields_that_have_no_consumer() {
     let response = handle_line(
         &mut runtime,
         CLIENT_BUILD_ID,
-        r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.2.2"}"#,
+        r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.2.3"}"#,
     );
 
     assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -114,7 +114,7 @@ fn reboot_launch_setting_requires_a_boolean() {
     let response = handle_line(
         &mut runtime,
         CLIENT_BUILD_ID,
-        r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.2.2"}"#,
+        r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.2.3"}"#,
     );
 
     assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -129,8 +129,8 @@ fn rebind_rejects_invalid_certificate_digests_and_unknown_signing_fields() {
     );
 
     for request in [
-        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.2.2"}"#,
-        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.2.2"}"#,
+        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.2.3"}"#,
+        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.2.3"}"#,
     ] {
         assert_eq!(
             handle_line(&mut runtime, CLIENT_BUILD_ID, request),
@@ -150,7 +150,7 @@ fn reset_marker_only_accepts_the_ui_backed_true_value() {
     let response = handle_line(
         &mut runtime,
         CLIENT_BUILD_ID,
-        r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.2.2"}"#,
+        r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.2.3"}"#,
     );
 
     assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -243,8 +243,8 @@ fn account_backup_io_is_exposed_as_a_versioned_runtime_transaction() {
 
     let response = handle_line(
         &mut runtime,
-        "0.2.2",
-        r#"{"op":"begin_backup_io","package":"com.example.app","scope":{"kind":"account","slot":"base"},"client_build_id":"0.2.2"}"#,
+        "0.2.3",
+        r#"{"op":"begin_backup_io","package":"com.example.app","scope":{"kind":"account","slot":"base"},"client_build_id":"0.2.3"}"#,
     );
 
     assert!(response.contains("\"io_token\""), "response: {response}");
@@ -257,8 +257,8 @@ fn account_io_status_is_queryable_without_mutating_package_state() {
 
     let response = handle_line(
         &mut runtime,
-        "0.2.2",
-        r#"{"op":"list_account_io_status","client_build_id":"0.2.2"}"#,
+        "0.2.3",
+        r#"{"op":"list_account_io_status","client_build_id":"0.2.3"}"#,
     );
 
     assert_eq!(response, "{\"ok\":{\"account_io\":[]}}\n");
