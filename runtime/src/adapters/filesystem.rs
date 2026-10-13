@@ -1205,57 +1205,47 @@ fn replace_domain(
 }
 
 fn copied_tree_bytes(root: &Path) -> Result<u64, AdapterError> {
-    let metadata = fs::symlink_metadata(root).map_err(io_error)?;
-    let mut bytes = metadata
-        .blocks()
-        .checked_mul(512)
-        .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?
-        .max(metadata.len())
-        .max(metadata.blksize());
-    if metadata.file_type().is_dir() {
-        for entry in fs::read_dir(root).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            bytes = bytes
-                .checked_add(copied_tree_bytes(&entry.path())?)
-                .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
-        }
-    }
-    Ok(bytes)
+    copied_tree_bytes_filtered(root, &BTreeSet::new())
 }
 
 fn copied_tree_bytes_excluding(root: &Path, patterns: &[&str]) -> Result<u64, AdapterError> {
     let excluded = resolve_preserve_roots(root, patterns)?
         .into_iter()
         .collect::<BTreeSet<_>>();
-    copied_tree_bytes_filtered(root, root, &excluded)
+    copied_tree_bytes_filtered(root, &excluded)
 }
 
+/// Sums the space a copy of `root` needs, skipping `excluded` relative paths. The tree is
+/// app-controlled, so it is walked with an explicit stack instead of recursion.
 fn copied_tree_bytes_filtered(
     root: &Path,
-    path: &Path,
     excluded: &BTreeSet<PathBuf>,
 ) -> Result<u64, AdapterError> {
-    if path != root {
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
-        if excluded.contains(relative) {
-            return Ok(0);
+    let mut pending = vec![root.to_path_buf()];
+    let mut bytes = 0_u64;
+    while let Some(path) = pending.pop() {
+        if path != root {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|error| AdapterError::state_conflict(error.to_string()))?;
+            if excluded.contains(relative) {
+                continue;
+            }
         }
-    }
-    let metadata = fs::symlink_metadata(path).map_err(io_error)?;
-    let mut bytes = metadata
-        .blocks()
-        .checked_mul(512)
-        .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?
-        .max(metadata.len())
-        .max(metadata.blksize());
-    if metadata.file_type().is_dir() {
-        for entry in fs::read_dir(path).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            bytes = bytes
-                .checked_add(copied_tree_bytes_filtered(root, &entry.path(), excluded)?)
-                .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
+        let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
+        let entry_bytes = metadata
+            .blocks()
+            .checked_mul(512)
+            .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?
+            .max(metadata.len())
+            .max(metadata.blksize());
+        bytes = bytes
+            .checked_add(entry_bytes)
+            .ok_or_else(|| AdapterError::state_conflict("restore size overflow"))?;
+        if metadata.file_type().is_dir() {
+            for entry in fs::read_dir(&path).map_err(io_error)? {
+                pending.push(entry.map_err(io_error)?.path());
+            }
         }
     }
     Ok(bytes)
@@ -1891,15 +1881,60 @@ fn copy_tree_excluding(
     target: &Path,
     excluded: &[PathBuf],
 ) -> Result<(), AdapterError> {
-    copy_tree_excluding_at(source, target, Path::new(""), excluded)
+    enum Step {
+        Copy {
+            source: PathBuf,
+            target: PathBuf,
+            relative: PathBuf,
+        },
+        // Applied after the directory's children so their writes do not move its mtime.
+        Profile {
+            source: PathBuf,
+            target: PathBuf,
+        },
+    }
+    let mut pending = vec![Step::Copy {
+        source: source.to_path_buf(),
+        target: target.to_path_buf(),
+        relative: PathBuf::new(),
+    }];
+    while let Some(step) = pending.pop() {
+        match step {
+            Step::Copy {
+                source,
+                target,
+                relative,
+            } => {
+                let children = copy_directory_excluding(&source, &target, &relative, excluded)?;
+                for (source, target, relative) in children {
+                    pending.push(Step::Profile {
+                        source: source.clone(),
+                        target: target.clone(),
+                    });
+                    pending.push(Step::Copy {
+                        source,
+                        target,
+                        relative,
+                    });
+                }
+            }
+            Step::Profile { source, target } => {
+                apply_filtered_directory_profile(&source, &target)?;
+            }
+        }
+    }
+    Ok(())
 }
 
-fn copy_tree_excluding_at(
+/// Copies one directory level. Children that contain a preserved path are created as empty
+/// directories and returned as `(source, destination, relative)` for the caller to descend.
+fn copy_directory_excluding(
     source: &Path,
     target: &Path,
     relative: &Path,
     excluded: &[PathBuf],
-) -> Result<(), AdapterError> {
+) -> Result<Vec<(PathBuf, PathBuf, PathBuf)>, AdapterError> {
+    let mut descend = Vec::new();
     for entry in fs::read_dir(source).map_err(io_error)? {
         let entry = entry.map_err(io_error)?;
         let child_relative = relative.join(entry.file_name());
@@ -1930,13 +1965,12 @@ fn copy_tree_excluding_at(
                 }
                 Err(error) => return Err(io_error(error)),
             }
-            copy_tree_excluding_at(&entry.path(), &destination, &child_relative, excluded)?;
-            apply_filtered_directory_profile(&entry.path(), &destination)?;
+            descend.push((entry.path(), destination, child_relative));
         } else {
             copy_path_preserving(&entry.path(), &destination)?;
         }
     }
-    Ok(())
+    Ok(descend)
 }
 
 fn apply_filtered_directory_profile(source: &Path, target: &Path) -> Result<(), AdapterError> {
@@ -3238,5 +3272,49 @@ mod tests {
         let secure = fs::metadata(root.path()).unwrap();
         let wrong_owner = DirectoryOwner::new(secure.uid().saturating_add(1), secure.gid());
         assert!(verify_private_directory(&secure, wrong_owner).is_err());
+    }
+
+    #[test]
+    fn deep_app_trees_are_measured_and_copied_without_recursion() {
+        // A recursive walk of this depth needs far more than the small stack below, while an
+        // iterative walk needs only one directory level of it.
+        const DEPTH: usize = 1500;
+        const SMALL_STACK_BYTES: usize = 256 * 1024;
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("s");
+        let target = root.path().join("t");
+        let mut relative = PathBuf::new();
+        for _ in 0..DEPTH {
+            relative.push("d");
+        }
+        let preserved = relative.join("keep");
+        fs::create_dir_all(source.join(&preserved)).unwrap();
+        fs::write(source.join(&relative).join("leaf"), b"leaf").unwrap();
+        fs::create_dir(&target).unwrap();
+        let worker_source = source.clone();
+        let worker_target = target.clone();
+
+        let (whole, filtered) = std::thread::Builder::new()
+            .stack_size(SMALL_STACK_BYTES)
+            .spawn(move || {
+                let whole = copied_tree_bytes(&worker_source)?;
+                let filtered = copied_tree_bytes_filtered(
+                    &worker_source,
+                    &BTreeSet::from([preserved.clone()]),
+                )?;
+                copy_tree_excluding(&worker_source, &worker_target, &[preserved])?;
+                Ok::<_, AdapterError>((whole, filtered))
+            })
+            .unwrap()
+            .join()
+            .unwrap()
+            .unwrap();
+
+        assert!(filtered < whole);
+        assert_eq!(
+            fs::read(target.join(&relative).join("leaf")).unwrap(),
+            b"leaf"
+        );
+        assert!(!target.join(&relative).join("keep").exists());
     }
 }

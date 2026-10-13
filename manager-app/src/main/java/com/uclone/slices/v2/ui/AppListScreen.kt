@@ -66,13 +66,13 @@ internal fun AppListScreen(
     }
     var reordering by rememberSaveable { mutableStateOf(false) }
     var draft by remember { mutableStateOf(emptyList<String>()) }
-    val currentKeys = managedApps.map(InstalledApp::packageName)
+    val currentKeys = remember(managedApps) { managedApps.map(InstalledApp::packageName) }
     if (reordering && draft.isEmpty() && currentKeys.isNotEmpty()) {
         // Restored after process death or rotation: start from the saved order again.
         draft = currentKeys
     }
-    val draftKeys = HomeOrder.merge(draft, currentKeys)
-    val appByName = managedApps.associateBy(InstalledApp::packageName)
+    val draftKeys = remember(draft, currentKeys) { HomeOrder.merge(draft, currentKeys) }
+    val appByName = remember(managedApps) { managedApps.associateBy(InstalledApp::packageName) }
     val canReorder = state.initialLoadComplete && !searchOpen && query.isEmpty() && managedApps.size > 1
     val finishReorder: (Boolean) -> Unit = { save ->
         if (save) {
@@ -496,6 +496,7 @@ private fun ManagedAppCard(
                                 BindingState.LegacyUnbound,
                                 BindingState.RebindRequired,
                                 -> R.string.binding_recovery_pending
+                                BindingState.Unsupported -> R.string.binding_unsupported
                                 BindingState.Ready -> R.string.binding_ready
                             },
                         ),

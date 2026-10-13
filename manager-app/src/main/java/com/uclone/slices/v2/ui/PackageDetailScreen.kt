@@ -11,12 +11,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,9 +55,11 @@ internal fun PackageDetailScreen(
     val activeSlot = packageSnapshot.slots.firstOrNull {
         it.id == packageSnapshot.activeSlot
     }
-    val otherSlots = packageSnapshot.slots
-        .filterNot { it.id == packageSnapshot.activeSlot }
-        .sortedBy { if (it.id == BASE_SLOT_ID) 0 else 1 }
+    val otherSlots = remember(packageSnapshot.slots, packageSnapshot.activeSlot) {
+        packageSnapshot.slots
+            .filterNot { it.id == packageSnapshot.activeSlot }
+            .sortedBy { if (it.id == BASE_SLOT_ID) 0 else 1 }
+    }
     val activatingSlot = (state.operation as? OperationUiState.ActivatingSpace)
         ?.takeIf { it.packageName == packageSnapshot.packageName }
         ?.slotId
@@ -144,7 +147,7 @@ internal fun PackageDetailScreen(
                     }
                 }
             } else {
-                items(otherSlots, key = { "slot:${it.id}" }) { slot ->
+                itemsIndexed(otherSlots, key = { _, slot -> "slot:${slot.id}" }) { index, slot ->
                     OtherSpaceCard(
                         slot = slot,
                         enabled = actionsEnabled,
@@ -165,7 +168,7 @@ internal fun PackageDetailScreen(
                         },
                         modifier = Modifier
                             .animateItem()
-                            .staggerIn(2 + otherSlots.indexOf(slot), play),
+                            .staggerIn(2 + index, play),
                     )
                 }
             }

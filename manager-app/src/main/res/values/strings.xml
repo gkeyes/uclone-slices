@@ -32,6 +32,7 @@
     <string name="binding_ready">身份绑定正常</string>
     <string name="binding_recovery_pending">正在等待安全恢复身份绑定</string>
     <string name="binding_confirmation_required">旧配置需要确认后无损重新绑定</string>
+    <string name="binding_unsupported">无法识别的身份绑定状态，请升级 Manager</string>
     <string name="not_configured">尚未配置</string>
     <string name="loading_apps">正在读取应用和空间状态</string>
     <string name="no_configured_apps">还没有已配置应用</string>

@@ -17,7 +17,7 @@ internal class SharedPreferencesManagerUiPreferences(
     override var configuredAccountsExpanded: Boolean
         get() = preferences.getBoolean(EXPANDED_KEY, true)
         set(value) {
-            preferences.edit().putBoolean(EXPANDED_KEY, value).commit()
+            preferences.edit().putBoolean(EXPANDED_KEY, value).apply()
         }
 
     override var homeAppOrder: List<String>

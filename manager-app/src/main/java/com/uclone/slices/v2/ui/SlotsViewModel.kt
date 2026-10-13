@@ -18,13 +18,16 @@ import com.uclone.slices.v2.runtime.RuntimeReply
 import com.uclone.slices.v2.runtime.SeedMode
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 enum class ManagerDestination {
@@ -239,6 +242,13 @@ internal class SlotsViewModel(
     private val noticeIds = AtomicLong()
     private val operationLock = Any()
     private var operationActive = false
+
+    // Bumped whenever a refresh replaces installedApps with only the managed apps, so a catalog
+    // load that started earlier can never mark that partial list as the full catalog.
+    private val catalogGeneration = AtomicInteger()
+
+    @Volatile
+    private var runtimeLogJob: Job? = null
     val state: StateFlow<SlotsUiState> = mutableState.asStateFlow()
 
     init {
@@ -257,8 +267,11 @@ internal class SlotsViewModel(
                 }
             }
             UiIntent.RestartRuntime -> runOperation(OperationUiState.RestartingRuntime) {
+                runtimeLogJob?.cancel()
                 val restarted = maintenance.restartRuntime()
                 refresh()
+                // A log read issued while restarting describes the old process; drop it.
+                runtimeLogJob?.cancel()
                 val current = state.value
                 mutableState.update {
                     it.copy(
@@ -273,9 +286,13 @@ internal class SlotsViewModel(
                     )
                 }
             }
-            UiIntent.LoadRuntimeLog -> scope.launch {
-                val log = maintenance.readLogTail()
-                mutableState.update { it.copy(runtimeLog = log.orEmpty()) }
+            UiIntent.LoadRuntimeLog -> {
+                runtimeLogJob?.cancel()
+                runtimeLogJob = scope.launch {
+                    val log = maintenance.readLogTail()
+                    ensureActive()
+                    mutableState.update { it.copy(runtimeLog = log.orEmpty()) }
+                }
             }
             UiIntent.OpenAddApps -> openAddApps()
             UiIntent.OpenRuntimeStatus -> navigateTo(ManagerDestination.RuntimeStatus)
@@ -368,11 +385,14 @@ internal class SlotsViewModel(
     }
 
     private fun loadAppCatalog() {
+        val generation = catalogGeneration.get()
         mutableState.update { it.copy(appCatalogLoading = true) }
         scope.launch {
             val result = runCatching { installedApps.loadCatalogOptimized() }
+            if (catalogGeneration.get() != generation) return@launch
             if (result.isFailure) {
                 mutableState.update {
+                    if (catalogGeneration.get() != generation) return@update it
                     it.copy(
                         appCatalogLoading = false,
                         appCatalogLoaded = false,
@@ -383,6 +403,7 @@ internal class SlotsViewModel(
             }
             val catalog = result.getOrThrow()
             mutableState.update { current ->
+                if (catalogGeneration.get() != generation) return@update current
                 val managedNames = current.packages
                     .asSequence()
                     .map(PackageSnapshot::packageName)
@@ -885,6 +906,7 @@ internal class SlotsViewModel(
     }
 
     private suspend fun refresh() {
+        catalogGeneration.incrementAndGet()
         mutableState.update {
             it.copy(
                 appCatalogLoading = false,
@@ -927,6 +949,15 @@ internal class SlotsViewModel(
             is RuntimeReply.RestoreBatch,
             is RuntimeReply.RestoreItem,
             -> showError(ErrorCode.OperationFailed)
+        }
+        // The refresh dropped the catalog; reload it when the Add App page is still showing it.
+        val current = state.value
+        if (
+            current.destination == ManagerDestination.AddApp &&
+            !current.appCatalogLoaded &&
+            !current.appCatalogLoading
+        ) {
+            loadAppCatalog()
         }
     }
 

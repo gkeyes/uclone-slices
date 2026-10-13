@@ -1,5 +1,6 @@
 package com.uclone.slices.v2.ui
 
+import android.content.Context
 import android.provider.Settings
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
@@ -23,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Shape
@@ -35,21 +37,31 @@ import androidx.compose.ui.platform.LocalDensity
 import kotlinx.coroutines.delay
 
 /**
+ * The reduced-motion flag, read once by [SlicesTheme] (and again on resume) instead of by every
+ * animated component. Null outside the theme, where [rememberReducedMotion] reads it itself.
+ */
+internal val LocalReducedMotion = staticCompositionLocalOf<Boolean?> { null }
+
+/** Animator duration scale 0 means the user turned animations off. One ContentResolver query. */
+internal fun readReducedMotion(context: Context): Boolean =
+    runCatching {
+        Settings.Global.getFloat(
+            context.contentResolver,
+            Settings.Global.ANIMATOR_DURATION_SCALE,
+            1f,
+        )
+    }.getOrDefault(1f) == 0f
+
+/**
  * True when the user turned animations off (animator duration scale 0). Decorative entrances are
  * skipped and custom animatables snap. No logic waits for an animation to finish.
  */
 @Composable
 internal fun rememberReducedMotion(): Boolean {
+    val provided = LocalReducedMotion.current
+    if (provided != null) return provided
     val context = LocalContext.current
-    return remember(context) {
-        runCatching {
-            Settings.Global.getFloat(
-                context.contentResolver,
-                Settings.Global.ANIMATOR_DURATION_SCALE,
-                1f,
-            )
-        }.getOrDefault(1f) == 0f
-    }
+    return remember(context) { readReducedMotion(context) }
 }
 
 /**

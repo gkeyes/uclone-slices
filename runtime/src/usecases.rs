@@ -57,6 +57,12 @@ enum UnenrollContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Relaunch {
+    NotFailed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadyLoadContext {
     Interactive,
     Boot,
@@ -131,6 +137,9 @@ where
             });
             match snapshot {
                 Ok(snapshot) => snapshots.push(snapshot),
+                // The 0.2.x wire has no degraded list entry, so a package that fails to load is
+                // omitted here and logged; `get_package` still reports its own error code.
+                // Surfacing it in the list needs a protocol field plus a Manager consumer.
                 Err(error) => {
                     eprintln!("op=list_packages package={package} step=load_package error={error}");
                 }
@@ -143,8 +152,12 @@ where
         self.package_snapshot(package)
     }
 
+    /// Recovers interrupted account I/O, then converges every package. A package that fails
+    /// to converge is logged and skipped; it keeps failing closed on its own requests. A failed
+    /// account-I/O recovery is reported as an error after the remaining packages are processed,
+    /// so the caller does not mark this boot as reconciled and retries the recovery.
     pub fn reconcile_boot(&mut self) -> Result<(), RuntimeError> {
-        self.recover_account_io_intents()?;
+        let recovered = self.recover_account_io_intents();
         let names = self.packages.list().map_err(adapter_error)?;
         for package in names {
             if let Err(error) = self.package_snapshot_with_context(&package, ReadyLoadContext::Boot)
@@ -154,7 +167,7 @@ where
                 );
             }
         }
-        Ok(())
+        recovered
     }
 
     pub fn begin_backup_io(
@@ -224,12 +237,10 @@ where
                 .block_launch(package)
                 .map_err(|error| logged_adapter("begin_backup_io", package, "block_launch", error))
             {
-                let _recovery = self.finish_backup_before_view_change(&intent, true);
-                return Err(error);
+                return Err(self.abandon_backup_lease(&intent, false, error));
             }
             if let Err(error) = self.apply_view_verified(package, &SlotId::base()) {
-                let _recovery = self.finish_backup_intent(&intent, true);
-                return Err(error);
+                return Err(self.abandon_backup_lease(&intent, true, error));
             }
         }
 
@@ -263,16 +274,12 @@ where
         })();
         let sources = match sources {
             Ok(sources) => sources,
-            Err(error) => {
-                let _recovery = self.finish_backup_intent(&intent, true);
-                return Err(error);
-            }
+            Err(error) => return Err(self.abandon_backup_lease(&intent, true, error)),
         };
         intent.phase = AccountIoPhase::Ready;
         if let Err(error) = self.packages.save_account_io_intent(&intent) {
             let error = logged_adapter("begin_backup_io", package, "save_ready", error);
-            let _recovery = self.finish_backup_intent(&intent, true);
-            return Err(error);
+            return Err(self.abandon_backup_lease(&intent, true, error));
         }
         Ok(AccountIoLease {
             io_token: token,
@@ -375,25 +382,14 @@ where
             {
                 Ok(staging) => staging,
                 Err(error) => {
-                    let _cleanup = self.slots.cleanup_account_io(package, &token);
-                    let _clear = self.packages.clear_account_io_intent(package);
-                    return Err(logged_adapter(
-                        "begin_restore_io",
-                        package,
-                        "prepare_staging",
-                        error,
-                    ));
+                    let error =
+                        logged_adapter("begin_restore_io", package, "prepare_staging", error);
+                    return Err(self.abandon_restore_lease(package, &token, error));
                 }
             };
         if aggregate_changed && let Err(error) = self.packages.save(&aggregate) {
-            let _cleanup = self.slots.cleanup_account_io(package, &token);
-            let _clear = self.packages.clear_account_io_intent(package);
-            return Err(logged_adapter(
-                "begin_restore_io",
-                package,
-                "reserve_target_slots",
-                error,
-            ));
+            let error = logged_adapter("begin_restore_io", package, "reserve_target_slots", error);
+            return Err(self.abandon_restore_lease(package, &token, error));
         }
         Ok(AccountIoLease {
             io_token: token,
@@ -593,8 +589,23 @@ where
         } else {
             aggregate.rename_slot(&mapping.target_slot, mapping.name.clone())
         };
-        if metadata_result.is_err() || self.packages.save(&aggregate).is_err() {
-            let _restore_metadata = self.packages.save(&original);
+        let metadata_failed = match metadata_result {
+            Ok(()) => match self.packages.save(&aggregate) {
+                Ok(()) => false,
+                Err(error) => {
+                    log_adapter("commit_restore_account", &package, "save_metadata", &error);
+                    self.restore_original_metadata(&package, &original)?;
+                    true
+                }
+            },
+            Err(error) => {
+                eprintln!(
+                    "op=commit_restore_account package={package} step=apply_metadata error={error}"
+                );
+                true
+            }
+        };
+        if metadata_failed {
             self.slots
                 .rollback_account(
                     &package,
@@ -621,7 +632,8 @@ where
         intent.completed.push(result.clone());
         intent.phase = AccountIoPhase::Ready;
         if let Err(error) = self.packages.save_account_io_intent(&intent) {
-            let _restore_metadata = self.packages.save(&original);
+            log_adapter("commit_restore_account", &package, "save_success", &error);
+            self.restore_original_metadata(&package, &original)?;
             self.slots
                 .rollback_account(
                     &package,
@@ -637,12 +649,7 @@ where
                         rollback,
                     )
                 })?;
-            return Err(logged_adapter(
-                "commit_restore_account",
-                &package,
-                "save_success",
-                error,
-            ));
+            return Err(adapter_error(error));
         }
         self.slots
             .finalize_account(&package, token, &mapping.target_slot)
@@ -1113,15 +1120,34 @@ where
         intent: &AccountIoIntent,
         relaunch: bool,
     ) -> Result<(), RuntimeError> {
+        match self.release_backup_lease(intent, "finish_backup_io", relaunch, true)? {
+            Relaunch::Failed => Err(RuntimeError::OperationFailed),
+            Relaunch::NotFailed => Ok(()),
+        }
+    }
+
+    /// Releases a backup lease: restores the previous view and enabled state, optionally
+    /// relaunches the app, then removes staging and the intent. The intent is removed last,
+    /// so any `Err` leaves it in place for abort or boot recovery to retry. A relaunch failure
+    /// is logged and reported separately because the lease itself is gone by then.
+    fn release_backup_lease(
+        &mut self,
+        intent: &AccountIoIntent,
+        operation: &str,
+        relaunch: bool,
+        view_changed: bool,
+    ) -> Result<Relaunch, RuntimeError> {
         let package = &intent.package;
-        let mut launch_error = None;
+        let mut relaunched = Relaunch::NotFailed;
         if intent.maintenance_active {
-            self.stop_and_apply_view(package, &intent.previous_active_slot)?;
+            if view_changed {
+                self.stop_and_apply_view(package, &intent.previous_active_slot)?;
+            }
             if let Some(enabled) = intent.previous_enabled_state {
                 self.android
                     .restore_enabled_state(package, enabled)
                     .map_err(|error| {
-                        logged_conflict("finish_backup_io", package, "restore_enabled_state", error)
+                        logged_conflict(operation, package, "restore_enabled_state", error)
                     })?;
             }
             let enabled_allows_launch = !matches!(
@@ -1139,58 +1165,69 @@ where
                     .android
                     .launch_verified(package, &intent.previous_active_slot)
             {
-                log_adapter("finish_backup_io", package, "restore_launch", &error);
-                launch_error = Some(RuntimeError::OperationFailed);
+                log_adapter(operation, package, "restore_launch", &error);
+                relaunched = Relaunch::Failed;
             }
         }
         self.slots
             .cleanup_account_io(package, &intent.io_token)
-            .map_err(|error| logged_conflict("finish_backup_io", package, "cleanup", error))?;
+            .map_err(|error| logged_conflict(operation, package, "cleanup", error))?;
         self.packages
             .clear_account_io_intent(package)
-            .map_err(|error| logged_conflict("finish_backup_io", package, "clear_intent", error))?;
-        launch_error.map_or(Ok(()), Err)
+            .map_err(|error| logged_conflict(operation, package, "clear_intent", error))?;
+        Ok(relaunched)
     }
 
-    fn finish_backup_before_view_change(
+    /// Undoes a backup lease whose setup failed with `error`. When the undo itself fails the
+    /// intent stays persisted for abort or boot recovery, and the caller sees a conflict.
+    fn abandon_backup_lease(
         &mut self,
         intent: &AccountIoIntent,
-        relaunch: bool,
+        view_changed: bool,
+        error: RuntimeError,
+    ) -> RuntimeError {
+        match self.release_backup_lease(intent, "begin_backup_io", true, view_changed) {
+            Ok(_relaunched) => error,
+            Err(recovery) => {
+                eprintln!(
+                    "op=begin_backup_io package={} step=release_lease error={recovery} cause={error}",
+                    intent.package
+                );
+                RuntimeError::StateConflict
+            }
+        }
+    }
+
+    /// Undoes a restore lease whose setup failed with `error`. Staging is removed before the
+    /// intent, so a failed cleanup keeps the intent for abort or boot recovery to retry.
+    fn abandon_restore_lease(
+        &mut self,
+        package: &PackageName,
+        token: &AccountIoToken,
+        error: RuntimeError,
+    ) -> RuntimeError {
+        if let Err(cleanup) = self.slots.cleanup_account_io(package, token) {
+            log_adapter("begin_restore_io", package, "cleanup_staging", &cleanup);
+            return RuntimeError::StateConflict;
+        }
+        if let Err(clear) = self.packages.clear_account_io_intent(package) {
+            log_adapter("begin_restore_io", package, "clear_intent", &clear);
+            return RuntimeError::StateConflict;
+        }
+        error
+    }
+
+    /// Puts back the aggregate saved before a restore commit. On failure the persisted
+    /// `Replacing` intent still describes the pair and metadata, so abort or boot recovery
+    /// rolls both back; the caller must not record the item as settled.
+    fn restore_original_metadata(
+        &mut self,
+        package: &PackageName,
+        original: &PackageAggregate,
     ) -> Result<(), RuntimeError> {
-        let package = &intent.package;
-        let mut launch_error = None;
-        if let Some(enabled) = intent.previous_enabled_state {
-            self.android
-                .restore_enabled_state(package, enabled)
-                .map_err(|error| {
-                    logged_conflict("begin_backup_io", package, "restore_enabled_state", error)
-                })?;
-        }
-        let enabled_allows_launch = !matches!(
-            intent.previous_enabled_state,
-            Some(
-                PackageEnabledState::Disabled
-                    | PackageEnabledState::DisabledUser
-                    | PackageEnabledState::DisabledUntilUsed
-            )
-        );
-        if relaunch
-            && intent.previous_was_running
-            && enabled_allows_launch
-            && let Err(error) = self
-                .android
-                .launch_verified(package, &intent.previous_active_slot)
-        {
-            log_adapter("begin_backup_io", package, "restore_launch", &error);
-            launch_error = Some(RuntimeError::OperationFailed);
-        }
-        self.slots
-            .cleanup_account_io(package, &intent.io_token)
-            .map_err(|error| logged_conflict("begin_backup_io", package, "cleanup", error))?;
-        self.packages
-            .clear_account_io_intent(package)
-            .map_err(|error| logged_conflict("begin_backup_io", package, "clear_intent", error))?;
-        launch_error.map_or(Ok(()), Err)
+        self.packages.save(original).map_err(|error| {
+            logged_conflict("commit_restore_account", package, "restore_metadata", error)
+        })
     }
 
     fn record_restore_failure(
@@ -1458,6 +1495,7 @@ where
             .packages
             .list_account_io_intents()
             .map_err(adapter_error)?;
+        let mut outcome = Ok(());
         for intent in intents {
             let package = intent.package.clone();
             let recovery = match intent.kind {
@@ -1470,9 +1508,10 @@ where
                 eprintln!(
                     "op=reconcile_boot package={package} step=recover_account_io error={error}"
                 );
+                outcome = Err(RuntimeError::StateConflict);
             }
         }
-        Ok(())
+        outcome
     }
 
     fn load_ready(
@@ -3888,7 +3927,7 @@ mod tests {
 
         assert_eq!(
             runtime.begin_backup_io(&package, AccountIoScope::AllAccounts),
-            Err(RuntimeError::OperationFailed),
+            Err(RuntimeError::StateConflict),
         );
 
         let (packages, slots, android) = runtime.into_parts();
@@ -3914,6 +3953,175 @@ mod tests {
             Some(PackageEnabledState::Default),
         );
         assert!(!android.is_running(&package));
+    }
+
+    #[test]
+    fn failed_boot_recovery_is_reported_and_retried_on_the_next_reconcile() {
+        let package = package();
+        let (mut runtime, active) = with_slot();
+        runtime.activate_slot(&package, &active).unwrap();
+        runtime
+            .begin_backup_io(&package, AccountIoScope::AllAccounts)
+            .unwrap();
+        let (packages, slots, mut android) = runtime.into_parts();
+        android.fail_next(AndroidFailure::RestoreEnabled);
+        let mut runtime = Runtime::new(packages, slots, android);
+
+        assert_eq!(runtime.reconcile_boot(), Err(RuntimeError::StateConflict));
+        assert!(
+            runtime
+                .packages
+                .load_account_io_intent(&package)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            runtime.android.enabled_state(&package),
+            Some(PackageEnabledState::DisabledUser),
+        );
+
+        assert_eq!(runtime.reconcile_boot(), Ok(()));
+        assert!(
+            runtime
+                .packages
+                .load_account_io_intent(&package)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            runtime.android.enabled_state(&package),
+            Some(PackageEnabledState::Default),
+        );
+    }
+
+    #[test]
+    fn restore_lease_setup_failure_keeps_the_intent_when_staging_cleanup_fails() {
+        let package = package();
+        let mut runtime = runtime();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let archive_id = ArchiveAccountId::new("account-1").unwrap();
+        runtime.packages.fail_next_save();
+        runtime.slots.fail_next(SlotFailure::Cleanup);
+
+        let result = runtime.begin_restore_io(
+            &package,
+            TransferId::new("transfer-setup-cleanup").unwrap(),
+            vec![RestoreMapping {
+                archive_account_id: archive_id,
+                archive_kind: ArchivedAccountKind::Slot,
+                name: DisplayName::new("Restored work").unwrap(),
+                target: RestoreTarget::New,
+                restore_policy: RestorePolicy::Replace,
+            }],
+            ArchivedState {
+                scope: ArchiveScope::Account,
+                active_account_id: None,
+                launch_after_reboot: false,
+            },
+        );
+
+        assert_eq!(result.err(), Some(RuntimeError::StateConflict));
+        assert!(
+            runtime
+                .packages
+                .load_account_io_intent(&package)
+                .unwrap()
+                .is_some()
+        );
+
+        assert_eq!(runtime.reconcile_boot(), Ok(()));
+        assert!(
+            runtime
+                .packages
+                .load_account_io_intent(&package)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(runtime.get_package(&package).unwrap().slots.len(), 1);
+    }
+
+    fn begin_new_slot_restore(runtime: &mut TestRuntime) -> (AccountIoToken, ArchiveAccountId) {
+        let package = package();
+        runtime.enroll(package.clone(), false, None).unwrap();
+        let archive_id = ArchiveAccountId::new("account-1").unwrap();
+        let lease = runtime
+            .begin_restore_io(
+                &package,
+                TransferId::new("transfer-metadata").unwrap(),
+                vec![RestoreMapping {
+                    archive_account_id: archive_id.clone(),
+                    archive_kind: ArchivedAccountKind::Slot,
+                    name: DisplayName::new("Restored work").unwrap(),
+                    target: RestoreTarget::New,
+                    restore_policy: RestorePolicy::Replace,
+                }],
+                ArchivedState {
+                    scope: ArchiveScope::Account,
+                    active_account_id: None,
+                    launch_after_reboot: false,
+                },
+            )
+            .unwrap();
+        (lease.io_token, archive_id)
+    }
+
+    #[test]
+    fn restore_metadata_save_failure_rolls_back_and_records_the_item_as_failed() {
+        let package = package();
+        let mut runtime = runtime();
+        let (token, archive_id) = begin_new_slot_restore(&mut runtime);
+        runtime.packages.fail_next_save();
+
+        let item = runtime.commit_restore_account(&token, &archive_id).unwrap();
+
+        assert_eq!(item.state, RestoreItemState::Failed);
+        let target = item.target_slot.unwrap();
+        assert!(!runtime.slots.contains(&package, &target));
+        let intent = runtime
+            .packages
+            .load_account_io_intent(&package)
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.phase, AccountIoPhase::Ready);
+    }
+
+    #[test]
+    fn unrecoverable_restore_metadata_keeps_the_replacing_intent_for_recovery() {
+        let package = package();
+        let mut runtime = runtime();
+        let (token, archive_id) = begin_new_slot_restore(&mut runtime);
+        let next_save = runtime.packages.save_calls() + 1;
+        runtime.packages.fail_save_call(next_save);
+        runtime.packages.fail_save_call(next_save + 1);
+
+        assert_eq!(
+            runtime.commit_restore_account(&token, &archive_id),
+            Err(RuntimeError::StateConflict)
+        );
+        let intent = runtime
+            .packages
+            .load_account_io_intent(&package)
+            .unwrap()
+            .unwrap();
+        let target_slot = match intent.phase {
+            AccountIoPhase::Replacing { target_slot, .. } => Some(target_slot),
+            _ => None,
+        }
+        .unwrap();
+        assert!(intent.completed.is_empty());
+        assert!(runtime.slots.contains(&package, &target_slot));
+
+        runtime.abort_account_io(&token).unwrap();
+
+        assert!(!runtime.slots.contains(&package, &target_slot));
+        assert_eq!(runtime.get_package(&package).unwrap().slots.len(), 1);
+        assert!(
+            runtime
+                .packages
+                .load_account_io_intent(&package)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

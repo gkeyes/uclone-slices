@@ -139,6 +139,7 @@ class BackupRestorePolicyTest {
         assertFalse(backupBindingAllows(BindingState.LegacyUnbound))
         assertFalse(backupBindingAllows(BindingState.RebindRequired))
         assertFalse(backupBindingAllows(BindingState.LegacyConfirmationRequired))
+        assertFalse(backupBindingAllows(BindingState.Unsupported))
     }
 
     @Test
@@ -202,7 +203,7 @@ class BackupRestorePolicyTest {
             },
             Dispatchers.Unconfined,
             CoroutineScope(Dispatchers.Unconfined),
-            catalog,
+            { catalog },
         )
 
         viewModel.onIntent(BackupUiIntent.OpenBackup("com.example.app", null))
