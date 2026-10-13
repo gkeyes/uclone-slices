@@ -202,19 +202,6 @@ internal class SlotsViewModel(
     private fun destinationChanged(destination: ManagerDestination, packageName: String?) {
         val previous = this.destination
         this.destination = destination
-        // The Add App page needs the full catalog, also when the back stack restores it after
-        // process death. A refresh still running loads it when it ends instead: it drops the
-        // catalog when it starts and replaces the app list when it lists the packages.
-        val snapshot = state.value
-        if (
-            destination == ManagerDestination.AddApp &&
-            !snapshot.appCatalogLoaded &&
-            !snapshot.appCatalogLoading &&
-            snapshot.operation !is OperationUiState.Refreshing &&
-            snapshot.operation != OperationUiState.RestartingRuntime
-        ) {
-            loadAppCatalog()
-        }
         // A package page restored by the back stack (after process death) names its package
         // while this view model has no selection yet: select it now if it is known, otherwise
         // when the refresh lists it.
@@ -232,6 +219,7 @@ internal class SlotsViewModel(
                     ?: current
             }
         }
+        settleVisiblePage()
         // Back on the spaces list from another page (a recreated host reports the same page
         // again, which changes nothing): the package page is gone, drop what belonged to it.
         if (destination == ManagerDestination.Spaces && previous != ManagerDestination.Spaces) {
@@ -244,6 +232,38 @@ internal class SlotsViewModel(
                     pendingDelete = null,
                 )
             }
+        }
+    }
+
+    /**
+     * Makes the page on top usable with what is loaded, once no refresh is running: the Add App
+     * page gets the full catalog, and a package page without a package (restored by the back
+     * stack after process death while the Runtime could not list it) returns home. Called when
+     * the nav host reports a page and when a refresh ends, so whichever comes last acts.
+     */
+    private fun settleVisiblePage() {
+        val snapshot = state.value
+        if (
+            snapshot.operation is OperationUiState.Refreshing ||
+            snapshot.operation == OperationUiState.RestartingRuntime
+        ) {
+            // A refresh drops the catalog when it starts and replaces the app list when it
+            // lists the packages; it settles the page when it ends.
+            return
+        }
+        when (destination) {
+            ManagerDestination.AddApp -> if (
+                !snapshot.appCatalogLoaded && !snapshot.appCatalogLoading
+            ) {
+                loadAppCatalog()
+            }
+            ManagerDestination.PackageDetails -> if (snapshot.selected == null) {
+                navigate(SlotsNavigation.ToSpaces)
+            }
+            ManagerDestination.Spaces,
+            ManagerDestination.BackupRestore,
+            ManagerDestination.RuntimeStatus,
+            -> Unit
         }
     }
 
@@ -779,6 +799,12 @@ internal class SlotsViewModel(
                         )
                     }
                 }
+                if (
+                    operationState is OperationUiState.Refreshing ||
+                    operationState == OperationUiState.RestartingRuntime
+                ) {
+                    settleVisiblePage()
+                }
             }
         }
     }
@@ -825,15 +851,8 @@ internal class SlotsViewModel(
             is RuntimeReply.RestoreItem,
             -> showError(ErrorCode.OperationFailed)
         }
-        // The refresh dropped the catalog; reload it when the Add App page is still showing it.
-        val current = state.value
-        if (
-            destination == ManagerDestination.AddApp &&
-            !current.appCatalogLoaded &&
-            !current.appCatalogLoading
-        ) {
-            loadAppCatalog()
-        }
+        // The catalog this refresh dropped is reloaded by settleVisiblePage() once the operation
+        // has ended, if the Add App page is showing then.
     }
 
     private suspend fun refreshPackages() {

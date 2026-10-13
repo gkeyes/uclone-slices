@@ -1030,6 +1030,58 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun anAddAppPageReportedWhileTheFirstRefreshRunsLoadsTheCatalogWhenItEnds() {
+        val apps = RefreshingCatalogSource()
+        val client = GatedProbeRuntimeClient()
+        val viewModel = slotsViewModel(client, apps, Dispatchers.Unconfined)
+        assertTrue(viewModel.state.value.busy)
+
+        // Restored after process death: the page is reported before the refresh has ended.
+        viewModel.onIntent(UiIntent.DestinationChanged(ManagerDestination.AddApp))
+        assertEquals(0, apps.catalogReads)
+        client.gate.complete(Unit)
+
+        assertFalse(viewModel.state.value.busy)
+        assertTrue(viewModel.state.value.appCatalogLoaded)
+        assertEquals(1, apps.catalogReads)
+        assertEquals(
+            setOf("com.example.app", "com.other.app"),
+            viewModel.state.value.installedApps.map(InstalledApp::packageName).toSet(),
+        )
+    }
+
+    @Test
+    fun aRestoredPackagePageReturnsHomeWhenTheRuntimeCannotListIt() {
+        listOf(
+            RuntimeReply.TransportFailure,
+            RuntimeReply.Error(ErrorCode.OperationFailed),
+            RuntimeReply.Capabilities("0.0.0-other"),
+        ).forEach { probeReply ->
+            // Reported while the first refresh still runs ...
+            val gated = GatedProbeRuntimeClient(probeReply)
+            val during = slotsViewModel(gated, appSource, Dispatchers.Unconfined)
+            val duringMoves = recordNavigation(during)
+            during.onIntent(
+                UiIntent.DestinationChanged(ManagerDestination.PackageDetails, "com.example.app"),
+            )
+            assertTrue(duringMoves.isEmpty())
+            gated.gate.complete(Unit)
+            assertEquals(listOf<SlotsNavigation>(SlotsNavigation.ToSpaces), duringMoves.distinct())
+            assertNull(during.state.value.selected)
+
+            // ... or after it ended.
+            val failed = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+            failed.nextReply = probeReply
+            val after = slotsViewModel(failed, appSource, Dispatchers.Unconfined)
+            val afterMoves = recordNavigation(after)
+            after.onIntent(
+                UiIntent.DestinationChanged(ManagerDestination.PackageDetails, "com.example.app"),
+            )
+            assertEquals(listOf<SlotsNavigation>(SlotsNavigation.ToSpaces), afterMoves.distinct())
+        }
+    }
+
+    @Test
     fun homeOrderIsEditedInTheViewModelAndSavedOnlyOnSave() {
         val preferences = MemoryManagerUiPreferences()
         val viewModel = slotsViewModel(
@@ -1153,6 +1205,34 @@ private class FakeNavHost(private val viewModel: SlotsViewModel) {
 
     private fun report() {
         viewModel.onIntent(UiIntent.DestinationChanged(top))
+    }
+}
+
+private fun recordNavigation(viewModel: SlotsViewModel): MutableList<SlotsNavigation> {
+    val moves = mutableListOf<SlotsNavigation>()
+    CoroutineScope(Dispatchers.Unconfined).launch {
+        viewModel.navigation.collect { moves += it }
+    }
+    return moves
+}
+
+/** Holds the first Probe until [gate] completes, then answers it with [probeReply] if set. */
+private class GatedProbeRuntimeClient(
+    private val probeReply: RuntimeReply? = null,
+) : FakeRuntimeClient(initialPackages = listOf(packageSnapshot())) {
+    val gate = CompletableDeferred<Unit>()
+    private var gated = true
+
+    override suspend fun execute(command: RuntimeCommand): RuntimeReply {
+        if (command == RuntimeCommand.Probe && gated) {
+            gated = false
+            gate.await()
+            if (probeReply != null) {
+                commands += command
+                return probeReply
+            }
+        }
+        return super.execute(command)
     }
 }
 
