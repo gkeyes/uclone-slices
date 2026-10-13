@@ -48,7 +48,7 @@
 | Manager 声明 `android.permission.INTERNET` | 当前 KernelSU Next 的超级用户选择器只展示已授权包或声明该权限的普通 App；V2 通过它进入授权列表，Manager 本身没有网络代码 | 真机 KernelSU 列表与 Manager `probe` |
 | `uclone-slices-v2` 模块 ID、Runtime 根目录和 socket 路径 | 用户指定的新仓库名与 KernelSU `/data/adb/modules/<id>` 模块布局 | 启动脚本测试和 socket 测试 |
 | 模块文件权限 `0755/0644` 与 owner `0:0` | KernelSU 安装脚本的可执行文件和普通文件权限约定 | KernelSU 启动层测试与 ZIP 检查 |
-| 版本 `0.2.5`、versionCode `16`、Runtime 协议 ID `0.2.3` | wire 命令、字段和错误码不变；协议 ID 升为 `0.2.3` 是因为 `unenroll` 改为把分空间移入保留 7 天的回收区，Manager 的确认文案依赖这一行为，旧 Runtime（立即删除）不得与新 Manager 混装；Manager 展示版本与协议 ID 解耦，不修改 Aggregate | `check-decision-alignment.sh` 保证 Runtime/模块协议一致，并独立校验 Manager/Fixture 交付版本 |
+| 版本 `0.2.5`、versionCode `16`、Runtime 协议 ID `0.2.3` | wire 命令、字段和错误码不变；协议 ID 升为 `0.2.3` 是因为 `unenroll` 改为把分空间移入保留 7 天的回收区，Manager 的确认文案依赖这一行为，旧 Runtime（立即删除）不得与新 Manager 混装；Manager 展示版本与协议 ID 解耦，不修改 Aggregate | `check-decision-alignment.sh` 保证 Runtime/模块协议一致，并独立校验 Manager 交付版本 |
 | `.ucsbackup` magic `UCSBKP01`、format v1/v2、manifest 64 MiB、helper control frame 4 MiB、256 账号、4096 字节路径、1,000,000 条目、1 TiB 逻辑数据 | v1 保持完整备份兼容；v2 只增加签名 Profile、来源 versionCode 和排除统计，magic、压缩与加密不变 | Rust v1/v2 往返、Profile 剪枝、超限和恶意路径测试 |
 | manifest 64 MiB | 主机实测 app 数据路径的 manifest 约 260 字节/条目：4 MiB 在每目录 100 个文件时于 15,937 个文件成功、16,005 个失败；64 MiB 按同一密度约容纳 25 万条目，manifest 整体驻留 helper 内存。1,000,000 条目上限仍用于暂存树校验，超出 64 MiB 的账号返回 `backup_invalid` | 3 万文件往返测试、manifest 超 4 MiB 断言 |
 | helper 进度按整百分比输出 | 进度只用于界面显示，整百分比是界面显示粒度；备份总量为逻辑大小的 2 倍（哈希一遍、写入一遍），恢复为逻辑大小 | 备份两遍与恢复的进度单调性测试 |

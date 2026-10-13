@@ -16,4 +16,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "uclone-slices"
 include(":manager-app")
-include(":device-fixture-app")
