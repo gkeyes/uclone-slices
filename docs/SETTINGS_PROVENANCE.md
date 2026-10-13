@@ -74,7 +74,7 @@
 | Manager Release 证书 `3a98013499c588855ac936d884d9e55497f72827c91ca01e50cf9ca4fc290648` | 2026-08-23 从目标机当前可覆盖安装的 0.1.8 Manager 只读提取；CI 必须使用固定 Release keystore | `verify-release-signing.sh`、`apksigner verify --print-certs` 与 `adb install -r` |
 | UI 的 8 dp 网格间距 | Material 布局网格，仅影响首个真实入口的排版，不进入业务或协议 | Android lint、assemble |
 | 首页当前空间高亮色 `#D83B50` | 用户明确要求当前账号使用西瓜红；只影响首页 Chip 的真实当前快照展示 | Manager 真机截图、Android lint、assemble |
-| GitHub Action commit SHA | 旧版 CI 中已使用的 v3/v4 action 固定提交 | CI workflow |
-| `actions/download-artifact` `d3f86a1…` | 2026-10-01 `git ls-remote` 解析的 `v4`（= `v4.3.0`）提交，与已固定的 upload-artifact v4 同代；只在 `v*` 标签的发布 job 中读取同一次运行已验证的产物 | CI workflow |
+| GitHub Action commit SHA | 2026-10-13 依赖升级（Dependabot #12/#14/#16/#17/#19）固定的提交：`actions/checkout` v7.0.1、`actions/upload-artifact` v7.0.2、`gradle/actions/setup-gradle` v6.4.0（`cache-provider: basic`，保持 MIT 许可的基础缓存，不接受增强缓存的额外条款）、`android-actions/setup-android` v4.0.4；`actions/setup-java` 仍为 v4 | CI workflow |
+| `actions/download-artifact` `9000827…` | `v8.0.2` 提交（Dependabot #16），与已固定的 upload-artifact v7 搭配；只在 `v*` 标签的发布 job 中读取同一次运行已验证的产物 | CI workflow |
 
 `tools/check-decision-alignment.sh` 只检查重复声明是否一致：发布版本、versionCode、Rust 工具链、Manager minSdk 与 Rust Android API。它不设置文件长度、执行次数或覆盖率阈值。
