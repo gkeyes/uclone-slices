@@ -1,11 +1,11 @@
 [versions]
 activity-compose = "1.13.0"
 agp = "8.11.1"
-compose-bom = "2026.06.00"
-core-ktx = "1.17.0"
+compose-bom = "2026.09.00"
+core-ktx = "1.19.1"
 json = "20250517"
 kotlin = "2.2.0"
-kotlinx-coroutines = "1.10.2"
+kotlinx-coroutines = "1.11.0"
 # iOS 27 Liquid Glass: Kyant0/AndroidLiquidGlass backdrop (AGSL refraction, as in
 # DualSimRouting) and its capsule shapes. 1.0.6 is the newest release built for this
 # toolchain: 2.x needs Kotlin 2.4 metadata and compileSdk 37.
