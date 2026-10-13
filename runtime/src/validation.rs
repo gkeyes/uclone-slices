@@ -10,14 +10,14 @@ pub const MAX_SIGNING_DIGESTS: usize = 16;
 /// Most preserve or exclude rules one restore policy or backup profile may list.
 pub const MAX_PATH_RULES: usize = 64;
 
-/// An Android package name: at least two `.`-separated segments, each 1 to 63 ASCII letters,
-/// digits or `_`, and at most 255 bytes in total.
+/// An Android package name: at least two `.`-separated segments of ASCII letters, digits or `_`,
+/// none of them empty. Only the characters that keep it one safe path component are checked;
+/// there is no length limit, since Android itself decides what can be installed
+/// (see `docs/SETTINGS_PROVENANCE.md`).
 pub fn is_package_name(value: &str) -> bool {
-    value.len() <= 255
-        && value.split('.').count() >= 2
+    value.split('.').count() >= 2
         && value.split('.').all(|segment| {
             !segment.is_empty()
-                && segment.len() <= 63
                 && segment
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
@@ -117,11 +117,19 @@ mod tests {
 
     #[test]
     fn package_names_follow_one_rule() {
-        for valid in ["com.example.app", "a.b", "com.example_1.App2", "_x.y"] {
-            assert!(is_package_name(valid), "{valid}");
-        }
+        // No length limit: names the previous model accepted must keep loading after an upgrade.
         let long_segment = format!("com.{}", "a".repeat(64));
         let long_name = format!("com.{}", ["a"; 130].join("."));
+        for valid in [
+            "com.example.app",
+            "a.b",
+            "com.example_1.App2",
+            "_x.y",
+            long_segment.as_str(),
+            long_name.as_str(),
+        ] {
+            assert!(is_package_name(valid), "{valid}");
+        }
         for invalid in [
             "",
             "app",
@@ -130,8 +138,6 @@ mod tests {
             "com..example",
             "com.exa-mple",
             "com/example.app",
-            long_segment.as_str(),
-            long_name.as_str(),
         ] {
             assert!(!is_package_name(invalid), "{invalid}");
         }
