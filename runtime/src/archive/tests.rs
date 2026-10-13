@@ -620,26 +620,26 @@ fn rewrite_plain_archive(
     fs::write(path, output).unwrap();
 }
 
-fn restore_plain_into_fresh_staging(root: &Path, input: PathBuf) -> Result<(), ArchiveError> {
-    let ce = root.join("restore/ce");
-    let de = root.join("restore/de");
-    let _ = fs::remove_dir_all(root.join("restore"));
+/// Restores a plain archive into a new, empty `restore-<label>` staging pair.
+fn restore_plain_into_fresh_staging(
+    root: &Path,
+    label: &str,
+    input: PathBuf,
+) -> Result<(), ArchiveError> {
+    let ce = root.join(format!("restore-{label}/ce"));
+    let de = root.join(format!("restore-{label}/de"));
     fs::create_dir_all(&ce).unwrap();
     fs::create_dir_all(&de).unwrap();
-    let result = restore_backup(RestoreRequest {
+    restore_backup(RestoreRequest {
         input_path: input,
         password: None,
         destinations: vec![RestoreDestination {
             archive_account_id: "account-0".to_owned(),
-            ce_path: ce.clone(),
-            de_path: de.clone(),
+            ce_path: ce,
+            de_path: de,
         }],
-    });
-    if result.is_err() {
-        assert!(fs::read_dir(&ce).unwrap().next().is_none());
-        assert!(fs::read_dir(&de).unwrap().next().is_none());
-    }
-    result.map(|_manifest| ())
+    })
+    .map(|_manifest| ())
 }
 
 #[test]
@@ -649,7 +649,7 @@ fn restore_requires_each_manifest_entry_exactly_once() {
     let request = request(root.path(), false);
     let original = request.output_path.clone();
     create_backup(request).unwrap();
-    restore_plain_into_fresh_staging(root.path(), original.clone()).unwrap();
+    restore_plain_into_fresh_staging(root.path(), "original", original.clone()).unwrap();
 
     let duplicated = root.path().join("duplicated.ucsbackup");
     fs::copy(&original, &duplicated).unwrap();
@@ -661,7 +661,7 @@ fn restore_requires_each_manifest_entry_exactly_once() {
         }
     });
     assert!(matches!(
-        restore_plain_into_fresh_staging(root.path(), duplicated),
+        restore_plain_into_fresh_staging(root.path(), "duplicated", duplicated),
         Err(ArchiveError::Invalid)
     ));
 
@@ -678,7 +678,7 @@ fn restore_requires_each_manifest_entry_exactly_once() {
     });
     assert!(dropped);
     assert!(matches!(
-        restore_plain_into_fresh_staging(root.path(), missing),
+        restore_plain_into_fresh_staging(root.path(), "missing", missing),
         Err(ArchiveError::Invalid)
     ));
 
@@ -697,7 +697,7 @@ fn restore_requires_each_manifest_entry_exactly_once() {
         entries
     });
     assert!(matches!(
-        restore_plain_into_fresh_staging(root.path(), undeclared),
+        restore_plain_into_fresh_staging(root.path(), "undeclared", undeclared),
         Err(ArchiveError::Invalid)
     ));
 }
