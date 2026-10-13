@@ -24,9 +24,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 
 /*
- * The Manager draws its own iOS 27 components (Components.kt, Glass.kt, liquid/). Material 3 is
- * only a bridge for static Text and Icon: their default text style and content colour come from
- * here. Colours follow the system light / dark setting; there is no theme or style picker.
+ * The Manager draws its own iOS 27 components (ScreenScaffold.kt, Rows.kt, Buttons.kt, Sheets.kt,
+ * StatusViews.kt, Controls.kt, Glass.kt, liquid/). Material 3 is only a bridge for static Text and
+ * Icon: their default text style and content colour come from here. Colours follow the system
+ * light / dark setting; there is no theme or style picker.
  */
 
 private val LightColors = materialLightColorScheme(
