@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -37,7 +39,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
@@ -697,18 +701,34 @@ internal fun GlassSwitch(checked: Boolean, enabled: Boolean, onCheckedChange: (B
     }
     val current by rememberUpdatedState(checked)
     val onChange by rememberUpdatedState(onCheckedChange)
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     // The toggle's drag inspector leaves pointer changes unconsumed; consume them here, after the
     // toggle has seen them, so the row's own toggleable does not act on the same tap again.
+    // The toggle only listens on its thumb, so a tap that lands on the exposed track is turned
+    // into a toggle here; thumb taps and drags stay with the toggle itself.
     Box(
         Modifier
             .size(SwitchWidth, SwitchHeight)
             .clearAndSetSemantics { }
-            .pointerInput(Unit) {
+            .pointerInput(rtl) {
                 awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    val travel = if (current) SwitchWidth - SwitchThumbWidth - 4.dp else 0.dp
+                    val thumbStart = (2.dp + travel).toPx()
+                    val thumbEnd = thumbStart + SwitchThumbWidth.toPx()
+                    val x = if (rtl) size.width - down.position.x else down.position.x
+                    val onTrack = x < thumbStart || x > thumbEnd
+                    val slop = viewConfiguration.touchSlop
+                    var tap = true
                     do {
                         val event = awaitPointerEvent()
-                        event.changes.forEach { it.consume() }
+                        event.changes.forEach { change ->
+                            if ((change.position - down.position).getDistance() > slop) tap = false
+                            change.consume()
+                        }
                     } while (event.changes.any { it.pressed })
+                    if (tap && onTrack) onChange(!current)
                 }
             },
     ) {
@@ -1264,8 +1284,12 @@ internal fun BottomSheet(
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
-                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
-                .padding(start = Space.panelInset, end = Space.panelInset, bottom = Space.panelInset)
+                .windowInsetsPadding(
+                    WindowInsets.ime
+                        .union(WindowInsets.navigationBars)
+                        .union(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
+                )
+                .padding(all = Space.panelInset)
                 .widthIn(max = 640.dp)
                 .fillMaxWidth()
                 .onSizeChanged { height = it.height }

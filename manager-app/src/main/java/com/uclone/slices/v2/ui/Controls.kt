@@ -36,10 +36,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.progressSemantics
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
@@ -69,6 +71,7 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
@@ -442,7 +445,12 @@ internal fun SlicesPopupMenu(
     val open = show.value
     LaunchedEffect(open) { visibleState.targetState = open }
     if (!visibleState.currentState && !visibleState.targetState) return
-    val margin = with(LocalDensity.current) { Space.xs.roundToPx() }
+    val density = LocalDensity.current
+    val margin = with(density) { Space.xs.roundToPx() }
+    // The larger side of the anchor always has at least half the window, so a menu capped there
+    // fits once flipped; longer lists scroll inside the panel.
+    val windowHeight = LocalWindowInfo.current.containerSize.height
+    val menuMaxHeight = with(density) { (windowHeight / 2 - margin * 2).coerceAtLeast(0).toDp() }
     val positionProvider = remember(margin) { MenuPositionProvider(margin) }
     Popup(
         popupPositionProvider = positionProvider,
@@ -469,7 +477,9 @@ internal fun SlicesPopupMenu(
                     .padding(Space.xs)
                     .widthIn(min = 200.dp, max = 300.dp)
                     .width(IntrinsicSize.Max)
+                    .heightIn(max = menuMaxHeight)
                     .solidGlass(RoundedCornerShape(Radius.menu), Surfaces.panelTint, elevation = 12.dp)
+                    .verticalScroll(rememberScrollState())
                     .padding(vertical = 6.dp),
             ) {
                 items.forEachIndexed { index, item ->
