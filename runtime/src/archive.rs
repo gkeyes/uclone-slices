@@ -813,7 +813,7 @@ fn hash_domain_files(
         if entry.kind != ManifestEntryKind::File {
             continue;
         }
-        let file = open_regular_nofollow(&safe_join(root, Path::new(&entry.path))?)?;
+        let file = open_regular_beneath(root, Path::new(&entry.path))?;
         let mut reader = HashingReader::new(file.take(entry.size), progress);
         std::io::copy(&mut reader, &mut std::io::sink()).map_err(io_error)?;
         let (digest, read) = reader.finish();
@@ -1131,7 +1131,7 @@ fn append_domain<W: Write>(
                 header.set_cksum();
                 // Hash while streaming instead of re-reading the file before appending it.
                 // A mismatch fails the whole archive, which is still an unpublished temp file.
-                let file = open_regular_nofollow(&source)?;
+                let file = open_regular_beneath(root, Path::new(&entry.path))?;
                 let mut reader = HashingReader::new(file.take(entry.size), progress);
                 builder
                     .append_data(&mut header, archive_path, &mut reader)
@@ -1710,14 +1710,42 @@ fn ensure_safe_parent(root: &Path, output: &Path) -> Result<(), ArchiveError> {
     Ok(())
 }
 
-/// Opens a file that the scan saw as a regular file, refusing it if it has since been replaced by a
-/// symbolic link or by something else, so root never reads through a link the app swapped in.
-fn open_regular_nofollow(path: &Path) -> Result<File, ArchiveError> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-        .open(path)
+/// Opens a file that the scan saw as a regular file at `relative` under `root`, refusing it if
+/// anything on the way has since been replaced. Every directory below `root` is opened with
+/// `O_NOFOLLOW` relative to the one before it, so a parent the app swaps for a symbolic link
+/// cannot redirect root outside the tree, and the file itself is opened non-blocking so a FIFO
+/// swapped in for it fails the type check instead of hanging the helper.
+fn open_regular_beneath(root: &Path, relative: &Path) -> Result<File, ArchiveError> {
+    use rustix::fs::{Mode, OFlags};
+
+    validate_relative_path(relative)?;
+    let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let mut directory = rustix::fs::open(root, directory_flags, Mode::empty()).map_err(io_error)?;
+    let mut components = relative.components().peekable();
+    let name = loop {
+        let Some(Component::Normal(name)) = components.next() else {
+            return Err(ArchiveError::Invalid);
+        };
+        if components.peek().is_none() {
+            break name;
+        }
+        directory = rustix::fs::openat(
+            &directory,
+            name,
+            directory_flags | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )
         .map_err(io_error)?;
+    };
+    let file = File::from(
+        rustix::fs::openat(
+            &directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::NOCTTY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(io_error)?,
+    );
     let metadata = file.metadata().map_err(io_error)?;
     if !metadata.file_type().is_file() || metadata.nlink() != 1 {
         return Err(ArchiveError::Invalid);
@@ -1725,10 +1753,6 @@ fn open_regular_nofollow(path: &Path) -> Result<File, ArchiveError> {
     Ok(file)
 }
 
-/// Refuses a restore that would not fit before anything is written.
-///
-/// `f_bavail` leaves out the blocks the filesystem reserves for root, so a restore running as root
-/// fails cleanly instead of eating into that reserve and filling `/data` completely.
 /// Free space a restore must leave on each filesystem so the system stays usable afterwards.
 const RESTORE_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -1760,7 +1784,15 @@ fn ensure_restore_capacity<'a>(
                 .bytes
                 .saturating_add(allocated_bytes(entry.size, block));
         }
-        demand.inodes = demand.inodes.saturating_add(manifest.entries.len() as u64);
+        // Extraction also creates any parent directory the manifest does not list itself.
+        let implied = implied_parent_count(manifest);
+        demand.bytes = demand
+            .bytes
+            .saturating_add(implied.saturating_mul(allocated_bytes(0, block)));
+        demand.inodes = demand
+            .inodes
+            .saturating_add(manifest.entries.len() as u64)
+            .saturating_add(implied);
     }
     for demand in devices.values() {
         let free_bytes = demand.stats.f_bavail.saturating_mul(demand.stats.f_frsize);
@@ -1771,6 +1803,25 @@ fn ensure_restore_capacity<'a>(
         }
     }
     Ok(())
+}
+
+/// Number of parent directories extraction must create because the manifest has no entry for them.
+fn implied_parent_count(manifest: &DomainManifest) -> u64 {
+    let listed = manifest
+        .entries
+        .iter()
+        .map(|entry| Path::new(entry.path.as_str()))
+        .collect::<BTreeSet<_>>();
+    let mut implied = BTreeSet::new();
+    for entry in &manifest.entries {
+        for parent in Path::new(entry.path.as_str()).ancestors().skip(1) {
+            if parent.as_os_str().is_empty() || listed.contains(parent) {
+                continue;
+            }
+            implied.insert(parent);
+        }
+    }
+    implied.len() as u64
 }
 
 /// Bytes a file of `size` occupies: whole data blocks plus one block of metadata, so even an
@@ -2194,6 +2245,17 @@ mod tests {
         assert_eq!(allocated_bytes(1, 4096), 8192);
         assert_eq!(allocated_bytes(4096, 4096), 8192);
         assert_eq!(allocated_bytes(u64::MAX, 4096), u64::MAX);
+        // `a/b/c` alone implies `a` and `a/b`; a listed directory is not counted twice.
+        let mut nested = domain(&[1]);
+        nested.entries[0].path = "a/b/c".to_owned();
+        assert_eq!(implied_parent_count(&nested), 2);
+        let mut listed_parent = nested.clone();
+        listed_parent.entries.push(ManifestEntry {
+            path: "a".to_owned(),
+            kind: ManifestEntryKind::Directory,
+            ..nested.entries[0].clone()
+        });
+        assert_eq!(implied_parent_count(&listed_parent), 1);
         Ok(())
     }
 
@@ -2203,8 +2265,29 @@ mod tests {
         fs::write(temp.path().join("secret"), b"secret").map_err(io_error)?;
         symlink("secret", temp.path().join("swapped")).map_err(io_error)?;
 
-        assert!(open_regular_nofollow(&temp.path().join("secret")).is_ok());
-        assert!(open_regular_nofollow(&temp.path().join("swapped")).is_err());
+        fs::create_dir(temp.path().join("dir")).map_err(io_error)?;
+        fs::write(temp.path().join("dir/inner"), b"inner").map_err(io_error)?;
+        symlink("dir", temp.path().join("linked-dir")).map_err(io_error)?;
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            temp.path().join("fifo"),
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+            0,
+        )
+        .map_err(io_error)?;
+
+        let root = temp.path();
+        assert!(open_regular_beneath(root, Path::new("secret")).is_ok());
+        assert!(open_regular_beneath(root, Path::new("dir/inner")).is_ok());
+        assert!(open_regular_beneath(root, Path::new("swapped")).is_err());
+        // A parent swapped for a link is refused even though the final name is a regular file.
+        assert!(open_regular_beneath(root, Path::new("linked-dir/inner")).is_err());
+        // A FIFO fails the type check at once instead of blocking for a writer.
+        assert!(matches!(
+            open_regular_beneath(root, Path::new("fifo")),
+            Err(ArchiveError::Invalid),
+        ));
         Ok(())
     }
 
