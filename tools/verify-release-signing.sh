@@ -23,6 +23,6 @@ DIGESTS=$(
         tr '[:upper:]' '[:lower:]'
 )
 DIGEST_COUNT=$(printf '%s\n' "$DIGESTS" | sed '/^$/d' | wc -l | tr -d ' ')
-[ "$DIGEST_COUNT" = 1 ] || fail "expected exactly one signer, found $DIGEST_COUNT"
+[ "$DIGEST_COUNT" = 1 ] || { printf '%s\n' "$VERIFY_OUTPUT" | grep -iv "^WARNING" >&2; fail "expected exactly one signer, found $DIGEST_COUNT"; }
 [ "$DIGESTS" = "$EXPECTED_CERT_SHA256" ] || fail "unexpected signer certificate: $DIGESTS"
 printf '%s certificate SHA-256: %s\n' "$(basename "$1")" "$DIGESTS"
