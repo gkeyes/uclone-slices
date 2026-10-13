@@ -5,6 +5,18 @@ use std::net::Shutdown;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+const PRODUCTION_TIMEOUTS: Timeouts = Timeouts {
+    read: REQUEST_READ_TIMEOUT,
+    write: RESPONSE_WRITE_TIMEOUT,
+};
+
+fn read_timeout(read: Duration) -> Timeouts {
+    Timeouts {
+        read,
+        ..PRODUCTION_TIMEOUTS
+    }
+}
+
 fn permit() -> ConnectionPermit {
     ConnectionLimit::new(MAX_CONCURRENT_CONNECTIONS).acquire()
 }
@@ -16,7 +28,7 @@ fn one_connection_carries_one_request() {
     client.shutdown(Shutdown::Write).unwrap();
 
     let mut received = String::new();
-    serve_one(server, REQUEST_READ_TIMEOUT, |line| {
+    serve_one(server, PRODUCTION_TIMEOUTS, |line| {
         received = line.to_owned();
         INVALID_REQUEST_RESPONSE.to_owned()
     })
@@ -130,7 +142,7 @@ fn a_client_that_never_finishes_its_line_is_dropped_after_the_read_timeout() {
     client.write_all(b"{\"op\":").unwrap();
     let mut called = false;
 
-    let error = serve_one(server, Duration::from_millis(100), |_line| {
+    let error = serve_one(server, read_timeout(Duration::from_millis(100)), |_line| {
         called = true;
         String::new()
     })
@@ -158,7 +170,9 @@ fn the_read_timeout_bounds_the_whole_line_not_each_read() {
     });
 
     let started = Instant::now();
-    let result = serve_one(server, Duration::from_millis(200), |_line| String::new());
+    let result = serve_one(server, read_timeout(Duration::from_millis(200)), |_line| {
+        String::new()
+    });
 
     assert!(result.is_err());
     assert!(started.elapsed() < Duration::from_millis(1_500));
@@ -198,4 +212,42 @@ fn connections_over_the_limit_wait_for_a_free_slot_instead_of_failing() {
     drop(first);
     acquired.recv_timeout(Duration::from_secs(5)).unwrap();
     waiter.join().unwrap();
+}
+
+#[test]
+fn a_client_that_stops_reading_its_response_is_dropped_after_the_write_timeout() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    client.write_all(b"{\"op\":\"list_packages\"}\n").unwrap();
+    // Far more than the socket buffer holds; the client never reads any of it.
+    let large = "x".repeat(16 * 1024 * 1024);
+
+    let started = Instant::now();
+    let result = serve_one(
+        server,
+        Timeouts {
+            read: REQUEST_READ_TIMEOUT,
+            write: Duration::from_millis(200),
+        },
+        |_line| large,
+    );
+
+    assert!(result.is_err());
+    assert!(started.elapsed() < Duration::from_secs(5));
+    drop(client);
+}
+
+#[test]
+fn a_large_response_read_promptly_is_delivered_in_full() {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let expected = "y".repeat(4 * 1024 * 1024);
+    let response = expected.clone();
+    let worker =
+        thread::spawn(move || serve_one(server, PRODUCTION_TIMEOUTS, |_line| response).is_ok());
+    client.write_all(b"{\"op\":\"list_packages\"}\n").unwrap();
+    client.shutdown(Shutdown::Write).unwrap();
+
+    let mut received = String::new();
+    std::io::Read::read_to_string(&mut client, &mut received).unwrap();
+    assert!(worker.join().unwrap());
+    assert_eq!(received.len(), expected.len());
 }

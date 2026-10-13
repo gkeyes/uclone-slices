@@ -11,6 +11,10 @@ const MAX_FRAME_BYTES: usize = 64 * 1024;
 /// after connecting; this only frees a thread held by a client that never finishes it.
 /// Handling the request and writing the response are not limited.
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
+/// Time a client has to accept the whole response once it is ready. The Manager is already
+/// waiting to read it, so this only frees a connection whose client stopped reading; without
+/// it such clients could hold every connection slot below.
+const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Connections served at once. Requests already run one at a time behind the transaction
 /// lock, so this only bounds idle threads; a connection over the limit is not refused, it
 /// waits in the listen backlog until a running one finishes.
@@ -76,7 +80,11 @@ pub(super) fn spawn_connection(
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let _permit = permit;
-        if let Err(error) = serve_one(stream, REQUEST_READ_TIMEOUT, |line| handler(line)) {
+        let timeouts = Timeouts {
+            read: REQUEST_READ_TIMEOUT,
+            write: RESPONSE_WRITE_TIMEOUT,
+        };
+        if let Err(error) = serve_one(stream, timeouts, |line| handler(line)) {
             eprintln!("ucloned request failed: {error}");
         }
     })
@@ -96,21 +104,60 @@ pub(super) fn serialize_transaction(
     transaction()
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Timeouts {
+    /// Bound on receiving the whole request line.
+    read: Duration,
+    /// Bound on sending the whole response.
+    write: Duration,
+}
+
 fn serve_one(
     mut stream: UnixStream,
-    read_timeout: Duration,
+    timeouts: Timeouts,
     handler: impl FnOnce(&str) -> String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let frame = match read_frame(&stream, read_timeout) {
+    let frame = match read_frame(&stream, timeouts.read) {
         Ok(frame) => frame,
         Err(FrameError::InvalidRequest) => {
-            stream.write_all(INVALID_REQUEST_RESPONSE.as_bytes())?;
+            write_response(
+                &mut stream,
+                INVALID_REQUEST_RESPONSE.as_bytes(),
+                timeouts.write,
+            )?;
             return Ok(());
         }
         Err(FrameError::Io(error)) => return Err(Box::new(error)),
     };
     let response = handler(&frame);
-    stream.write_all(response.as_bytes())?;
+    write_response(&mut stream, response.as_bytes(), timeouts.write)?;
+    Ok(())
+}
+
+/// Writes all of `response`, failing once `timeout` has passed for the whole response (not
+/// per write), so a client that stops reading cannot keep the connection.
+fn write_response(
+    stream: &mut UnixStream,
+    mut response: &[u8],
+    timeout: Duration,
+) -> std::io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    while !response.is_empty() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "response was not accepted in time",
+            ));
+        }
+        stream.set_write_timeout(Some(remaining))?;
+        match stream.write(response) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(written) => response = response.get(written..).unwrap_or_default(),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
     Ok(())
 }
 
