@@ -107,14 +107,19 @@ internal fun SlicesScreen(
                             onIntent = onIntent,
                         )
                     }
-                    ManagerDestination.BackupRestore -> BackupRestoreScreen(
-                        state = backupState,
-                        slotsState = state,
-                        contentPadding = contentPadding,
-                        onBack = { onIntent(UiIntent.NavigateBack) },
-                        onIntent = onBackupIntent,
-                        suggestedBackupName = suggestedBackupName,
-                    )
+                    ManagerDestination.BackupRestore -> {
+                        // Lives as long as this page is composed, so the window stays secure
+                        // through the page's exit transition too.
+                        SecureWindowEffect()
+                        BackupRestoreScreen(
+                            state = backupState,
+                            slotsState = state,
+                            contentPadding = contentPadding,
+                            onBack = { onIntent(UiIntent.NavigateBack) },
+                            onIntent = onBackupIntent,
+                            suggestedBackupName = suggestedBackupName,
+                        )
+                    }
                     ManagerDestination.RuntimeStatus -> RuntimeStatusScreen(
                         state = state,
                         contentPadding = contentPadding,

@@ -11,6 +11,9 @@ use std::process::Command;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::links::link_resolves_inside;
+#[cfg(target_os = "android")]
+use crate::links::visit_tree_nofollow;
 use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, PackageAggregate, PackageBinding,
     PackageName, RebindIntent, RestoreBatchResult, RestoreDomain, RestorePolicy, RestoreStaging,
@@ -1086,8 +1089,7 @@ fn validate_staged_tree(root: &Path) -> Result<(), AdapterError> {
                     ));
                 }
             } else if kind.is_symlink() {
-                let target = fs::read_link(&path).map_err(io_error)?;
-                if target.is_absolute() || !relative_link_stays_inside(root, &path, &target) {
+                if !link_resolves_inside(root, &path).map_err(io_error)? {
                     return Err(AdapterError::state_conflict(
                         "staged account contains an escaping symbolic link",
                     ));
@@ -1129,32 +1131,6 @@ fn normalize_restored_tree(profile_source: &Path, root: &Path) -> Result<(), Ada
         }
     }
     apply_android_context(profile_source, root)
-}
-
-fn relative_link_stays_inside(root: &Path, link: &Path, target: &Path) -> bool {
-    use std::path::Component;
-
-    let Some(parent) = link.parent() else {
-        return false;
-    };
-    let Ok(relative_parent) = parent.strip_prefix(root) else {
-        return false;
-    };
-    let mut depth = 0_usize;
-    for component in relative_parent.components().chain(target.components()) {
-        match component {
-            Component::Normal(_) => depth = depth.saturating_add(1),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                let Some(next) = depth.checked_sub(1) else {
-                    return false;
-                };
-                depth = next;
-            }
-            Component::Prefix(_) | Component::RootDir => return false,
-        }
-    }
-    true
 }
 
 fn replace_domain(
@@ -1882,32 +1858,27 @@ fn apply_root_profile(source: &Path, target: &Path) -> Result<(), AdapterError> 
     apply_android_context(source, target)
 }
 
+/// Gives `target` and everything below it the SELinux label of `source`.
+///
+/// The tree is walked here and every entry is labelled with `lsetxattr`, which never follows a
+/// symbolic link. `chcon -R` follows links, so a link an app planted in its own data (and that a
+/// clone or restore copied) could otherwise make root relabel any path on the device.
 #[cfg(target_os = "android")]
 fn apply_android_context(source: &Path, target: &Path) -> Result<(), AdapterError> {
-    let output = Command::new("/system/bin/getfattr")
-        .args(["--only-values", "-n", "security.selinux"])
-        .arg(source)
-        .output()
-        .map_err(io_error)?;
-    if !output.status.success() {
-        return Err(AdapterError::new("could not read Android data context"));
-    }
-    let context = String::from_utf8(output.stdout)
-        .map_err(|error| AdapterError::new(error.to_string()))?
-        .trim_matches(['\0', '\n', '\r'])
-        .to_owned();
-    if context.is_empty() {
-        return Err(AdapterError::new("Android data context is empty"));
-    }
-    let status = Command::new("/system/bin/chcon")
-        .args(["-R", "--", &context])
-        .arg(target)
-        .status()
-        .map_err(io_error)?;
-    status
-        .success()
-        .then_some(())
-        .ok_or_else(|| AdapterError::new("could not apply Android data context"))
+    use rustix::fs::{XattrFlags, lgetxattr, lsetxattr};
+
+    const SELINUX_XATTR: &str = "security.selinux";
+    let mut buffer = [0_u8; 512];
+    let length = lgetxattr(source, SELINUX_XATTR, &mut buffer[..])
+        .map_err(|error| io_error(error.into()))?;
+    let context = buffer
+        .get(..length)
+        .filter(|value| value.iter().any(|byte| *byte != 0))
+        .ok_or_else(|| AdapterError::new("Android data context is empty"))?;
+    visit_tree_nofollow(target, |path| {
+        lsetxattr(path, SELINUX_XATTR, context, XattrFlags::empty()).map_err(Into::into)
+    })
+    .map_err(io_error)
 }
 
 #[cfg(not(target_os = "android"))]

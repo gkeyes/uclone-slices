@@ -177,6 +177,17 @@ internal fun takePersistableReadPermission(context: Context, uri: Uri) {
     }
 }
 
+/**
+ * Gives back a grant taken with [takePersistableReadPermission] or
+ * [takePersistableWritePermission] once the job that needed it is over, so the Manager does not
+ * keep access to every backup file it ever touched or run out of the system's grant quota.
+ */
+internal fun releasePersistablePermission(context: Context, uri: Uri, modeFlags: Int) {
+    runCatching {
+        context.contentResolver.releasePersistableUriPermission(uri, modeFlags)
+    }
+}
+
 internal fun takePersistableWritePermission(context: Context, uri: Uri) {
     runCatching {
         context.contentResolver.takePersistableUriPermission(

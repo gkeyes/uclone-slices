@@ -14,6 +14,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "UCloneSlicesV2"
+rootProject.name = "uclone-slices"
 include(":manager-app")
 include(":device-fixture-app")
