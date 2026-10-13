@@ -31,10 +31,10 @@
 | `base` 后从 `slot-1` 递增的内部槽 ID | V2 聚合模型的确定性标识规则；槽 ID 对 Manager 是不透明字符串 | 聚合测试和共享 fixtures |
 | 创建页默认选择空白槽 | 固定旧版行为基线中的真实创建入口默认值 | ViewModel 完整链路测试 |
 | Rust 1.95、edition 2024 | 旧版固定基线 `2ae26765…/slot-runtime/Cargo.toml`；V2 已在本机完整通过 | format、test、Clippy、doc |
-| AGP 8.11.1、Kotlin 2.2.0、JDK 17、SDK 36、minSdk 29、Compose 依赖版本 | 同一旧版固定提交的根构建和 Manager 构建文件；这里只沿用已通过的工具链，不沿用旧架构 | Gradle test、lint、assemble |
+| AGP 9.4.1（内置 Kotlin）、Kotlin 2.2.20、Gradle 9.8.1、JDK 17、compileSdk 37、targetSdk 36、minSdk 29、Compose 依赖版本 | 同一旧版固定提交的根构建和 Manager 构建文件；这里只沿用已通过的工具链，不沿用旧架构 | Gradle test、lint、assemble |
 | Gradle 8.13 | 与当前 AGP 组合完成本机构建；wrapper 是唯一 Gradle 版本源 | `./gradlew` 构建 |
 | GitHub runner `ubuntu-24.04` | CI 明确固定 Linux runner，避免首个基线随 `ubuntu-latest` 漂移；不是产品运行限制 | 首次远端 CI 尚待真机门禁后验证 |
-| Android build-tools `36.0.0` | 与项目唯一 `compileSdk/targetSdk 36` 配套安装，避免 CI 隐式选择不同 build-tools | Android assemble、首次远端 CI |
+| Android build-tools `37.0.0` | 与项目 `compileSdk 37` 配套安装，避免 CI 隐式选择不同 build-tools | Android assemble、首次远端 CI |
 | NDK 29.0.14206865、Android API 29、aarch64 | 旧版固定提交的 Android arm64 构建链和设备可行性证据；V2 已完成交叉编译 | KernelSU ZIP 构建和完整性检查 |
 | Android owner user `0`、`/data/user/0`、`/data/user_de/0` | 首个里程碑沿用已验证的单用户 CE/DE 行为；多用户没有进入聚合模型或产品入口 | Android command-sequence 和 mountinfo 测试 |
 | `/data/misc_ce/0/uclone-slices-v2/slots` 与 `/data/misc_de/0/uclone-slices-v2/slots` | 固定旧版行为基线已经验证的分离 CE/DE 槽布局；控制面数据不充当应用数据槽 | 成对物化、半成品清理和 paired-mount 测试 |
@@ -63,7 +63,7 @@
 | Helper 路径 `/data/adb/uclone-slices-v2/manager-helper/<version>/uclone_archive`、`root:root 0700` | Manager APK 内嵌同构建 helper，运行前校验 SHA-256；固定版本目录避免混用旧 helper；安装时删除其他版本的目录 | Release assemble、APK 内容和 helper checksum 门禁 |
 | Helper 在 `/system/bin/nsenter -t 1 -m` 中执行 | Base/当前槽的稳定源视图由 Runtime 在 init mount namespace 建立；Manager 自身的挂载空间不能作为账号源真相 | 固定命令检查、真机 Base/活动槽备份验收 |
 | Base alias 成对挂载检测、固定根复制与 `restore-started` 回滚标记 | 正常事务通过 alias 修改未暴露的真实 Base；bind alias 不能接收来自 Runtime 暂存根的子项重命名，因此正向替换和回滚都保留源树并复制到固定根。重启后 bind mount 消失时改用未挂载的真实 Base；部分复制可重试，完整回滚先原子退役再清理 | mountinfo 精确路径、rename 禁入、CE/DE 补偿、部分复制重试与真机临时 bind-alias `cp -a` 测试 |
-| iOS 27 Liquid Glass（Kyant0/AndroidLiquidGlass `io.github.kyant0:backdrop:1.0.6` + `shapes:1.2.0`），移除 MIUIX | 用户要求所有 App 与 DualSimRouting 设计稿一致：标签栏/按钮/面板/弹窗为真实折射玻璃、62×28 dp 扁平胶囊开关、26 dp 分组卡片、约 52 dp 行、只显示 ‹ 的圆形玻璃返回键、跟随系统深浅色且无主题选择；组件复用 DualSimRouting 已移植的 Apache-2.0 Kyant 组件（`ui/liquid/`）。backdrop 2.x 需要 Kotlin 2.4 元数据与 compileSdk 37，1.0.6 是可在既有 Kotlin 2.2.0 / compileSdk 36 工具链上使用的最新版本 | `GlassComponentPolicyTest`，Manager compile、unit、lint、assemble 与真机界面验收 |
+| iOS 27 Liquid Glass（Kyant0/AndroidLiquidGlass `io.github.kyant0:backdrop:1.0.6` + `shapes:1.2.0`），移除 MIUIX | 用户要求所有 App 与 DualSimRouting 设计稿一致：标签栏/按钮/面板/弹窗为真实折射玻璃、62×28 dp 扁平胶囊开关、26 dp 分组卡片、约 52 dp 行、只显示 ‹ 的圆形玻璃返回键、跟随系统深浅色且无主题选择；组件复用 DualSimRouting 已移植的 Apache-2.0 Kyant 组件（`ui/liquid/`）。backdrop 2.x 需要 Kotlin 2.4 元数据与 compileSdk 37，保持 1.0.6，不随 Kotlin 2.2.20 / compileSdk 37 工具链升级 | `GlassComponentPolicyTest`，Manager compile、unit、lint、assemble 与真机界面验收 |
 | 玻璃仅在 API 31+ 且硬件加速时实时绘制；API 31–32 只有模糊无折射，API 29–30 退化为不透明着色面 | backdrop 的 `blur` 依赖 API 31 `RenderEffect`、`lens` 依赖 API 33 AGSL `RuntimeShader`，低版本库内直接跳过；无模糊时透明玻璃上的文字不可读，因此改画着色实心面 + 发丝边 | `Glass.kt` `glassLive()`，真机/模拟器 API 29 与 33+ 截图验收 |
 | 玻璃不采样包含自身的录制层：根层录制页面供底部面板、操作提示与顶部通知使用；`ManagerScreen` 录制列表供自身标题栏使用；页面内容不提供 backdrop | `GraphicsLayer` 若绘制包含自身的层会形成渲染节点环；页面内按钮因此为实心胶囊，标题栏、面板与通知内的按钮为玻璃胶囊 | `GlassComponentPolicyTest` |
 | 弹出菜单、开关、进度、输入框与分割线由 Compose foundation 与 `ui/liquid/` 组件绘制，Material 3 仅保留文本/图标/主题桥接 | 原为 MIUIX 组件统一外观；iOS 27 改版后统一为自绘玻璃/分组组件，菜单仍为锚定弹出列表，“重启后自动切换并打开 App”仍是菜单中的勾选项 | `GlassComponentPolicyTest` 扫描 Manager 源码 import，真机菜单/备份页截图验收 |

@@ -101,7 +101,7 @@ flowchart LR
 
 ## 构建与验证
 
-需要 JDK 17、Android SDK 36、Build Tools 36.0.0、NDK 29.0.14206865、Rust 1.95 和 Android arm64 target。
+需要 JDK 17、Android SDK 37、Build Tools 37.0.0、NDK 29.0.14206865、Rust 1.95 和 Android arm64 target。
 
 ```bash
 cargo fmt --all -- --check

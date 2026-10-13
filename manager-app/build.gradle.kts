@@ -2,7 +2,6 @@ import java.security.MessageDigest
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
 
@@ -62,7 +61,7 @@ val prepareArchiveHelper by tasks.registering(Copy::class) {
 
 android {
     namespace = "com.uclone.slices.v2"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.uclone.slices.v2"

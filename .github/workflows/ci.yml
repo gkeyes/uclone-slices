@@ -59,7 +59,7 @@ jobs:
           packages: ''
 
       - name: Install Android platform
-        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;$NDK_VERSION"
+        run: sdkmanager --install "platforms;android-37" "build-tools;37.0.0" "ndk;$NDK_VERSION"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
@@ -120,7 +120,7 @@ jobs:
         if: env.HAS_RELEASE_SIGNING == 'true'
         run: |
           test "$(unzip -p manager-app/build/outputs/apk/release/manager-app-release.apk lib/arm64-v8a/libuclone_archive.so | sha256sum | awk '{print $1}')" = "$(cat outputs/helpers/uclone_archive.sha256)"
-          APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner" \
+          APKSIGNER="$ANDROID_HOME/build-tools/37.0.0/apksigner" \
             ./tools/verify-release-signing.sh \
             manager-app/build/outputs/apk/release/manager-app-release.apk
 
