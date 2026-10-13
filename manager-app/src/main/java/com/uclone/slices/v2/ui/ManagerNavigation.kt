@@ -55,6 +55,14 @@ internal fun NavBackStackEntry.managerDestination(): ManagerDestination {
     }
 }
 
+/** The package a package page's route names; null for every other page. */
+internal fun NavBackStackEntry.routePackageName(): String? =
+    if (destination.hasRoute<PackageDetailsRoute>()) {
+        toRoute<PackageDetailsRoute>().packageName
+    } else {
+        null
+    }
+
 /**
  * Makes the move the view model asked for. Add App, Runtime status and a package page sit
  * directly above the spaces list (back always returns there); backup and restore opens above the

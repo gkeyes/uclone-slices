@@ -60,6 +60,9 @@ internal class SlotsViewModel(
     // to decide what a result means for the visible page; navigation itself is the nav host's.
     @Volatile
     private var destination = ManagerDestination.Spaces
+
+    @Volatile
+    private var restoredPackage: String? = null
     private val noticeIds = AtomicLong()
     private val operationLock = Any()
     private var operationActive = false
@@ -131,7 +134,8 @@ internal class SlotsViewModel(
                 setLaunchAfterReboot(intent.packageName, intent.enabled)
             is UiIntent.QuickActivateSlot ->
                 quickActivateSlot(intent.packageName, intent.slotId)
-            is UiIntent.DestinationChanged -> destinationChanged(intent.destination)
+            is UiIntent.DestinationChanged ->
+                destinationChanged(intent.destination, intent.packageName)
             is UiIntent.Reorder -> reorder(intent.intent)
             is UiIntent.RequestConfigureApp -> requestConfigureApp(intent.packageName)
             UiIntent.ConfirmConfigureApp -> confirmConfigureApp()
@@ -195,9 +199,26 @@ internal class SlotsViewModel(
         navigate(navigation)
     }
 
-    private fun destinationChanged(destination: ManagerDestination) {
+    private fun destinationChanged(destination: ManagerDestination, packageName: String?) {
         val previous = this.destination
         this.destination = destination
+        // A package page restored by the back stack (after process death) names its package
+        // while this view model has no selection yet: select it now if it is known, otherwise
+        // when the refresh lists it.
+        restoredPackage = null
+        if (
+            destination == ManagerDestination.PackageDetails &&
+            packageName != null &&
+            state.value.selected == null
+        ) {
+            restoredPackage = packageName
+            mutableState.update { current ->
+                if (current.selected != null) return@update current
+                current.packages.firstOrNull { it.packageName == packageName }
+                    ?.let { current.copy(selected = it) }
+                    ?: current
+            }
+        }
         // Back on the spaces list from another page (a recreated host reports the same page
         // again, which changes nothing): the package page is gone, drop what belonged to it.
         if (destination == ManagerDestination.Spaces && previous != ManagerDestination.Spaces) {
@@ -842,6 +863,9 @@ internal class SlotsViewModel(
                 var packagePageGone = false
                 mutableState.update { current ->
                     val selectedPackage = current.selected?.packageName
+                        ?: restoredPackage.takeIf {
+                            destination == ManagerDestination.PackageDetails
+                        }
                     val selected = packages.firstOrNull {
                         it.packageName == selectedPackage
                     }

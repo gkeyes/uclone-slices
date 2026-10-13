@@ -72,11 +72,14 @@ internal fun SlicesScreen(
     }
     LaunchedEffect(viewModel, navController) {
         navController.currentBackStackEntryFlow.collect { entry ->
-            viewModel.onIntent(UiIntent.DestinationChanged(entry.managerDestination()))
+            viewModel.onIntent(
+                UiIntent.DestinationChanged(entry.managerDestination(), entry.routePackageName()),
+            )
         }
     }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val atSpaces = backStackEntry?.destination?.hasRoute<SpacesRoute>() != false
+    val atBackup = backStackEntry?.destination?.hasRoute<BackupRestoreRoute>() == true
     // Pages above the spaces list go back one page, never while an operation runs. Backup and
     // restore handles its own back (it leaves its job state first and asks for a refresh).
     val navigateBack: () -> Unit = remember(navController) {
@@ -179,7 +182,8 @@ internal fun SlicesScreen(
         // Registered after the NavHost's own handler, so it decides: no page change while an
         // operation runs. Pages and sheets that handle back themselves (backup and restore,
         // reordering, sheets) are composed under the same lifecycle later still and outrank it.
-        BackHandler(enabled = !atSpaces, onBack = navigateBack)
+        // Off on backup and restore: its own handler must get back, also while a job runs.
+        BackHandler(enabled = !atSpaces && !atBackup, onBack = navigateBack)
 
         CompositionLocalProvider(LocalGlassBackdrop provides pageBackdrop) {
             RootOverlays(

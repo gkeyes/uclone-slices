@@ -991,6 +991,28 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun aPackagePageRestoredByTheBackStackSelectsItsPackage() {
+        val snapshot = packageSnapshot()
+        val client = FakeRuntimeClient(initialPackages = listOf(snapshot))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        val moves = mutableListOf<SlotsNavigation>()
+        CoroutineScope(Dispatchers.Unconfined).launch {
+            viewModel.navigation.collect { moves += it }
+        }
+
+        // After process death the restored back stack reports the package page first.
+        viewModel.onIntent(
+            UiIntent.DestinationChanged(ManagerDestination.PackageDetails, snapshot.packageName),
+        )
+        assertEquals(snapshot.packageName, viewModel.state.value.selected?.packageName)
+
+        viewModel.onIntent(UiIntent.Refresh)
+
+        assertEquals(snapshot.packageName, viewModel.state.value.selected?.packageName)
+        assertTrue(moves.none { it == SlotsNavigation.ToSpaces })
+    }
+
+    @Test
     fun homeOrderIsEditedInTheViewModelAndSavedOnlyOnSave() {
         val preferences = MemoryManagerUiPreferences()
         val viewModel = slotsViewModel(

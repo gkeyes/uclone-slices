@@ -202,8 +202,14 @@ sealed interface UiIntent {
     ) : UiIntent
     data class QuickActivateSlot(val packageName: String, val slotId: String) : UiIntent
 
-    /** The nav host reports the screen now on top of the back stack. */
-    data class DestinationChanged(val destination: ManagerDestination) : UiIntent
+    /**
+     * The nav host reports the screen now on top of the back stack; for the package page also
+     * the package its route names (used to restore the page after process death).
+     */
+    data class DestinationChanged(
+        val destination: ManagerDestination,
+        val packageName: String? = null,
+    ) : UiIntent
     data class Reorder(val intent: ReorderIntent) : UiIntent
     data class RequestConfigureApp(val packageName: String) : UiIntent
     data object ConfirmConfigureApp : UiIntent
