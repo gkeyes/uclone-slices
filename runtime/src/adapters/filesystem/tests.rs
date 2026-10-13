@@ -1,7 +1,9 @@
 #![allow(clippy::unwrap_used)]
 
 use super::*;
-use crate::model::{DisplayName, PackageAggregate, PackageIdentity, RestorePath, TrashIntent};
+use crate::model::{
+    DisplayName, PackageAggregate, PackageIdentity, RestorePath, TrashHold, TrashIntent,
+};
 use std::os::unix::fs::symlink;
 
 fn identity() -> PackageIdentity {
@@ -607,30 +609,75 @@ fn finalize_refuses_to_report_success_when_recorded_data_is_missing() {
     );
 }
 
+/// A purge time at which data trashed during the test is past the retention period.
+fn after_retention() -> u64 {
+    unix_seconds_now().unwrap() + layout::TRASH_RETENTION.as_secs() * 2
+}
+
 #[test]
-fn purge_trash_keeps_the_data_of_packages_still_unenrolling() {
+fn purge_trash_keeps_only_the_held_entries() {
     let root = tempfile::tempdir().unwrap();
     let unenrolling = PackageName::new("com.example.app").unwrap();
     let (storage, _ce_slots, _de_slots) = open_trash_test_storage(root.path());
     let (ce_trash, _de_trash) = trash_roots(root.path());
-    let expired = ce_trash.join("1");
-    fs::create_dir_all(expired.join(unenrolling.as_str()).join("slot-1")).unwrap();
-    fs::create_dir_all(expired.join("com.example.done").join("slot-1")).unwrap();
+    let older = ce_trash.join("1");
+    let current = ce_trash.join("2");
+    let unreadable = ce_trash.join("3");
+    fs::create_dir_all(older.join(unenrolling.as_str()).join("slot-1")).unwrap();
+    fs::create_dir_all(current.join(unenrolling.as_str()).join("slot-1")).unwrap();
+    fs::create_dir_all(current.join("com.example.done").join("slot-1")).unwrap();
+    fs::create_dir_all(unreadable.join("com.example.corrupt").join("slot-1")).unwrap();
+    let held = [
+        TrashHold::Entry {
+            package: unenrolling.clone(),
+            name: "2".to_owned(),
+        },
+        TrashHold::Package(PackageName::new("com.example.corrupt").unwrap()),
+    ];
+
+    storage.purge_trash_at(after_retention(), &held).unwrap();
+
+    // An older copy of a package being unenrolled again still expires.
+    assert!(!older.exists());
+    assert!(current.join(unenrolling.as_str()).join("slot-1").is_dir());
+    assert!(!current.join("com.example.done").exists());
+    assert!(
+        unreadable
+            .join("com.example.corrupt")
+            .join("slot-1")
+            .is_dir()
+    );
+
+    storage.purge_trash_at(after_retention(), &[]).unwrap();
+    assert!(!current.exists());
+    assert!(!unreadable.exists());
+}
+
+#[test]
+fn retention_starts_when_a_late_retry_finalizes_the_trash() {
+    let root = tempfile::tempdir().unwrap();
+    let package = PackageName::new("com.example.app").unwrap();
+    let (mut storage, ce_slots, de_slots) = open_trash_test_storage(root.path());
+    let (ce_trash, de_trash) = trash_roots(root.path());
+    fs::create_dir_all(ce_slots.join(package.as_str()).join("slot-1")).unwrap();
+    fs::create_dir_all(de_slots.join(package.as_str()).join("slot-1")).unwrap();
+    // The name was reserved long ago and the unenroll only now completes.
+    let intent = trash_intent_for(&mut storage, &package, 1_000);
+    storage.finalize_package_trash(&intent).unwrap();
+    let finalized = unix_seconds_now().unwrap();
+    let retention = layout::TRASH_RETENTION.as_secs();
 
     storage
-        .purge_trash_at(
-            layout::TRASH_RETENTION.as_secs() * 2,
-            std::slice::from_ref(&unenrolling),
-        )
+        .purge_trash_at(finalized + retention - 60, &[])
         .unwrap();
+    for trash_root in [&ce_trash, &de_trash] {
+        assert!(trash_root.join("1000").join(package.as_str()).is_dir());
+    }
 
-    assert!(expired.join(unenrolling.as_str()).join("slot-1").is_dir());
-    assert!(!expired.join("com.example.done").exists());
-
-    storage
-        .purge_trash_at(layout::TRASH_RETENTION.as_secs() * 2, &[])
-        .unwrap();
-    assert!(!expired.exists());
+    storage.purge_trash_at(after_retention(), &[]).unwrap();
+    for trash_root in [&ce_trash, &de_trash] {
+        assert!(!trash_root.join("1000").exists());
+    }
 }
 
 #[test]
@@ -639,7 +686,7 @@ fn purge_trash_removes_only_entries_older_than_the_retention() {
     let (storage, _ce_slots, _de_slots) = open_trash_test_storage(root.path());
     let (ce_trash, de_trash) = trash_roots(root.path());
     let retention = layout::TRASH_RETENTION.as_secs();
-    let now = 10 * retention;
+    let now = unix_seconds_now().unwrap() + 10 * retention;
     let expired = (now - retention).to_string();
     let expired_twin = format!("{}-1", now - retention - 1);
     let fresh = (now - retention + 1).to_string();
@@ -723,9 +770,7 @@ fn purge_trash_never_follows_links_and_leaves_unrecognized_entries() {
         fs::create_dir_all(ce_trash.join(name).join("com.example.app")).unwrap();
     }
 
-    storage
-        .purge_trash_at(layout::TRASH_RETENTION.as_secs() * 2, &[])
-        .unwrap();
+    storage.purge_trash_at(after_retention(), &[]).unwrap();
 
     assert!(!expired.exists());
     assert!(!mixed.join("com.example.app").exists());

@@ -285,6 +285,27 @@ impl TrashIntent {
     }
 }
 
+/// Trash that a purge keeps however old it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrashHold {
+    /// `trash/<name>/<package>`, which an unenroll still in progress is finalizing.
+    Entry { package: PackageName, name: String },
+    /// Every trash entry of a package whose trash intent cannot be read.
+    Package(PackageName),
+}
+
+impl TrashHold {
+    pub fn holds(&self, name: &str, package: &str) -> bool {
+        match self {
+            Self::Entry {
+                package: held,
+                name: held_name,
+            } => held.as_str() == package && held_name == name,
+            Self::Package(held) => held.as_str() == package,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RebindIntent {
     pub package: PackageName,

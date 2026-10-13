@@ -4,7 +4,7 @@ use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, Capabilities, ObservedView,
     PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection, PackageName,
     RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging, SeedMode, Slot, SlotId,
-    TransferId, TrashIntent,
+    TransferId, TrashHold, TrashIntent,
 };
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -115,13 +115,13 @@ pub(crate) trait SlotStorage: core::fmt::Debug {
     /// A trash directory name, from the current time, under which neither domain holds `package`.
     fn reserve_trash_name(&self, package: &PackageName) -> Result<String, AdapterError>;
 
-    /// Moves the pending data of `intent.package` to the expiring `intent.name` directory and
-    /// verifies that every domain the intent recorded is there; idempotent.
+    /// Moves the pending data of `intent.package` to the expiring `intent.name` directory,
+    /// verifies that every domain the intent recorded is there and starts the retention period
+    /// of that data now; idempotent.
     fn finalize_package_trash(&mut self, intent: &TrashIntent) -> Result<(), AdapterError>;
 
-    /// Permanently deletes trash entries older than the retention period, except the data of
-    /// the `unenrolling` packages.
-    fn purge_trash(&mut self, unenrolling: &[PackageName]) -> Result<(), AdapterError>;
+    /// Permanently deletes trash entries whose retention period has passed, except `held`.
+    fn purge_trash(&mut self, held: &[TrashHold]) -> Result<(), AdapterError>;
 
     fn require_complete_pair(
         &self,

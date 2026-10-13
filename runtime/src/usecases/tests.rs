@@ -40,8 +40,8 @@ impl SlotStorage for CapacityDeniedStorage {
         self.0.finalize_package_trash(intent)
     }
 
-    fn purge_trash(&mut self, unenrolling: &[PackageName]) -> Result<(), AdapterError> {
-        self.0.purge_trash(unenrolling)
+    fn purge_trash(&mut self, held: &[crate::model::TrashHold]) -> Result<(), AdapterError> {
+        self.0.purge_trash(held)
     }
 
     fn require_complete_pair(
@@ -1616,22 +1616,50 @@ fn interrupted_trash_finalize_recovers_under_the_same_trash_name() {
 }
 
 #[test]
-fn purge_keeps_the_trash_of_packages_still_unenrolling() {
+fn purge_holds_only_the_trash_entries_of_unenrolls_in_progress() {
     let package = package();
     let stuck = PackageName::new("com.example.stuck").unwrap();
+    let staged = PackageName::new("com.example.staged").unwrap();
+    let unreadable = PackageName::new("com.example.unreadable").unwrap();
     let mut runtime = runtime();
-    runtime.android.install(stuck.clone());
+    for other in [&stuck, &staged, &unreadable] {
+        runtime.android.install(other.clone());
+    }
     runtime.enroll(package.clone(), None).unwrap();
-    runtime.enroll(stuck.clone(), None).unwrap();
+    for other in [&stuck, &staged, &unreadable] {
+        runtime.enroll(other.clone(), None).unwrap();
+    }
     let (mut packages, slots, android) = runtime.into_parts();
-    let mut aggregate = packages.load(&stuck).unwrap().unwrap();
-    aggregate.begin_unenrollment().unwrap();
-    packages.save(&aggregate).unwrap();
+    // `staged` is unenrolling but has no trash intent yet, so its data is still pending and
+    // none of its older trash needs to be held.
+    for other in [&stuck, &staged] {
+        let mut aggregate = packages.load(other).unwrap().unwrap();
+        aggregate.begin_unenrollment().unwrap();
+        packages.save(&aggregate).unwrap();
+    }
+    packages
+        .save_trash_intent(&TrashIntent {
+            package: stuck.clone(),
+            name: "1000".to_owned(),
+            ce: true,
+            de: true,
+        })
+        .unwrap();
+    packages.make_trash_intent_unreadable(unreadable.clone());
     let mut runtime = Runtime::new(packages, slots, android);
 
     runtime.unenroll(&package).unwrap();
 
-    assert_eq!(runtime.slots.last_purge_kept(), &[stuck]);
+    assert_eq!(
+        runtime.slots.last_purge_held(),
+        &[
+            TrashHold::Entry {
+                package: stuck,
+                name: "1000".to_owned(),
+            },
+            TrashHold::Package(unreadable),
+        ]
+    );
 }
 
 #[test]

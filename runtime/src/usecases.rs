@@ -11,7 +11,7 @@ use crate::model::{
     PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection, PackageName,
     PackageSnapshot, RebindIntent, ResolvedRestoreMapping, RestoreBatchResult, RestoreItemResult,
     RestoreItemState, RestoreMapping, RestoreTarget, SeedMode, SigningIdentity, SlotId, TransferId,
-    TrashIntent,
+    TrashHold, TrashIntent,
 };
 #[cfg(test)]
 use crate::model::{ArchiveDomain, RestorePath, RestorePolicy};
@@ -878,17 +878,25 @@ where
                 return;
             }
         };
-        // The trash of a package still unenrolling stays until its unenroll completes; a package
-        // whose state cannot be read is kept as well.
-        let unenrolling: Vec<_> = names
+        // A trash intent exists only while its unenroll is in progress, and the entry it names
+        // stays until that unenroll completes. Older entries of the same package still expire;
+        // only a package whose intent cannot be read keeps all of its trash.
+        let held: Vec<_> = names
             .into_iter()
-            .filter(|package| {
-                self.packages.load(package).map_or(true, |aggregate| {
-                    aggregate.is_some_and(|aggregate| aggregate.is_unenrolling())
-                })
+            .filter_map(|package| match self.packages.load_trash_intent(&package) {
+                Ok(intent) => intent.map(|intent| TrashHold::Entry {
+                    package: intent.package,
+                    name: intent.name,
+                }),
+                Err(error) => {
+                    eprintln!(
+                        "op={operation} package={package} step=purge_trash_intent error={error}"
+                    );
+                    Some(TrashHold::Package(package))
+                }
             })
             .collect();
-        if let Err(error) = self.slots.purge_trash(&unenrolling) {
+        if let Err(error) = self.slots.purge_trash(&held) {
             eprintln!("op={operation} step=purge_trash error={error}");
         }
     }

@@ -4,7 +4,7 @@ use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, Capabilities, ObservedView,
     PackageAggregate, PackageBinding, PackageEnabledState, PackageIdentity, PackageInspection,
     PackageName, RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging, SeedMode, Slot,
-    SlotId, TransferId, TrashIntent,
+    SlotId, TransferId, TrashHold, TrashIntent,
 };
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
@@ -21,6 +21,7 @@ pub(crate) struct MemoryPackageStore {
     failed_save_calls: BTreeSet<usize>,
     remove_calls: usize,
     failed_remove_calls: BTreeSet<usize>,
+    unreadable_trash_intents: BTreeSet<PackageName>,
 }
 
 impl MemoryPackageStore {
@@ -34,6 +35,10 @@ impl MemoryPackageStore {
 
     pub(crate) fn save_calls(&self) -> usize {
         self.save_calls
+    }
+
+    pub(crate) fn make_trash_intent_unreadable(&mut self, package: PackageName) {
+        self.unreadable_trash_intents.insert(package);
     }
 
     pub(crate) fn fail_next_remove(&mut self) {
@@ -108,6 +113,9 @@ impl PackageStore for MemoryPackageStore {
         &self,
         package: &PackageName,
     ) -> Result<Option<TrashIntent>, AdapterError> {
+        if self.unreadable_trash_intents.contains(package) {
+            return Err(AdapterError::new("injected unreadable trash intent"));
+        }
         Ok(self.trash_intents.get(package).cloned())
     }
 
@@ -209,7 +217,7 @@ pub(crate) struct MemorySlotStorage {
     trash: BTreeMap<(PackageName, SlotId), (Option<String>, Option<String>)>,
     trash_names_reserved: std::cell::Cell<u64>,
     purge_calls: usize,
-    last_purge_kept: Vec<PackageName>,
+    last_purge_held: Vec<TrashHold>,
     failures: VecDeque<SlotFailure>,
 }
 
@@ -248,8 +256,8 @@ impl MemorySlotStorage {
         self.trash.get(&(package.clone(), slot.clone())).cloned()
     }
 
-    pub(crate) fn last_purge_kept(&self) -> &[PackageName] {
-        &self.last_purge_kept
+    pub(crate) fn last_purge_held(&self) -> &[TrashHold] {
+        &self.last_purge_held
     }
 
     pub(crate) fn pending_trash(
@@ -423,9 +431,9 @@ impl SlotStorage for MemorySlotStorage {
         Ok(())
     }
 
-    fn purge_trash(&mut self, unenrolling: &[PackageName]) -> Result<(), AdapterError> {
+    fn purge_trash(&mut self, held: &[TrashHold]) -> Result<(), AdapterError> {
         self.purge_calls += 1;
-        self.last_purge_kept = unenrolling.to_vec();
+        self.last_purge_held = held.to_vec();
         if self.take_failure(SlotFailure::PurgeTrash) {
             return Err(AdapterError::new("injected trash purge failure"));
         }

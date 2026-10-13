@@ -18,7 +18,7 @@ use crate::links::visit_tree_nofollow;
 use crate::model::{
     AccountIoIntent, AccountIoToken, ArchiveAccountId, ArchiveDomain, PackageAggregate,
     PackageBinding, PackageName, RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging,
-    SeedMode, Slot, SlotId, TransferId, TrashIntent,
+    SeedMode, Slot, SlotId, TransferId, TrashHold, TrashIntent,
 };
 use crate::ports::{AdapterError, PackageStore, SlotStorage};
 use crate::validation;
@@ -563,10 +563,10 @@ impl FileSlotStorage {
     }
 
     /// Purges expired timestamp directories of both domains; the first error is returned.
-    fn purge_trash_at(&self, now: u64, unenrolling: &[PackageName]) -> Result<(), AdapterError> {
+    fn purge_trash_at(&self, now: u64, held: &[TrashHold]) -> Result<(), AdapterError> {
         let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
-        let ce_result = purge_trash_domain(&ce_trash, now, unenrolling, self.owner);
-        let de_result = purge_trash_domain(&de_trash, now, unenrolling, self.owner);
+        let ce_result = purge_trash_domain(&ce_trash, now, held, self.owner);
+        let de_result = purge_trash_domain(&de_trash, now, held, self.owner);
         ce_result.and(de_result)
     }
 
@@ -744,8 +744,8 @@ impl SlotStorage for FileSlotStorage {
         first_error.map_or(Ok(()), Err)
     }
 
-    fn purge_trash(&mut self, unenrolling: &[PackageName]) -> Result<(), AdapterError> {
-        self.purge_trash_at(unix_seconds_now()?, unenrolling)
+    fn purge_trash(&mut self, held: &[TrashHold]) -> Result<(), AdapterError> {
+        self.purge_trash_at(unix_seconds_now()?, held)
     }
 
     fn require_complete_pair(
@@ -2121,7 +2121,8 @@ fn stage_package_in_trash(
 }
 
 /// Renames `<trash>/pending/<package>` to `<trash>/<name>/<package>` if it is still pending, then
-/// verifies that the data is there when `recorded` says the domain had any.
+/// verifies that the data is there when `recorded` says the domain had any and starts its
+/// retention period.
 fn finalize_package_domain(
     trash_root: &Path,
     package: &PackageName,
@@ -2144,12 +2145,34 @@ fn finalize_package_domain(
         sync_directory(&expiring)?;
         sync_directory(&pending_root)?;
     }
-    if recorded && !real_directory(&target)? {
+    if !recorded {
+        return Ok(());
+    }
+    if !real_directory(&target)? {
         return Err(AdapterError::state_conflict(
             "trashed slot data is missing from its trash directory",
         ));
     }
-    Ok(())
+    start_trash_retention(&target)
+}
+
+/// Sets the modification time of the trashed package directory `path` to now and syncs it. The
+/// retention period counts from there, so data finalized by a late retry still gets all of it.
+fn start_trash_retention(path: &Path) -> Result<(), AdapterError> {
+    let directory = rustix::fs::open(
+        path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .map_err(|error| io_error(std::io::Error::from(error)))?;
+    let directory = File::from(directory);
+    directory
+        .set_modified(std::time::SystemTime::now())
+        .map_err(io_error)?;
+    directory.sync_all().map_err(io_error)
 }
 
 /// The Unix timestamp of a `<seconds>` or `<seconds>-<N>` trash directory name.
@@ -2160,13 +2183,13 @@ fn trash_entry_timestamp(name: &str) -> Option<u64> {
     name.split('-').next()?.parse().ok()
 }
 
-/// Deletes, in each `trash/<seconds>[-N]` directory at least [`layout::TRASH_RETENTION`] old,
-/// the children named like packages, then the directory itself once it is empty. `pending` and
-/// every other entry are left alone; nothing here follows a symbolic link.
+/// Deletes, in each `trash/<seconds>[-N]` directory, the children named like packages whose
+/// retention period has passed and that are not `held`, then the directory itself once it is
+/// empty. `pending` and every other entry are left alone; nothing here follows a symbolic link.
 fn purge_trash_domain(
     trash_root: &Path,
     now: u64,
-    unenrolling: &[PackageName],
+    held: &[TrashHold],
     owner: DirectoryOwner,
 ) -> Result<(), AdapterError> {
     if !path_exists_nofollow(trash_root)? {
@@ -2183,20 +2206,23 @@ fn purge_trash_domain(
                 return Ok(());
             }
             // `file_type` describes the entry itself, so a link is never taken for a directory.
-            let timestamp = name.to_str().and_then(trash_entry_timestamp);
-            let Some(created) =
-                timestamp.filter(|_| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            else {
+            let name = name.to_str();
+            let timestamp = name.and_then(trash_entry_timestamp);
+            let (Some(name), Some(created)) = (
+                name,
+                timestamp.filter(|_| entry.file_type().is_ok_and(|kind| kind.is_dir())),
+            ) else {
                 eprintln!(
                     "op=purge_trash path={} step=skip_unexpected_entry",
                     path.display()
                 );
                 return Ok(());
             };
+            // A child's retention never starts before its directory was named.
             if now.saturating_sub(created) < retention {
                 return Ok(());
             }
-            purge_expired_trash_directory(&path, unenrolling)
+            purge_expired_trash_directory(&path, name, now, held)
         });
         if let Err(error) = result
             && first_error.is_none()
@@ -2210,29 +2236,35 @@ fn purge_trash_domain(
     }
 }
 
+/// Purges `trash/<name>`, whose name is past the retention period. Each child is measured
+/// from its own modification time, which finalizing set when its unenroll completed.
 fn purge_expired_trash_directory(
     directory: &Path,
-    unenrolling: &[PackageName],
+    name: &str,
+    now: u64,
+    held: &[TrashHold],
 ) -> Result<(), AdapterError> {
+    let retention = layout::TRASH_RETENTION.as_secs();
     let mut kept = false;
     for entry in fs::read_dir(directory).map_err(io_error)? {
         let entry = entry.map_err(io_error)?;
         let path = entry.path();
-        if !entry
-            .file_name()
+        let file_name = entry.file_name();
+        let Some(package) = file_name
             .to_str()
-            .is_some_and(validation::is_package_name)
-        {
+            .filter(|package| validation::is_package_name(package))
+        else {
             eprintln!(
                 "op=purge_trash path={} step=skip_unexpected_entry",
                 path.display()
             );
             kept = true;
             continue;
-        }
-        if unenrolling
-            .iter()
-            .any(|package| entry.file_name() == package.as_str())
+        };
+        // `metadata` of a directory entry describes the entry itself, never a link target.
+        let finalized = u64::try_from(entry.metadata().map_err(io_error)?.mtime()).unwrap_or(0);
+        if held.iter().any(|hold| hold.holds(name, package))
+            || now.saturating_sub(finalized) < retention
         {
             kept = true;
             continue;

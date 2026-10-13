@@ -141,7 +141,7 @@ ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-kernelsu.sh
 - DE 空间：`/data/misc_de/0/uclone-slices-v2/slots/<package>/<slot>`
 - Runtime socket：`/data/adb/uclone-slices-v2/runtime.sock`
 - 恢复暂存和回滚：CE/DE UClone 根下的 `transfers`、`maintenance`、`rollback`，事务完成或恢复后统一清理。
-- 回收区：取消配置时先把 CE、DE 各自的 `slots/<package>` 在同一文件系统内重命名到 CE/DE UClone 根下的 `trash/pending/<package>`（不会过期）；两个域都移入后，Runtime 选定一个两域都未使用的 `<Unix 秒>[-<序号>]` 名称并先写入 `packages/<package>/trash-intent.json`，再把两域分别重命名为 `trash/<该名称>/<package>`；确认每个原本有数据的域都已到位后才移除登记（连同该记录）。中途中断时，登记保持“取消配置中”，下次加载或开机协调会从已完成的步骤继续，并沿用已记录的名称。超过 7 天的时间戳目录在开机协调和每次成功取消配置后清理：只删除其中以合法包名命名的子项，目录清空后再删除自身；仍在取消配置中的包、`pending`、名称不符合 `<数字>` 或 `<数字>-<数字>` 的条目和非包名子项保持不动，删除不跟随符号链接。
+- 回收区：取消配置时先把 CE、DE 各自的 `slots/<package>` 在同一文件系统内重命名到 CE/DE UClone 根下的 `trash/pending/<package>`（不会过期）；两个域都移入后，Runtime 选定一个两域都未使用的 `<Unix 秒>[-<序号>]` 名称并先写入 `packages/<package>/trash-intent.json`，再把两域分别重命名为 `trash/<该名称>/<package>`；确认每个原本有数据的域都已到位后，把各域 `trash/<该名称>/<package>` 的修改时间设为当前时间（7 天从这一刻起算，迟到的重试也能保留完整 7 天），再移除登记（连同该记录）。中途中断时，登记保持“取消配置中”，下次加载或开机协调会从已完成的步骤继续，并沿用已记录的名称。开机协调和每次成功取消配置后清理回收区：时间戳名称和子项修改时间都超过 7 天的、以合法包名命名的子项被删除，目录清空后再删除自身；进行中的取消配置所记录的那一个条目（读不出记录时为该包的全部条目）、`pending`、名称不符合 `<数字>` 或 `<数字>-<数字>` 的条目和非包名子项保持不动，删除不跟随符号链接。
 
 Runtime 根目录、CE/DE 的 UClone 根、`slots`、`trash`、`trash/pending`、`trash/<时间戳>` 和包名父目录均为 `root:root 0700`；socket 为 `root:root 0600`。slot 本身及其内容继续使用目标 App 的 UID、原 mode 和 MCS 标签。
 
