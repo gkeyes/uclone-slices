@@ -2,9 +2,9 @@ package com.uclone.slices.v2.backup
 
 import android.content.Context
 import com.uclone.slices.v2.BuildConfig
+import com.uclone.slices.v2.runtime.startRootShell
 import java.io.DataOutputStream
 import java.io.File
-import java.io.OutputStream
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
@@ -12,7 +12,7 @@ import kotlinx.coroutines.runInterruptible
 internal class RootArchiveHelper(
     private val context: Context,
     private val processStarter: (String) -> Process = { command ->
-        ProcessBuilder("su", "-c", command).start()
+        startRootShell(command)
     },
 ) {
     suspend fun backup(
@@ -36,9 +36,6 @@ internal class RootArchiveHelper(
             try {
                 if (!installVerifiedHelper()) return@runInterruptible ArchiveHelperResult.TransportFailure
                 val process = processStarter(HELPER_COMMAND)
-                val stderrReader = Thread {
-                    process.errorStream.use { it.copyTo(DiscardOutput) }
-                }.apply(Thread::start)
                 try {
                     DataOutputStream(process.outputStream).use { output ->
                         output.writeInt(control.size)
@@ -59,7 +56,6 @@ internal class RootArchiveHelper(
                         result
                     }
                     val exitCode = process.waitFor()
-                    stderrReader.join()
                     if (response == null || response.length > MAX_RESPONSE_CHARS) {
                         ArchiveHelperResult.TransportFailure
                     } else {
@@ -111,12 +107,8 @@ internal class RootArchiveHelper(
         }
         val process = processStarter(command)
         process.outputStream.close()
-        val stderrReader = Thread {
-            process.errorStream.use { it.copyTo(DiscardOutput) }
-        }.apply(Thread::start)
         val output = process.inputStream.bufferedReader().use { it.readLine().orEmpty() }
         val exitCode = process.waitFor()
-        stderrReader.join()
         return exitCode == 0 && output.substringBefore(' ') == expected
     }
 
@@ -145,8 +137,4 @@ internal class RootArchiveHelper(
         const val HELPER_PATH = "$HELPER_DIRECTORY/uclone_archive"
         const val HELPER_COMMAND = "exec /system/bin/nsenter -t 1 -m -- $HELPER_PATH"
     }
-}
-
-private object DiscardOutput : OutputStream() {
-    override fun write(value: Int) = Unit
 }
