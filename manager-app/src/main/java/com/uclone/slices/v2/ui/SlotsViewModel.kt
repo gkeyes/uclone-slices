@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicLong
 
 enum class ManagerDestination {
     Spaces,
@@ -142,6 +143,13 @@ data class UnenrollAppUi(
     val confirmed: Boolean = false,
 )
 
+/**
+ * A notice as shown at the top of the screen. Every post gets a new [id], so the same notice raised
+ * twice (for example a retry that fails again) is shown and timed again instead of being treated
+ * as unchanged state.
+ */
+data class PostedNotice(val id: Long, val notice: UiNotice)
+
 data class SlotsUiState(
     val destination: ManagerDestination = ManagerDestination.Spaces,
     val backupReturnDestination: ManagerDestination = ManagerDestination.Spaces,
@@ -157,7 +165,7 @@ data class SlotsUiState(
     val selected: PackageSnapshot? = null,
     val seed: SeedMode = SeedMode.Blank,
     val operation: OperationUiState = OperationUiState.Idle,
-    val notice: UiNotice? = null,
+    val posted: PostedNotice? = null,
     val pendingConfigurationPackage: String? = null,
     val registrationRecovery: RegistrationRecoveryUi? = null,
     val pendingRename: RenameSpaceUi? = null,
@@ -165,6 +173,8 @@ data class SlotsUiState(
     val pendingUnenroll: UnenrollAppUi? = null,
     val runtimeLog: String? = null,
 ) {
+    val notice: UiNotice?
+        get() = posted?.notice
     val busy: Boolean
         get() = operation !is OperationUiState.Idle
     val operationsAllowed: Boolean
@@ -207,7 +217,7 @@ sealed interface UiIntent {
     data class UnenrollConfirmationChanged(val confirmed: Boolean) : UiIntent
     data object ConfirmUnenrollApp : UiIntent
     data object DismissUnenrollApp : UiIntent
-    data object DismissNotice : UiIntent
+    data class DismissNotice(val id: Long) : UiIntent
     data object DismissRegistrationRecovery : UiIntent
     data class RegistrationRecoveryConfirmationChanged(val value: String) : UiIntent
     data object ConfirmRegistrationRecovery : UiIntent
@@ -226,6 +236,7 @@ internal class SlotsViewModel(
             configuredAccountsExpanded = uiPreferences.configuredAccountsExpanded,
         ),
     )
+    private val noticeIds = AtomicLong()
     private val operationLock = Any()
     private var operationActive = false
     val state: StateFlow<SlotsUiState> = mutableState.asStateFlow()
@@ -251,11 +262,12 @@ internal class SlotsViewModel(
                 val current = state.value
                 mutableState.update {
                     it.copy(
-                        notice = when {
+                        posted = when {
                             current.runtimeReady && current.runtimeCompatible ->
-                                UiNotice.RuntimeRestarted
-                            !restarted || !current.runtimeReady -> UiNotice.RuntimeRestartFailed
-                            else -> it.notice
+                                post(UiNotice.RuntimeRestarted)
+                            !restarted || !current.runtimeReady ->
+                                post(UiNotice.RuntimeRestartFailed)
+                            else -> it.posted
                         },
                         runtimeLog = null,
                     )
@@ -273,7 +285,6 @@ internal class SlotsViewModel(
                         it.copy(
                             backupReturnDestination = it.destination,
                             destination = ManagerDestination.BackupRestore,
-                            notice = null,
                         )
                     }
                 }
@@ -311,14 +322,17 @@ internal class SlotsViewModel(
             is UiIntent.UnenrollConfirmationChanged -> mutableState.update {
                 it.copy(
                     pendingUnenroll = it.pendingUnenroll?.copy(confirmed = intent.confirmed),
-                    notice = null,
                 )
             }
             UiIntent.ConfirmUnenrollApp -> confirmUnenrollApp()
             UiIntent.DismissUnenrollApp -> mutableState.update {
                 it.copy(pendingUnenroll = null)
             }
-            UiIntent.DismissNotice -> mutableState.update { it.copy(notice = null) }
+            is UiIntent.DismissNotice -> mutableState.update {
+                // Only the notice that timed out or was swiped away is cleared, never a newer one
+                // that replaced it in the meantime.
+                if (it.posted?.id == intent.id) it.copy(posted = null) else it
+            }
             UiIntent.DismissRegistrationRecovery -> mutableState.update {
                 it.copy(registrationRecovery = null)
             }
@@ -333,13 +347,15 @@ internal class SlotsViewModel(
         }
     }
 
+    private fun post(notice: UiNotice) = PostedNotice(noticeIds.incrementAndGet(), notice)
+
     override fun onCleared() {
         scope.cancel()
     }
 
     private fun navigateTo(destination: ManagerDestination) {
         if (state.value.busy) return
-        mutableState.update { it.copy(destination = destination, notice = null) }
+        mutableState.update { it.copy(destination = destination) }
     }
 
     private fun openAddApps() {
@@ -352,7 +368,7 @@ internal class SlotsViewModel(
     }
 
     private fun loadAppCatalog() {
-        mutableState.update { it.copy(appCatalogLoading = true, notice = null) }
+        mutableState.update { it.copy(appCatalogLoading = true) }
         scope.launch {
             val result = runCatching { installedApps.loadCatalogOptimized() }
             if (result.isFailure) {
@@ -360,7 +376,7 @@ internal class SlotsViewModel(
                     it.copy(
                         appCatalogLoading = false,
                         appCatalogLoaded = false,
-                        notice = UiNotice.LocalAppsUnavailable,
+                        posted = post(UiNotice.LocalAppsUnavailable),
                     )
                 }
                 return@launch
@@ -397,19 +413,19 @@ internal class SlotsViewModel(
         if (snapshot.busy) return
         if (signingFor(packageName) != null) {
             mutableState.update {
-                it.copy(pendingConfigurationPackage = packageName, notice = null)
+                it.copy(pendingConfigurationPackage = packageName)
             }
             return
         }
         runOperation(OperationUiState.PreparingConfiguration(packageName)) {
             val result = runCatching { installedApps.loadAppOptimized(packageName) }
             if (result.isFailure) {
-                mutableState.update { it.copy(notice = UiNotice.LocalAppsUnavailable) }
+                mutableState.update { it.copy(posted = post(UiNotice.LocalAppsUnavailable)) }
                 return@runOperation
             }
             val app = result.getOrNull()
             if (app?.signingIdentity == null) {
-                mutableState.update { it.copy(notice = UiNotice.SigningUnavailable) }
+                mutableState.update { it.copy(posted = post(UiNotice.SigningUnavailable)) }
                 return@runOperation
             }
             mutableState.update { current ->
@@ -418,7 +434,6 @@ internal class SlotsViewModel(
                         current.installedApps.filterNot { it.packageName == packageName } + app
                         ).sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label }),
                     pendingConfigurationPackage = packageName,
-                    notice = null,
                 )
             }
         }
@@ -431,16 +446,14 @@ internal class SlotsViewModel(
                 ManagerDestination.Spaces -> current
                 ManagerDestination.AddApp,
                 ManagerDestination.RuntimeStatus,
-                -> current.copy(destination = ManagerDestination.Spaces, notice = null)
+                -> current.copy(destination = ManagerDestination.Spaces)
                 ManagerDestination.BackupRestore -> current.copy(
                     destination = current.backupReturnDestination,
-                    notice = null,
                 )
                 ManagerDestination.PackageDetails -> current.copy(
                     destination = ManagerDestination.Spaces,
                     selected = null,
                     seed = SeedMode.Blank,
-                    notice = null,
                     registrationRecovery = null,
                     pendingRename = null,
                     pendingDelete = null,
@@ -452,17 +465,17 @@ internal class SlotsViewModel(
     private fun openPackage(packageName: String) {
         val snapshot = state.value
         if (!snapshot.runtimeReady) {
-            mutableState.update { it.copy(notice = UiNotice.RuntimeUnavailable) }
+            mutableState.update { it.copy(posted = post(UiNotice.RuntimeUnavailable)) }
             return
         }
         val configured = snapshot.packages.firstOrNull { it.packageName == packageName }
         if (configured == null) {
             if (!snapshot.runtimeCompatible) {
-                mutableState.update { it.copy(notice = UiNotice.RuntimeVersionMismatch) }
+                mutableState.update { it.copy(posted = post(UiNotice.RuntimeVersionMismatch)) }
                 return
             }
             mutableState.update {
-                it.copy(pendingConfigurationPackage = packageName, notice = null)
+                it.copy(pendingConfigurationPackage = packageName)
             }
             return
         }
@@ -471,7 +484,7 @@ internal class SlotsViewModel(
                 it.copy(
                     selected = configured,
                     destination = ManagerDestination.PackageDetails,
-                    notice = UiNotice.RuntimeVersionMismatch,
+                    posted = post(UiNotice.RuntimeVersionMismatch),
                 )
             }
             return
@@ -481,7 +494,7 @@ internal class SlotsViewModel(
             return
         }
         if (configured.bindingState != BindingState.Ready) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         if (snapshot.busy) return
@@ -492,7 +505,6 @@ internal class SlotsViewModel(
                 selected = configured,
                 destination = ManagerDestination.PackageDetails,
                 seed = SeedMode.Blank,
-                notice = null,
             )
         }
         runOperation(OperationUiState.OpeningPackage(packageName)) {
@@ -511,7 +523,7 @@ internal class SlotsViewModel(
         }
         val packageName = snapshot.pendingConfigurationPackage ?: return
         val signing = signingFor(packageName) ?: run {
-            mutableState.update { it.copy(notice = UiNotice.SigningUnavailable) }
+            mutableState.update { it.copy(posted = post(UiNotice.SigningUnavailable)) }
             return
         }
         runOperation(OperationUiState.Configuring(packageName)) {
@@ -531,12 +543,12 @@ internal class SlotsViewModel(
         val selected = snapshot.selected ?: return
         val packageName = selected.packageName
         if (selected.bindingState != BindingState.Ready) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         val name = rawName.trim()
         if (name.isEmpty()) {
-            mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
+            mutableState.update { it.copy(posted = post(UiNotice.InvalidInput)) }
             return
         }
         val seed = snapshot.seed
@@ -556,7 +568,7 @@ internal class SlotsViewModel(
         }
         val selected = snapshot.selected ?: return
         if (selected.bindingState != BindingState.Ready) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         val targetName = selected.slots
@@ -586,11 +598,11 @@ internal class SlotsViewModel(
         }
         val target = packageSnapshot?.slots?.firstOrNull { it.id == slotId }
         if (packageSnapshot == null || target == null) {
-            mutableState.update { it.copy(notice = UiNotice.MissingEntity) }
+            mutableState.update { it.copy(posted = post(UiNotice.MissingEntity)) }
             return
         }
         if (packageSnapshot.bindingState != BindingState.Ready) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         val targetName = spaceDisplayName(target)
@@ -616,11 +628,11 @@ internal class SlotsViewModel(
             it.packageName == packageName
         }
         if (packageSnapshot == null) {
-            mutableState.update { it.copy(notice = UiNotice.MissingEntity) }
+            mutableState.update { it.copy(posted = post(UiNotice.MissingEntity)) }
             return
         }
         if (packageSnapshot.bindingState != BindingState.Ready) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         runOperation(OperationUiState.SavingRebootLaunch(packageName)) {
@@ -640,7 +652,7 @@ internal class SlotsViewModel(
         if (snapshot.busy || slotId == BASE_SLOT_ID) return
         val selected = snapshot.selected ?: return
         if (selected.bindingState != BindingState.Ready) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         val slot = selected.slots.firstOrNull { it.id == slotId } ?: return
@@ -652,7 +664,6 @@ internal class SlotsViewModel(
                     originalName = slot.name,
                 ),
                 pendingDelete = null,
-                notice = null,
             )
         }
     }
@@ -668,12 +679,12 @@ internal class SlotsViewModel(
                 it.packageName == pending.packageName && it.bindingState == BindingState.Ready
             }
         ) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         val name = pending.name.trim()
         if (name.isEmpty() || name == pending.originalName) {
-            mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
+            mutableState.update { it.copy(posted = post(UiNotice.InvalidInput)) }
             return
         }
         val packageName = pending.packageName
@@ -695,7 +706,7 @@ internal class SlotsViewModel(
         if (snapshot.busy || slotId == BASE_SLOT_ID) return
         val selected = snapshot.selected ?: return
         if (selected.bindingState != BindingState.Ready) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         if (slotId == selected.activeSlot) return
@@ -708,7 +719,6 @@ internal class SlotsViewModel(
                     name = slot.name,
                 ),
                 pendingRename = null,
-                notice = null,
             )
         }
     }
@@ -724,7 +734,7 @@ internal class SlotsViewModel(
                 it.packageName == pending.packageName && it.bindingState == BindingState.Ready
             }
         ) {
-            mutableState.update { it.copy(notice = UiNotice.IdentityProtected) }
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
             return
         }
         val packageName = pending.packageName
@@ -764,7 +774,6 @@ internal class SlotsViewModel(
                 pendingConfigurationPackage = null,
                 pendingRename = null,
                 pendingDelete = null,
-                notice = null,
             )
         }
     }
@@ -777,7 +786,7 @@ internal class SlotsViewModel(
         }
         val pending = snapshot.pendingUnenroll ?: return
         if (!pending.confirmed) {
-            mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
+            mutableState.update { it.copy(posted = post(UiNotice.InvalidInput)) }
             return
         }
         val packageName = pending.packageName
@@ -799,12 +808,12 @@ internal class SlotsViewModel(
         }
         val recovery = snapshot.registrationRecovery ?: return
         if (recovery.confirmation != BINDING_CONFIRMATION) {
-            mutableState.update { it.copy(notice = UiNotice.InvalidInput) }
+            mutableState.update { it.copy(posted = post(UiNotice.InvalidInput)) }
             return
         }
         val packageName = recovery.packageName
         val signing = signingFor(packageName) ?: run {
-            mutableState.update { it.copy(notice = UiNotice.SigningUnavailable) }
+            mutableState.update { it.copy(posted = post(UiNotice.SigningUnavailable)) }
             return
         }
         runOperation(OperationUiState.RebindingConfiguration(packageName)) {
@@ -825,7 +834,7 @@ internal class SlotsViewModel(
             mutableState.update {
                 it.copy(
                     operation = operationState,
-                    notice = null,
+                    posted = null,
                     pendingConfigurationPackage = if (
                         operationState is OperationUiState.Configuring
                     ) {
@@ -897,10 +906,10 @@ internal class SlotsViewModel(
                         } else {
                             ManagerDestination.Spaces
                         },
-                        notice = if (compatible) {
-                            it.notice
+                        posted = if (compatible) {
+                            it.posted
                         } else {
-                            UiNotice.RuntimeVersionMismatch
+                            post(UiNotice.RuntimeVersionMismatch)
                         },
                     )
                 }
@@ -942,10 +951,10 @@ internal class SlotsViewModel(
                 mutableState.update { current ->
                     current.copy(
                         installedApps = visibleApps,
-                        notice = if (localResult.isFailure) {
-                            UiNotice.LocalAppsUnavailable
+                        posted = if (localResult.isFailure) {
+                            post(UiNotice.LocalAppsUnavailable)
                         } else {
-                            current.notice
+                            current.posted
                         },
                     )
                 }
@@ -1006,7 +1015,7 @@ internal class SlotsViewModel(
         }
         val signing = signingFor(snapshot.packageName)
         if (signing == null) {
-            mutableState.update { it.copy(notice = UiNotice.SigningUnavailable) }
+            mutableState.update { it.copy(posted = post(UiNotice.SigningUnavailable)) }
             return@map snapshot
         }
         when (
@@ -1040,7 +1049,6 @@ internal class SlotsViewModel(
                         .map(::spaceDisplayName),
                 ),
                 pendingConfigurationPackage = null,
-                notice = null,
             )
         }
     }
@@ -1052,11 +1060,13 @@ internal class SlotsViewModel(
     private fun showUnavailableOrMismatch() {
         mutableState.update {
             it.copy(
-                notice = if (it.runtimeReady) {
-                    UiNotice.RuntimeVersionMismatch
-                } else {
-                    UiNotice.RuntimeUnavailable
-                },
+                posted = post(
+                    if (it.runtimeReady) {
+                        UiNotice.RuntimeVersionMismatch
+                    } else {
+                        UiNotice.RuntimeUnavailable
+                    },
+                ),
             )
         }
     }
@@ -1083,7 +1093,7 @@ internal class SlotsViewModel(
                     } else {
                         SeedMode.Blank
                     },
-                    notice = successNotice,
+                    posted = successNotice?.let(::post),
                     registrationRecovery = null,
                     pendingRename = null,
                     pendingDelete = null,
@@ -1122,7 +1132,7 @@ internal class SlotsViewModel(
                     } else {
                         current.selected
                     },
-                    notice = successNotice,
+                    posted = successNotice?.let(::post),
                     registrationRecovery = null,
                 )
             }
@@ -1160,7 +1170,7 @@ internal class SlotsViewModel(
                     } else {
                         current.destination
                     },
-                    notice = UiNotice.AppUnenrolled(appLabel),
+                    posted = post(UiNotice.AppUnenrolled(appLabel)),
                     registrationRecovery = null,
                     pendingUnenroll = null,
                 )
@@ -1193,7 +1203,7 @@ internal class SlotsViewModel(
             ErrorCode.BackupIncompatible,
             -> UiNotice.OperationFailed
         }
-        mutableState.update { it.copy(notice = notice) }
+        mutableState.update { it.copy(posted = post(notice)) }
     }
 
     private fun showTransportFailure() {
@@ -1201,7 +1211,7 @@ internal class SlotsViewModel(
             it.copy(
                 runtimeReady = false,
                 runtimeCompatible = false,
-                notice = UiNotice.RuntimeUnavailable,
+                posted = post(UiNotice.RuntimeUnavailable),
                 pendingRename = null,
                 pendingDelete = null,
                 pendingUnenroll = null,
