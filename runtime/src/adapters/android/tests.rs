@@ -1355,3 +1355,24 @@ fn lazy_detach_that_makes_no_progress_still_fails() {
         ]
     );
 }
+
+#[test]
+fn force_stop_policy_table_keeps_the_wechat_fast_restart_parameters() {
+    let wechat = PackageName::new("com.tencent.mm").unwrap();
+    assert_eq!(
+        force_stop_policy(&wechat),
+        Some(&ForceStopPolicy {
+            label: "WeChat FastRestart",
+            force_stop_limit: 5,
+            confirmation_window: Duration::from_secs(2),
+            quiet_window: Duration::from_millis(500),
+        })
+    );
+    for package in [
+        "com.example.app",
+        "com.tencent.mm.plugin",
+        "com.tencent.mmx",
+    ] {
+        assert_eq!(force_stop_policy(&PackageName::new(package).unwrap()), None);
+    }
+}

@@ -11,8 +11,10 @@ use crate::usecases::{Runtime, RuntimeError};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
-    Probe,
-    ListPackages,
+    // Field-less ops are empty struct variants rather than unit variants: serde ignores
+    // extra fields on internally tagged unit variants even with `deny_unknown_fields`.
+    Probe {},
+    ListPackages {},
     GetPackage {
         package: PackageName,
     },
@@ -75,7 +77,7 @@ pub enum Command {
     AbortAccountIo {
         io_token: AccountIoToken,
     },
-    ListAccountIoStatus,
+    ListAccountIoStatus {},
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,70 +162,32 @@ where
     }
 }
 
+/// Decodes one request line.
+///
+/// The wire format is flat: `client_build_id` sits next to `op` and the command fields
+/// (shipped Manager builds send it that way, and every op except `probe` must carry it).
+/// It is taken out first, checked, and the rest is left to serde, whose
+/// `deny_unknown_fields` on [`Command`] rejects any field an op does not consume.
 fn decode_command(line: &str, expected_build_id: &str) -> Result<Command, DecodeError> {
     let mut value = serde_json::from_str::<serde_json::Value>(line)
         .map_err(|_error| DecodeError::InvalidRequest)?;
     let object = value.as_object_mut().ok_or(DecodeError::InvalidRequest)?;
-    let operation = object
-        .get("op")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .ok_or(DecodeError::InvalidRequest)?;
-    let allowed = match operation.as_str() {
-        "probe" => &["op"][..],
-        "list_packages" => &["op", "client_build_id"][..],
-        "get_package" => &["op", "package", "client_build_id"][..],
-        "enroll" => &["op", "package", "signing", "client_build_id"][..],
-        "rebind_package" => &[
-            "op",
-            "package",
-            "signing",
-            "trust_legacy",
-            "client_build_id",
-        ][..],
-        "unenroll" => &["op", "package", "client_build_id"][..],
-        "set_launch_after_reboot" => &["op", "package", "enabled", "client_build_id"][..],
-        "create_slot" => &["op", "package", "name", "seed", "client_build_id"][..],
-        "activate_slot" => &["op", "package", "slot", "client_build_id"][..],
-        "rename_slot" => &["op", "package", "slot", "name", "client_build_id"][..],
-        "delete_slot" => &["op", "package", "slot", "client_build_id"][..],
-        "begin_backup_io" => &["op", "package", "scope", "client_build_id"][..],
-        "finish_backup_io" => &["op", "io_token", "client_build_id"][..],
-        "begin_restore_io" => &[
-            "op",
-            "package",
-            "transfer_id",
-            "mappings",
-            "archived_state",
-            "client_build_id",
-        ][..],
-        "commit_restore_account" => {
-            &["op", "io_token", "archive_account_id", "client_build_id"][..]
-        }
-        "finish_restore_io" | "abort_account_io" => &["op", "io_token", "client_build_id"][..],
-        "list_account_io_status" => &["op", "client_build_id"][..],
-        _ => return Err(DecodeError::InvalidRequest),
+    let is_probe = match object.get("op").and_then(serde_json::Value::as_str) {
+        Some(operation) => operation == "probe",
+        None => return Err(DecodeError::InvalidRequest),
     };
-    if !object.keys().all(|key| allowed.contains(&key.as_str())) {
-        return Err(DecodeError::InvalidRequest);
+    let client_build_id = object.remove("client_build_id");
+    match (is_probe, client_build_id) {
+        // `probe` predates the build handshake and keeps its legacy shape.
+        (true, None) => {}
+        (true, Some(_)) => return Err(DecodeError::InvalidRequest),
+        (false, None) => return Err(DecodeError::MissingClientBuildId),
+        (false, Some(client_build_id)) => match client_build_id.as_str() {
+            Some(client_build_id) if client_build_id == expected_build_id => {}
+            Some(_) => return Err(DecodeError::ClientBuildMismatch),
+            None => return Err(DecodeError::MissingClientBuildId),
+        },
     }
-    if operation != "probe" {
-        let client_build_id = object
-            .get("client_build_id")
-            .and_then(serde_json::Value::as_str)
-            .ok_or(DecodeError::MissingClientBuildId)?;
-        if client_build_id != expected_build_id {
-            return Err(DecodeError::ClientBuildMismatch);
-        }
-    }
-    if operation == "rebind_package"
-        && object
-            .get("trust_legacy")
-            .is_some_and(|trust| !trust.is_boolean())
-    {
-        return Err(DecodeError::InvalidRequest);
-    }
-    object.remove("client_build_id");
     serde_json::from_value(value).map_err(|_error| DecodeError::InvalidRequest)
 }
 
@@ -234,8 +198,8 @@ where
     A: AndroidOps,
 {
     let result = match command {
-        Command::Probe => runtime.probe().map(SuccessPayload::Capabilities),
-        Command::ListPackages => runtime
+        Command::Probe {} => runtime.probe().map(SuccessPayload::Capabilities),
+        Command::ListPackages {} => runtime
             .list_packages()
             .map(|packages| SuccessPayload::PackageList { packages }),
         Command::GetPackage { package } => runtime
@@ -303,7 +267,7 @@ where
         Command::AbortAccountIo { io_token } => runtime
             .abort_account_io(&io_token)
             .map(|()| SuccessPayload::Empty {}),
-        Command::ListAccountIoStatus => runtime
+        Command::ListAccountIoStatus {} => runtime
             .list_account_io_status()
             .map(|account_io| SuccessPayload::AccountIoList { account_io }),
     };

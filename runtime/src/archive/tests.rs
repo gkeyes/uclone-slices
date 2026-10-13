@@ -585,3 +585,119 @@ fn deep_app_trees_are_scanned_without_recursion() {
     assert_eq!(scan.excluded.entries, (DEPTH + 2) as u64);
     assert_eq!(scan.excluded.logical_size, 4);
 }
+
+/// Rewrites the tar body of a plain archive: `edit` gets each data entry (path, header, data)
+/// in order and returns the entries to write in its place.
+fn rewrite_plain_archive(
+    path: &Path,
+    mut edit: impl FnMut(String, tar::Header, Vec<u8>) -> Vec<(tar::Header, Vec<u8>)>,
+) {
+    let bytes = fs::read(path).unwrap();
+    assert_eq!(&bytes[..MAGIC.len()], MAGIC);
+    assert_eq!(bytes[MAGIC.len()], 0);
+    let body = zstd::stream::decode_all(&bytes[MAGIC.len() + 1..]).unwrap();
+    let mut archive = tar::Archive::new(body.as_slice());
+    let mut builder = tar::Builder::new(Vec::new());
+    for (index, entry) in archive.entries().unwrap().enumerate() {
+        let mut entry = entry.unwrap();
+        let entry_path = entry.path().unwrap().to_string_lossy().into_owned();
+        let header = entry.header().clone();
+        let mut data = Vec::new();
+        entry.read_to_end(&mut data).unwrap();
+        let replacements = if index == 0 {
+            vec![(header, data)]
+        } else {
+            edit(entry_path, header, data)
+        };
+        for (header, data) in replacements {
+            builder.append(&header, data.as_slice()).unwrap();
+        }
+    }
+    let tar = builder.into_inner().unwrap();
+    let mut output = MAGIC.to_vec();
+    output.push(0);
+    output.extend(zstd::stream::encode_all(tar.as_slice(), 0).unwrap());
+    fs::write(path, output).unwrap();
+}
+
+/// Restores a plain archive into a new, empty `restore-<label>` staging pair.
+fn restore_plain_into_fresh_staging(
+    root: &Path,
+    label: &str,
+    input: PathBuf,
+) -> Result<(), ArchiveError> {
+    let ce = root.join(format!("restore-{label}/ce"));
+    let de = root.join(format!("restore-{label}/de"));
+    fs::create_dir_all(&ce).unwrap();
+    fs::create_dir_all(&de).unwrap();
+    restore_backup(RestoreRequest {
+        input_path: input,
+        password: None,
+        destinations: vec![RestoreDestination {
+            archive_account_id: "account-0".to_owned(),
+            ce_path: ce,
+            de_path: de,
+        }],
+    })
+    .map(|_manifest| ())
+}
+
+#[test]
+fn restore_requires_each_manifest_entry_exactly_once() {
+    const LINK: &str = "accounts/account-0/ce/files/account-link";
+    let root = tempfile::tempdir().unwrap();
+    let request = request(root.path(), false);
+    let original = request.output_path.clone();
+    create_backup(request).unwrap();
+    restore_plain_into_fresh_staging(root.path(), "original", original.clone()).unwrap();
+
+    let duplicated = root.path().join("duplicated.ucsbackup");
+    fs::copy(&original, &duplicated).unwrap();
+    rewrite_plain_archive(&duplicated, |path, header, data| {
+        if path == LINK {
+            vec![(header.clone(), data.clone()), (header, data)]
+        } else {
+            vec![(header, data)]
+        }
+    });
+    assert!(matches!(
+        restore_plain_into_fresh_staging(root.path(), "duplicated", duplicated),
+        Err(ArchiveError::Invalid)
+    ));
+
+    let missing = root.path().join("missing.ucsbackup");
+    fs::copy(&original, &missing).unwrap();
+    let mut dropped = false;
+    rewrite_plain_archive(&missing, |path, header, data| {
+        if path == LINK {
+            dropped = true;
+            Vec::new()
+        } else {
+            vec![(header, data)]
+        }
+    });
+    assert!(dropped);
+    assert!(matches!(
+        restore_plain_into_fresh_staging(root.path(), "missing", missing),
+        Err(ArchiveError::Invalid)
+    ));
+
+    let undeclared = root.path().join("undeclared.ucsbackup");
+    fs::copy(&original, &undeclared).unwrap();
+    rewrite_plain_archive(&undeclared, |path, header, data| {
+        let mut entries = vec![(header.clone(), data)];
+        if path == LINK {
+            let mut extra = header;
+            extra
+                .set_path("accounts/account-0/ce/files/undeclared-link")
+                .unwrap();
+            extra.set_cksum();
+            entries.push((extra, Vec::new()));
+        }
+        entries
+    });
+    assert!(matches!(
+        restore_plain_into_fresh_staging(root.path(), "undeclared", undeclared),
+        Err(ArchiveError::Invalid)
+    ));
+}

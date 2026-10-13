@@ -346,3 +346,100 @@ fn shared_restore_fixture_round_trips_through_the_merged_types() {
         request["archived_state"]
     );
 }
+
+fn request_fixtures() -> Vec<(String, serde_json::Map<String, serde_json::Value>)> {
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../protocol/fixtures");
+    let mut fixtures = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.ends_with(".request.json") && name != "enroll_reset.request.json")
+        .map(|name| {
+            let value: serde_json::Value = serde_json::from_str(&fixture(name.clone())).unwrap();
+            (name, value.as_object().unwrap().clone())
+        })
+        .collect::<Vec<_>>();
+    fixtures.sort_by(|left, right| left.0.cmp(&right.0));
+    fixtures
+}
+
+fn decode(object: &serde_json::Map<String, serde_json::Value>) -> Result<Command, DecodeError> {
+    decode_command(
+        &serde_json::Value::Object(object.clone()).to_string(),
+        CLIENT_BUILD_ID,
+    )
+}
+
+#[test]
+fn every_shared_request_fixture_decodes_with_its_flat_client_build_id() {
+    let fixtures = request_fixtures();
+    assert_eq!(fixtures.len(), 18);
+    for (name, object) in fixtures {
+        assert!(decode(&object).is_ok(), "fixture: {name}");
+    }
+}
+
+#[test]
+fn every_op_rejects_a_field_it_does_not_consume() {
+    for (name, mut object) in request_fixtures() {
+        object.insert("future".to_owned(), serde_json::Value::Bool(true));
+        assert_eq!(
+            decode(&object),
+            Err(DecodeError::InvalidRequest),
+            "fixture: {name}"
+        );
+    }
+}
+
+#[test]
+fn client_build_id_is_required_exactly_on_every_op_but_probe() {
+    for (name, mut object) in request_fixtures() {
+        let is_probe = object["op"] == "probe";
+        if is_probe {
+            object.insert("client_build_id".to_owned(), CLIENT_BUILD_ID.into());
+            assert_eq!(
+                decode(&object),
+                Err(DecodeError::InvalidRequest),
+                "fixture: {name}"
+            );
+            continue;
+        }
+        object.remove("client_build_id");
+        assert_eq!(
+            decode(&object),
+            Err(DecodeError::MissingClientBuildId),
+            "fixture: {name}"
+        );
+        object.insert("client_build_id".to_owned(), serde_json::Value::from(23));
+        assert_eq!(
+            decode(&object),
+            Err(DecodeError::MissingClientBuildId),
+            "fixture: {name}"
+        );
+        object.insert("client_build_id".to_owned(), "0.0.1".into());
+        assert_eq!(
+            decode(&object),
+            Err(DecodeError::ClientBuildMismatch),
+            "fixture: {name}"
+        );
+    }
+}
+
+#[test]
+fn malformed_frames_and_unknown_ops_are_invalid_requests() {
+    for line in [
+        "",
+        "[]",
+        r#""probe""#,
+        r#"{"client_build_id":"0.2.3"}"#,
+        r#"{"op":7,"client_build_id":"0.2.3"}"#,
+        r#"{"op":"format_device","client_build_id":"0.2.3"}"#,
+        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},"trust_legacy":null,"client_build_id":"0.2.3"}"#,
+        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},"trust_legacy":"true","client_build_id":"0.2.3"}"#,
+    ] {
+        assert_eq!(
+            decode_command(line, CLIENT_BUILD_ID),
+            Err(DecodeError::InvalidRequest),
+            "request: {line}"
+        );
+    }
+}

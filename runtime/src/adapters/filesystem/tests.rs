@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use super::fault_injection::{fail_next_copy, fail_next_rename_into};
 use super::*;
 use crate::model::{
     DisplayName, PackageAggregate, PackageIdentity, RestorePath, TrashHold, TrashIntent,
@@ -1601,4 +1602,66 @@ fn trash_intent_round_trips_and_is_removed_with_the_package() {
 
     store.remove(&package).unwrap();
     assert_eq!(store.load_trash_intent(&package).unwrap(), None);
+}
+
+fn command_line(program: &'static str, arguments: &[&str]) -> CommandLine {
+    CommandLine {
+        program,
+        arguments: arguments.iter().map(Into::into).collect(),
+    }
+}
+
+#[test]
+fn android_tree_copy_copies_directory_contents_with_cp_archive_mode() {
+    assert_eq!(
+        copy_tree_command(
+            Path::new("/data/user/0/com.example"),
+            Path::new("/data/misc_ce/0/uclone-slices-v2/slots/com.example/slot-1"),
+        ),
+        command_line(
+            "/system/bin/cp",
+            &[
+                "-a",
+                "--",
+                "/data/user/0/com.example/.",
+                "/data/misc_ce/0/uclone-slices-v2/slots/com.example/slot-1",
+            ],
+        )
+    );
+}
+
+#[test]
+fn android_filtered_copy_copies_the_entry_itself_after_end_of_options() {
+    // `--` keeps an app-controlled file name that starts with `-` from being read as an option.
+    assert_eq!(
+        copy_path_command(
+            Path::new("/data/user/0/com.example/-rf"),
+            Path::new("/staging/ce/-rf"),
+        ),
+        command_line(
+            "/system/bin/cp",
+            &[
+                "-a",
+                "--",
+                "/data/user/0/com.example/-rf",
+                "/staging/ce/-rf"
+            ],
+        )
+    );
+}
+
+#[test]
+fn android_copy_commands_pass_non_utf8_paths_through_unchanged() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let source = Path::new(OsStr::from_bytes(b"/data/user/0/app/\xff"));
+    let target = Path::new("/target");
+    let command = copy_tree_command(source, target);
+    assert_eq!(
+        command.arguments[2].as_bytes(),
+        b"/data/user/0/app/\xff/.".as_slice()
+    );
+    let command = copy_path_command(source, target);
+    assert_eq!(command.arguments[2].as_os_str(), source.as_os_str());
 }
