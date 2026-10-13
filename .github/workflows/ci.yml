@@ -59,7 +59,7 @@ jobs:
           packages: ''
 
       - name: Install Android platform
-        run: sdkmanager --install "platforms;android-37" "build-tools;37.0.0" "ndk;$NDK_VERSION"
+        run: sdkmanager --install "platforms;android-37.0" "build-tools;37.0.0" "ndk;$NDK_VERSION"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
