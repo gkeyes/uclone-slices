@@ -16,10 +16,6 @@ import com.uclone.slices.v2.runtime.SeedMode
 import com.uclone.slices.v2.runtime.SigningIdentity
 import com.uclone.slices.v2.runtime.SigningKind
 import com.uclone.slices.v2.runtime.SlotSnapshot
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -28,6 +24,10 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
 class SlotsViewModelTest {
     private val appSource = InstalledAppsSource {
