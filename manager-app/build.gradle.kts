@@ -70,7 +70,7 @@ android {
         targetSdk = 36
         versionCode = 15
         versionName = "0.2.4"
-        buildConfigField("String", "RUNTIME_PROTOCOL_BUILD_ID", "\"0.2.2\"")
+        buildConfigField("String", "RUNTIME_PROTOCOL_BUILD_ID", "\"0.2.3\"")
         buildConfigField("String", "ARCHIVE_HELPER_SHA256", "\"$archiveHelperChecksum\"")
     }
 

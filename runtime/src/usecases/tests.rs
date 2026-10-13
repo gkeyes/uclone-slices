@@ -1516,6 +1516,11 @@ fn partial_unenroll_storage_cleanup_recovers_both_domains() {
         );
         let (packages, slots, android) = runtime.into_parts();
         assert_eq!(slots.domain_state(&package, &target), Some(remaining));
+        assert_eq!(
+            slots.pending_trash(&package, &target),
+            Some((!remaining.0, !remaining.1))
+        );
+        assert_eq!(slots.trashed(&package, &target), None);
         assert!(packages.load(&package).unwrap().unwrap().is_unenrolling());
 
         let mut runtime = Runtime::new(packages, slots, android);
@@ -1523,6 +1528,7 @@ fn partial_unenroll_storage_cleanup_recovers_both_domains() {
         let (packages, slots, _android) = runtime.into_parts();
         assert!(packages.load(&package).unwrap().is_none());
         assert_eq!(slots.domain_state(&package, &target), None);
+        assert_eq!(slots.pending_trash(&package, &target), None);
         assert_eq!(slots.trashed(&package, &target), Some((true, true)));
     }
 }

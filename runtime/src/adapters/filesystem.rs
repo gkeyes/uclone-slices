@@ -21,6 +21,7 @@ use crate::model::{
     SeedMode, Slot, SlotId, TransferId,
 };
 use crate::ports::{AdapterError, PackageStore, SlotStorage};
+use crate::validation;
 
 #[derive(Debug)]
 pub(crate) struct FilePackageStore {
@@ -512,19 +513,59 @@ impl FileSlotStorage {
         }
     }
 
-    /// Renames `<slots root>/<package>` of each domain to `<storage root>/trash/<now>-<package>`
-    /// on the same filesystem. Both domains are attempted; the first error is returned.
+    /// Moves `<slots root>/<package>` of each domain to `trash/pending/<package>`, which never
+    /// expires, and only once both domains are there renames each to `trash/<now>[-N]/<package>`.
+    /// Every step is a same-filesystem rename made durable before the next, and every step skips
+    /// data that an interrupted earlier attempt already moved, so a retry finishes the move.
     fn trash_package_at(&self, package: &PackageName, now: u64) -> Result<(), AdapterError> {
         let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
-        let ce_result =
-            trash_package_domain(&self.ce_slots_root, &ce_trash, package, now, self.owner);
-        let de_result =
-            trash_package_domain(&self.de_slots_root, &de_trash, package, now, self.owner);
-        ce_result.and(de_result)
+        let ce_result = stage_package_in_trash(&self.ce_slots_root, &ce_trash, package, self.owner);
+        let de_result = stage_package_in_trash(&self.de_slots_root, &de_trash, package, self.owner);
+        ce_result.and(de_result)?;
+        let pending = [&ce_trash, &de_trash]
+            .map(|trash| trash.join(layout::TRASH_PENDING_DIR).join(package.as_str()));
+        let mut staged = Vec::with_capacity(2);
+        for (trash, pending) in [(&ce_trash, &pending[0]), (&de_trash, &pending[1])] {
+            if path_exists_nofollow(pending)? {
+                staged.push((trash, pending));
+            }
+        }
+        if staged.is_empty() {
+            return Ok(());
+        }
+        // One timestamp directory for both domains, named so neither already holds the package.
+        let mut name = now.to_string();
+        let mut suffix = 0_u64;
+        loop {
+            let mut free = true;
+            for (trash, _pending) in &staged {
+                free &= !path_exists_nofollow(&trash.join(&name).join(package.as_str()))?;
+            }
+            if free {
+                break;
+            }
+            suffix += 1;
+            name = format!("{now}-{suffix}");
+        }
+        let mut first_error = None;
+        for (trash, pending) in staged {
+            let result = (|| {
+                let expiring = trash.join(&name);
+                secure_durable_private_directory(&expiring, self.owner)?;
+                rename_path(pending, &expiring.join(package.as_str())).map_err(io_error)?;
+                sync_directory(&trash.join(layout::TRASH_PENDING_DIR))?;
+                sync_directory(&expiring)
+            })();
+            if let Err(error) = result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
-    /// Deletes every trash entry whose timestamp is at least [`layout::TRASH_RETENTION`] before
-    /// `now`. Both domains are attempted; the first error is returned.
+    /// Purges expired timestamp directories of both domains; the first error is returned.
     fn purge_trash_at(&self, now: u64) -> Result<(), AdapterError> {
         let (ce_trash, de_trash) = self.area_paths(layout::TRASH_DIR, &[])?;
         let ce_result = purge_trash_domain(&ce_trash, now, self.owner);
@@ -2010,61 +2051,89 @@ fn unix_seconds_now() -> Result<u64, AdapterError> {
         .map_err(|_| AdapterError::new("system clock is before the Unix epoch"))
 }
 
-fn trash_package_domain(
+fn path_exists_nofollow(path: &Path) -> Result<bool, AdapterError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+/// [`secure_private_directory`], then makes its directory entry durable in the parent so a
+/// rename into a newly created directory cannot outlive the directory itself after a crash.
+fn secure_durable_private_directory(
+    path: &Path,
+    owner: DirectoryOwner,
+) -> Result<(), AdapterError> {
+    secure_private_directory(path, owner)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| AdapterError::new("private directory has no parent"))?;
+    sync_directory(parent)
+}
+
+/// Renames `<slots root>/<package>` to `<trash>/pending/<package>` when it still exists.
+fn stage_package_in_trash(
     slots_root: &Path,
     trash_root: &Path,
     package: &PackageName,
-    now: u64,
     owner: DirectoryOwner,
 ) -> Result<(), AdapterError> {
     let source = slots_root.join(package.as_str());
-    match fs::symlink_metadata(&source) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(io_error(error)),
+    if !path_exists_nofollow(&source)? {
+        return Ok(());
     }
-    secure_private_directory(trash_root, owner)?;
-    let base_name = format!("{now}-{}", package.as_str());
-    let mut target = trash_root.join(&base_name);
-    let mut suffix = 0_u64;
-    // `rename` silently replaces an empty directory, so pick a name nothing uses yet.
-    while fs::symlink_metadata(&target).is_ok() {
-        suffix += 1;
-        target = trash_root.join(format!("{base_name}-{suffix}"));
+    let pending_root = trash_root.join(layout::TRASH_PENDING_DIR);
+    secure_durable_private_directory(trash_root, owner)?;
+    secure_durable_private_directory(&pending_root, owner)?;
+    let pending = pending_root.join(package.as_str());
+    if path_exists_nofollow(&pending)? {
+        return Err(AdapterError::state_conflict(
+            "pending trash already holds this package",
+        ));
     }
-    rename_path(&source, &target).map_err(io_error)?;
-    // The package state is removed right after this returns; the move must be durable first.
+    rename_path(&source, &pending).map_err(io_error)?;
     sync_directory(slots_root)?;
-    sync_directory(trash_root)
+    sync_directory(&pending_root)
 }
 
-/// The Unix timestamp a trash entry was created at, from its `<seconds>-<package>` name.
-fn trash_entry_timestamp(name: &std::ffi::OsStr) -> Option<u64> {
-    let (seconds, rest) = name.to_str()?.split_once('-')?;
-    if rest.is_empty() || seconds.is_empty() || !seconds.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    seconds.parse().ok()
+/// The Unix timestamp of a `<seconds>` or `<seconds>-<N>` trash directory name.
+fn trash_entry_timestamp(name: &str) -> Option<u64> {
+    let digits = |part: &str| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+    let (seconds, suffix) = name.split_once('-').unwrap_or((name, "0"));
+    (digits(seconds) && digits(suffix))
+        .then(|| seconds.parse().ok())
+        .flatten()
 }
 
+/// Deletes, in each `trash/<seconds>[-N]` directory at least [`layout::TRASH_RETENTION`] old,
+/// the children named like packages, then the directory itself once it is empty. `pending` and
+/// every other entry are left alone; nothing here follows a symbolic link.
 fn purge_trash_domain(
     trash_root: &Path,
     now: u64,
     owner: DirectoryOwner,
 ) -> Result<(), AdapterError> {
-    match fs::symlink_metadata(trash_root) {
-        Ok(_) => secure_private_directory(trash_root, owner)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(io_error(error)),
+    if !path_exists_nofollow(trash_root)? {
+        return Ok(());
     }
+    secure_private_directory(trash_root, owner)?;
     let retention = layout::TRASH_RETENTION.as_secs();
     let mut first_error = None;
     for entry in fs::read_dir(trash_root).map_err(io_error)? {
         let result = entry.map_err(io_error).and_then(|entry| {
             let path = entry.path();
-            let Some(created) = trash_entry_timestamp(&entry.file_name()) else {
+            let name = entry.file_name();
+            if name == layout::TRASH_PENDING_DIR {
+                return Ok(());
+            }
+            // `file_type` describes the entry itself, so a link is never taken for a directory.
+            let timestamp = name.to_str().and_then(trash_entry_timestamp);
+            let Some(created) =
+                timestamp.filter(|_| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            else {
                 eprintln!(
-                    "op=purge_trash path={} step=skip_unexpected_entry error=unrecognized_name",
+                    "op=purge_trash path={} step=skip_unexpected_entry",
                     path.display()
                 );
                 return Ok(());
@@ -2072,17 +2141,7 @@ fn purge_trash_domain(
             if now.saturating_sub(created) < retention {
                 return Ok(());
             }
-            // `file_type` comes from the directory entry itself and never follows a link, so a
-            // link or file found here is unlinked itself and never traversed.
-            if entry.file_type().map_err(io_error)?.is_dir() {
-                remove_tree_if_exists(&path)
-            } else {
-                eprintln!(
-                    "op=purge_trash path={} step=remove_unexpected_entry error=not_a_directory",
-                    path.display()
-                );
-                fs::remove_file(&path).map_err(io_error)
-            }
+            purge_expired_trash_directory(&path)
         });
         if let Err(error) = result
             && first_error.is_none()
@@ -2094,6 +2153,36 @@ fn purge_trash_domain(
         Some(error) => Err(error),
         None => sync_directory(trash_root),
     }
+}
+
+fn purge_expired_trash_directory(directory: &Path) -> Result<(), AdapterError> {
+    let mut kept = false;
+    for entry in fs::read_dir(directory).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let path = entry.path();
+        if !entry
+            .file_name()
+            .to_str()
+            .is_some_and(validation::is_package_name)
+        {
+            eprintln!(
+                "op=purge_trash path={} step=skip_unexpected_entry",
+                path.display()
+            );
+            kept = true;
+            continue;
+        }
+        if entry.file_type().map_err(io_error)?.is_dir() {
+            remove_tree_if_exists(&path)?;
+        } else {
+            // A file or link is unlinked itself, never followed.
+            fs::remove_file(&path).map_err(io_error)?;
+        }
+    }
+    if kept {
+        return Ok(());
+    }
+    fs::remove_dir(directory).map_err(io_error)
 }
 
 fn remove_slot_artifacts(

@@ -183,6 +183,8 @@ pub(crate) struct MemorySlotStorage {
     staging: BTreeSet<(PackageName, AccountIoToken, ArchiveAccountId)>,
     maintenance: BTreeSet<(PackageName, AccountIoToken)>,
     replacements: BTreeMap<(PackageName, AccountIoToken, SlotId), Option<(bool, bool)>>,
+    /// Slot domains of an unenroll in progress, not yet expiring.
+    pending: BTreeMap<(PackageName, SlotId), (bool, bool)>,
     /// Slot domains moved to the trash by unenroll, which the memory store never expires.
     trash: BTreeMap<(PackageName, SlotId), (bool, bool)>,
     purge_calls: usize,
@@ -212,6 +214,14 @@ impl MemorySlotStorage {
 
     pub(crate) fn trashed(&self, package: &PackageName, slot: &SlotId) -> Option<(bool, bool)> {
         self.trash.get(&(package.clone(), slot.clone())).copied()
+    }
+
+    pub(crate) fn pending_trash(
+        &self,
+        package: &PackageName,
+        slot: &SlotId,
+    ) -> Option<(bool, bool)> {
+        self.pending.get(&(package.clone(), slot.clone())).copied()
     }
 
     pub(crate) fn purge_calls(&self) -> usize {
@@ -299,28 +309,41 @@ impl SlotStorage for MemorySlotStorage {
             if stored_package != package {
                 continue;
             }
-            let trashed = self
-                .trash
+            let pending = self
+                .pending
                 .entry((package.clone(), slot.clone()))
                 .or_insert((false, false));
             if !ce_failed && pair.0 {
                 pair.0 = false;
-                trashed.0 = true;
+                pending.0 = true;
             }
             if !de_failed && pair.1 {
                 pair.1 = false;
-                trashed.1 = true;
+                pending.1 = true;
             }
         }
         self.domains.retain(|_, pair| *pair != (false, false));
-        self.trash.retain(|_, pair| *pair != (false, false));
+        self.pending.retain(|_, pair| *pair != (false, false));
         if ce_failed {
-            Err(AdapterError::new("injected CE package trash failure"))
-        } else if de_failed {
-            Err(AdapterError::new("injected DE package trash failure"))
-        } else {
-            Ok(())
+            return Err(AdapterError::new("injected CE package trash failure"));
         }
+        if de_failed {
+            return Err(AdapterError::new("injected DE package trash failure"));
+        }
+        let staged: Vec<_> = self
+            .pending
+            .keys()
+            .filter(|(stored_package, _slot)| stored_package == package)
+            .cloned()
+            .collect();
+        for key in staged {
+            if let Some((ce, de)) = self.pending.remove(&key) {
+                let trashed = self.trash.entry(key).or_insert((false, false));
+                trashed.0 |= ce;
+                trashed.1 |= de;
+            }
+        }
+        Ok(())
     }
 
     fn purge_trash(&mut self) -> Result<(), AdapterError> {

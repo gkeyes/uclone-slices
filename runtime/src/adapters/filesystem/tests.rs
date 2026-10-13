@@ -353,12 +353,23 @@ fn trash_roots(root: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
+fn open_trash_test_storage(root: &Path) -> (FileSlotStorage, PathBuf, PathBuf) {
+    let (ce_slots, de_slots) = storage_roots(root);
+    let storage = open_slot_storage(
+        &ce_slots,
+        &de_slots,
+        &root.join("base-ce"),
+        &root.join("base-de"),
+    );
+    (storage, ce_slots, de_slots)
+}
+
 #[test]
 fn trash_package_moves_every_ce_de_slot_and_temporary_artifact_into_private_trash() {
     let root = tempfile::tempdir().unwrap();
     let package = PackageName::new("com.example.app").unwrap();
     let other = PackageName::new("com.example.other").unwrap();
-    let (ce_slots, de_slots) = storage_roots(root.path());
+    let (storage, ce_slots, de_slots) = open_trash_test_storage(root.path());
     for slots_root in [&ce_slots, &de_slots] {
         for path in [
             slots_root.join(package.as_str()).join("slot-1"),
@@ -373,12 +384,6 @@ fn trash_package_moves_every_ce_de_slot_and_temporary_artifact_into_private_tras
         )
         .unwrap();
     }
-    let storage = open_slot_storage(
-        &ce_slots,
-        &de_slots,
-        &root.path().join("base-ce"),
-        &root.path().join("base-de"),
-    );
 
     storage.trash_package_at(&package, 1_000).unwrap();
 
@@ -386,93 +391,183 @@ fn trash_package_moves_every_ce_de_slot_and_temporary_artifact_into_private_tras
     for (slots_root, trash_root) in [(&ce_slots, &ce_trash), (&de_slots, &de_trash)] {
         assert!(!slots_root.join(package.as_str()).exists());
         assert!(slots_root.join(other.as_str()).join("slot-1").is_dir());
-        let trashed = trash_root.join("1000-com.example.app");
+        let trashed = trash_root.join("1000").join(package.as_str());
         assert_eq!(
             fs::read(trashed.join("slot-1/data.txt")).unwrap(),
             b"kept".to_vec()
         );
         assert!(trashed.join(".slot-2.tmp-111").is_dir());
-        let metadata = fs::symlink_metadata(trash_root).unwrap();
-        assert_eq!(metadata.mode() & 0o7777, 0o700);
-        verify_private_directory(&metadata, storage.owner).unwrap();
+        assert!(
+            fs::read_dir(trash_root.join(layout::TRASH_PENDING_DIR))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+        for directory in [
+            trash_root.clone(),
+            trash_root.join(layout::TRASH_PENDING_DIR),
+            trash_root.join("1000"),
+        ] {
+            let metadata = fs::symlink_metadata(&directory).unwrap();
+            verify_private_directory(&metadata, storage.owner).unwrap();
+        }
     }
 
     // A package without slot data leaves the trash untouched.
     storage.trash_package_at(&package, 2_000).unwrap();
-    assert_eq!(fs::read_dir(&ce_trash).unwrap().count(), 1);
+    assert!(!ce_trash.join("2000").exists());
+}
+
+#[test]
+fn trash_package_keeps_the_package_name_as_its_own_path_component() {
+    let root = tempfile::tempdir().unwrap();
+    // 255 bytes, the longest name a single path component may have.
+    let long = format!("a.{}", "b".repeat(253));
+    let package = PackageName::new(&long).unwrap();
+    let (storage, ce_slots, de_slots) = open_trash_test_storage(root.path());
+    fs::create_dir_all(ce_slots.join(&long).join("slot-1")).unwrap();
+    fs::create_dir_all(de_slots.join(&long).join("slot-1")).unwrap();
+
+    storage.trash_package_at(&package, 1_000).unwrap();
+
+    let (ce_trash, de_trash) = trash_roots(root.path());
+    assert!(ce_trash.join("1000").join(&long).join("slot-1").is_dir());
+    assert!(de_trash.join("1000").join(&long).join("slot-1").is_dir());
 }
 
 #[test]
 fn trash_package_never_reuses_an_existing_trash_name() {
     let root = tempfile::tempdir().unwrap();
     let package = PackageName::new("com.example.app").unwrap();
-    let (ce_slots, de_slots) = storage_roots(root.path());
-    let (ce_trash, _de_trash) = trash_roots(root.path());
+    let (storage, ce_slots, de_slots) = open_trash_test_storage(root.path());
+    let (ce_trash, de_trash) = trash_roots(root.path());
     fs::create_dir_all(ce_slots.join(package.as_str()).join("slot-1")).unwrap();
-    fs::create_dir_all(&de_slots).unwrap();
-    let storage = open_slot_storage(
-        &ce_slots,
-        &de_slots,
-        &root.path().join("base-ce"),
-        &root.path().join("base-de"),
-    );
-    fs::create_dir_all(ce_trash.join("1000-com.example.app")).unwrap();
+    fs::create_dir_all(de_slots.join(package.as_str()).join("slot-1")).unwrap();
+    // Only the DE domain already holds the package under `1000`; both domains skip that name.
+    fs::create_dir_all(de_trash.join("1000").join(package.as_str())).unwrap();
+    fs::create_dir_all(ce_trash.join("1000").join("com.example.other")).unwrap();
 
     storage.trash_package_at(&package, 1_000).unwrap();
 
     assert!(
-        fs::read_dir(ce_trash.join("1000-com.example.app"))
+        fs::read_dir(de_trash.join("1000").join(package.as_str()))
             .unwrap()
             .next()
             .is_none()
     );
-    assert!(ce_trash.join("1000-com.example.app-1/slot-1").is_dir());
+    assert!(!ce_trash.join("1000").join(package.as_str()).exists());
+    for trash_root in [&ce_trash, &de_trash] {
+        assert!(
+            trash_root
+                .join("1000-1")
+                .join(package.as_str())
+                .join("slot-1")
+                .is_dir()
+        );
+    }
+}
+
+#[test]
+fn interrupted_trash_keeps_data_pending_until_both_domains_moved() {
+    let root = tempfile::tempdir().unwrap();
+    let package = PackageName::new("com.example.app").unwrap();
+    let (storage, ce_slots, de_slots) = open_trash_test_storage(root.path());
+    let (ce_trash, de_trash) = trash_roots(root.path());
+    fs::create_dir_all(ce_slots.join(package.as_str()).join("slot-1")).unwrap();
+    fs::create_dir_all(de_slots.join(package.as_str()).join("slot-1")).unwrap();
+    let de_pending = de_trash.join(layout::TRASH_PENDING_DIR);
+
+    {
+        let crash = fail_next_rename_into(&[&de_pending]);
+        assert!(storage.trash_package_at(&package, 1_000).is_err());
+        assert!(crash.was_triggered());
+    }
+
+    let ce_pending = ce_trash
+        .join(layout::TRASH_PENDING_DIR)
+        .join(package.as_str());
+    assert!(ce_pending.join("slot-1").is_dir());
+    assert!(de_slots.join(package.as_str()).join("slot-1").is_dir());
+    assert!(!ce_trash.join("1000").exists());
+    // Pending data never expires.
+    storage.purge_trash_at(u64::MAX).unwrap();
+    assert!(ce_pending.join("slot-1").is_dir());
+
+    storage.trash_package_at(&package, 5_000).unwrap();
+    storage.trash_package_at(&package, 6_000).unwrap();
+
+    for trash_root in [&ce_trash, &de_trash] {
+        assert!(
+            trash_root
+                .join("5000")
+                .join(package.as_str())
+                .join("slot-1")
+                .is_dir()
+        );
+        assert!(
+            !trash_root
+                .join(layout::TRASH_PENDING_DIR)
+                .join(package.as_str())
+                .exists()
+        );
+        assert!(!trash_root.join("6000").exists());
+    }
 }
 
 #[test]
 fn purge_trash_removes_only_entries_older_than_the_retention() {
     let root = tempfile::tempdir().unwrap();
-    let (ce_slots, de_slots) = storage_roots(root.path());
+    let (storage, _ce_slots, _de_slots) = open_trash_test_storage(root.path());
     let (ce_trash, de_trash) = trash_roots(root.path());
     let retention = layout::TRASH_RETENTION.as_secs();
     let now = 10 * retention;
-    let expired = format!("{}-com.example.old", now - retention);
-    let expired_twin = format!("{}-com.example.old-1", now - retention - 1);
-    let fresh = format!("{}-com.example.new", now - retention + 1);
-    let future = format!("{}-com.example.future", now + 60);
+    let expired = (now - retention).to_string();
+    let expired_twin = format!("{}-1", now - retention - 1);
+    let fresh = (now - retention + 1).to_string();
+    let future = (now + 60).to_string();
     for trash_root in [&ce_trash, &de_trash] {
         for name in [&expired, &expired_twin, &fresh, &future] {
-            fs::create_dir_all(trash_root.join(name).join("slot-1/files")).unwrap();
+            fs::create_dir_all(trash_root.join(name).join("com.example.app/slot-1/files")).unwrap();
         }
+        fs::create_dir_all(
+            trash_root
+                .join(layout::TRASH_PENDING_DIR)
+                .join("com.example.pending"),
+        )
+        .unwrap();
     }
-    let storage = open_slot_storage(
-        &ce_slots,
-        &de_slots,
-        &root.path().join("base-ce"),
-        &root.path().join("base-de"),
-    );
 
     storage.purge_trash_at(now).unwrap();
 
     for trash_root in [&ce_trash, &de_trash] {
         assert!(!trash_root.join(&expired).exists());
         assert!(!trash_root.join(&expired_twin).exists());
-        assert!(trash_root.join(&fresh).join("slot-1/files").is_dir());
-        assert!(trash_root.join(&future).join("slot-1/files").is_dir());
+        assert!(
+            trash_root
+                .join(&fresh)
+                .join("com.example.app/slot-1/files")
+                .is_dir()
+        );
+        assert!(
+            trash_root
+                .join(&future)
+                .join("com.example.app/slot-1/files")
+                .is_dir()
+        );
+        assert!(
+            trash_root
+                .join(layout::TRASH_PENDING_DIR)
+                .join("com.example.pending")
+                .is_dir()
+        );
     }
 }
 
 #[test]
 fn purge_trash_without_a_trash_directory_creates_nothing() {
     let root = tempfile::tempdir().unwrap();
-    let (ce_slots, de_slots) = storage_roots(root.path());
+    let (storage, _ce_slots, _de_slots) = open_trash_test_storage(root.path());
     let (ce_trash, de_trash) = trash_roots(root.path());
-    let storage = open_slot_storage(
-        &ce_slots,
-        &de_slots,
-        &root.path().join("base-ce"),
-        &root.path().join("base-de"),
-    );
 
     storage.purge_trash_at(u64::MAX).unwrap();
 
@@ -481,63 +576,72 @@ fn purge_trash_without_a_trash_directory_creates_nothing() {
 }
 
 #[test]
-fn purge_trash_never_follows_links_and_skips_unrecognized_entries() {
+fn purge_trash_never_follows_links_and_leaves_unrecognized_entries() {
     let root = tempfile::tempdir().unwrap();
-    let (ce_slots, de_slots) = storage_roots(root.path());
+    let (storage, _ce_slots, _de_slots) = open_trash_test_storage(root.path());
     let (ce_trash, _de_trash) = trash_roots(root.path());
     let outside = root.path().join("outside");
-    fs::create_dir_all(outside.join("nested")).unwrap();
-    fs::write(outside.join("nested/secret.txt"), b"keep").unwrap();
-    fs::create_dir_all(&ce_trash).unwrap();
-    let expired_dir = ce_trash.join("1-com.example.app");
-    fs::create_dir_all(&expired_dir).unwrap();
-    symlink(&outside, expired_dir.join("link")).unwrap();
-    symlink(&outside, ce_trash.join("2-com.example.link")).unwrap();
-    fs::write(ce_trash.join("3-com.example.file"), b"stray").unwrap();
-    for name in ["notes", "-com.example.app", "12x-com.example.app", "4-"] {
-        fs::create_dir_all(ce_trash.join(name)).unwrap();
+    fs::create_dir_all(outside.join("com.example.app")).unwrap();
+    fs::write(outside.join("com.example.app/secret.txt"), b"keep").unwrap();
+    let expired = ce_trash.join("1");
+    fs::create_dir_all(expired.join("com.example.app")).unwrap();
+    symlink(&outside, expired.join("com.example.app/link")).unwrap();
+    symlink(&outside, expired.join("com.example.link")).unwrap();
+    let mixed = ce_trash.join("2");
+    fs::create_dir_all(mixed.join("com.example.app")).unwrap();
+    fs::create_dir_all(mixed.join("not a package")).unwrap();
+    symlink(&outside, ce_trash.join("3")).unwrap();
+    fs::write(ce_trash.join("4"), b"stray").unwrap();
+    let foreign = [
+        "notes",
+        "1-not-a-package",
+        "-1",
+        "12x",
+        "5-",
+        "com.example.app",
+    ];
+    for name in foreign {
+        fs::create_dir_all(ce_trash.join(name).join("com.example.app")).unwrap();
     }
-    let storage = open_slot_storage(
-        &ce_slots,
-        &de_slots,
-        &root.path().join("base-ce"),
-        &root.path().join("base-de"),
-    );
 
     storage
         .purge_trash_at(layout::TRASH_RETENTION.as_secs() * 2)
         .unwrap();
 
-    assert!(!expired_dir.exists());
-    assert!(fs::symlink_metadata(ce_trash.join("2-com.example.link")).is_err());
-    assert!(!ce_trash.join("3-com.example.file").exists());
+    assert!(!expired.exists());
+    assert!(!mixed.join("com.example.app").exists());
+    assert!(mixed.join("not a package").is_dir());
+    assert!(
+        fs::symlink_metadata(ce_trash.join("3"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(ce_trash.join("4").is_file());
     assert_eq!(
-        fs::read(outside.join("nested/secret.txt")).unwrap(),
+        fs::read(outside.join("com.example.app/secret.txt")).unwrap(),
         b"keep".to_vec()
     );
-    for name in ["notes", "-com.example.app", "12x-com.example.app", "4-"] {
-        assert!(ce_trash.join(name).is_dir(), "{name}");
+    for name in foreign {
+        assert!(
+            ce_trash.join(name).join("com.example.app").is_dir(),
+            "{name}"
+        );
     }
 }
 
 #[test]
 fn purge_trash_refuses_a_symlinked_trash_root() {
     let root = tempfile::tempdir().unwrap();
-    let (ce_slots, de_slots) = storage_roots(root.path());
+    let (storage, _ce_slots, _de_slots) = open_trash_test_storage(root.path());
     let (ce_trash, _de_trash) = trash_roots(root.path());
-    let storage = open_slot_storage(
-        &ce_slots,
-        &de_slots,
-        &root.path().join("base-ce"),
-        &root.path().join("base-de"),
-    );
     let outside = root.path().join("outside");
-    fs::create_dir_all(outside.join("1-com.example.app")).unwrap();
+    fs::create_dir_all(outside.join("1/com.example.app")).unwrap();
     symlink(&outside, &ce_trash).unwrap();
 
     assert!(storage.purge_trash_at(u64::MAX).is_err());
 
-    assert!(outside.join("1-com.example.app").is_dir());
+    assert!(outside.join("1/com.example.app").is_dir());
 }
 
 #[test]
