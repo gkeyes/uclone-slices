@@ -203,7 +203,7 @@ class BackupRestorePolicyTest {
             },
             Dispatchers.Unconfined,
             CoroutineScope(Dispatchers.Unconfined),
-            catalog,
+            { catalog },
         )
 
         viewModel.onIntent(BackupUiIntent.OpenBackup("com.example.app", null))
