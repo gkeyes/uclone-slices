@@ -202,8 +202,9 @@ internal class SlotsViewModel(
     private fun destinationChanged(destination: ManagerDestination, packageName: String?) {
         val previous = this.destination
         this.destination = destination
-        // An Add App page restored by the back stack (after process death) needs the catalog
-        // too. A refresh still running loads it when it ends, as it does for the visible page.
+        // The Add App page needs the full catalog, also when the back stack restores it after
+        // process death. A refresh still running loads it when it ends instead: it drops the
+        // catalog when it starts and replaces the app list when it lists the packages.
         val snapshot = state.value
         if (
             destination == ManagerDestination.AddApp &&
@@ -279,12 +280,9 @@ internal class SlotsViewModel(
     }
 
     private fun openAddApps() {
-        if (state.value.busy) return
-        navigate(SlotsNavigation.ToAddApps)
-        val snapshot = state.value
-        if (!snapshot.appCatalogLoaded && !snapshot.appCatalogLoading) {
-            loadAppCatalog()
-        }
+        // The catalog loads when the nav host reports the page (destinationChanged), which also
+        // covers a page the back stack restores.
+        navigateTo(SlotsNavigation.ToAddApps)
     }
 
     private fun loadAppCatalog() {
