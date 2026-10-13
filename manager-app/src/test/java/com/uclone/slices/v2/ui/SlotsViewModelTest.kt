@@ -957,7 +957,7 @@ class SlotsViewModelTest {
     }
 
     @Test
-    fun navigationRequestsAreDroppedWhileAnOperationRuns() = runBlocking {
+    fun navigationRequestsAreDroppedWhileAnOperationRuns() = runBlocking<Unit> {
         val client = BlockingQuickRuntimeClient()
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
         val host = FakeNavHost(viewModel)
