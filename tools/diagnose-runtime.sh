@@ -24,7 +24,7 @@ print_path() {
     fi
 }
 
-printf '%s\n' '=== UClone Slices V2 Runtime diagnosis ==='
+printf '%s\n' '=== UClone Slices Runtime diagnosis ==='
 printf '%s\n' 'script_version=3'
 printf 'uid=%s\n' "$(id -u 2>/dev/null)"
 printf 'date=%s\n' "$(date 2>/dev/null)"
