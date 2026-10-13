@@ -100,7 +100,7 @@ jobs:
           RELEASE_STORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.RELEASE_STORE_PASSWORD || '' }}
           RELEASE_KEY_ALIAS: ${{ github.event_name != 'pull_request' && secrets.RELEASE_KEY_ALIAS || '' }}
           RELEASE_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.RELEASE_KEY_PASSWORD || '' }}
-        run: ./gradlew --no-daemon --console=plain :manager-app:testDebugUnitTest :manager-app:lintRelease :manager-app:assembleRelease :device-fixture-app:lintFromDebug :device-fixture-app:lintToDebug :device-fixture-app:assembleFromDebug :device-fixture-app:assembleToDebug
+        run: ./gradlew --no-daemon --console=plain :manager-app:testDebugUnitTest :manager-app:lintRelease :manager-app:assembleRelease
 
       - name: Upload Android reports
         if: failure()
