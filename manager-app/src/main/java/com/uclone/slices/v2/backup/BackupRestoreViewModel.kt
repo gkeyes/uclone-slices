@@ -502,7 +502,8 @@ internal class BackupRestoreViewModel(
         val mapping = current.mappings.firstOrNull {
             it.archiveAccountId == archiveAccountId
         } ?: return
-        if (mapping.archiveKind == ArchiveAccountKind.Base || target is RestoreTarget.Existing && target.slotId == "base") {
+        val targetsBase = target is RestoreTarget.Existing && target.slotId == "base"
+        if (mapping.archiveKind == ArchiveAccountKind.Base || targetsBase) {
             return
         }
         if (target is RestoreTarget.Existing && current.mappings.any {
@@ -594,7 +595,9 @@ internal class BackupRestoreViewModel(
                         current.copy(
                             accountIoStatuses = reply.statuses,
                             pendingAccountIoRecovery = current.pendingAccountIoRecovery
-                                ?.takeIf { pending -> reply.statuses.any { it.ioToken == pending.ioToken } },
+                                ?.takeIf { pending ->
+                                    reply.statuses.any { it.ioToken == pending.ioToken }
+                                },
                             accountIoRecoveryError = null,
                             recoveringAccountIo = false,
                         )
