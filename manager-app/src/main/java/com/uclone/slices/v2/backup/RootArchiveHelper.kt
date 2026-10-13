@@ -88,6 +88,13 @@ internal class RootArchiveHelper(
         val destinationDirectory = shellQuote(HELPER_DIRECTORY)
         val destination = shellQuote(HELPER_PATH)
         val command = buildString {
+            // Helpers installed by other Manager versions are never run again; remove them first.
+            // A failed cleanup does not stop the install.
+            append("for old in ")
+            append(shellQuote(HELPER_ROOT))
+            append("/*; do [ \"\$old\" = ")
+            append(destinationDirectory)
+            append(" ] || rm -rf \"\$old\"; done; ")
             append("umask 077 && mkdir -p ")
             append(destinationDirectory)
             append(" && chown 0:0 ")
@@ -132,8 +139,8 @@ internal class RootArchiveHelper(
     private companion object {
         const val MAX_RESPONSE_CHARS = 4 * 1024 * 1024
         const val BUNDLED_NAME = "libuclone_archive.so"
-        const val HELPER_DIRECTORY =
-            "/data/adb/uclone-slices-v2/manager-helper/${BuildConfig.VERSION_NAME}"
+        const val HELPER_ROOT = "/data/adb/uclone-slices-v2/manager-helper"
+        const val HELPER_DIRECTORY = "$HELPER_ROOT/${BuildConfig.VERSION_NAME}"
         const val HELPER_PATH = "$HELPER_DIRECTORY/uclone_archive"
         const val HELPER_COMMAND = "exec /system/bin/nsenter -t 1 -m -- $HELPER_PATH"
     }
