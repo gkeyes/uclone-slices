@@ -13,9 +13,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -123,6 +124,7 @@ internal fun SlicesTheme(content: @Composable () -> Unit) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         reducedMotion = readReducedMotion(context)
     }
+    val playedStaggers = rememberSaveable(saver = PlayedStaggersSaver) { mutableSetOf<String>() }
     MaterialTheme(
         colorScheme = materialColors,
         typography = SlicesTypography,
@@ -135,6 +137,7 @@ internal fun SlicesTheme(content: @Composable () -> Unit) {
         CompositionLocalProvider(
             LocalContentColor provides TextPrimary,
             LocalReducedMotion provides reducedMotion,
+            LocalPlayedStaggers provides playedStaggers,
             content = content,
         )
     }
