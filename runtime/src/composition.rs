@@ -3,6 +3,7 @@ use std::path::Path;
 use thiserror::Error;
 
 use crate::adapters::{FilePackageStore, FileSlotStorage, SystemAndroidOps};
+use crate::layout;
 use crate::model::{
     Capabilities, DisplayName, PackageName, PackageSnapshot, SeedMode, SigningIdentity, SlotId,
 };
@@ -112,21 +113,19 @@ pub fn production(
     runtime_root: &Path,
     build_id: impl Into<String>,
 ) -> Result<ProductionRuntime, CompositionError> {
-    let ce_slots_root = "/data/misc_ce/0/uclone-slices-v2/slots";
-    let de_slots_root = "/data/misc_de/0/uclone-slices-v2/slots";
     let packages = FilePackageStore::open(runtime_root)?;
     let slots = FileSlotStorage::open(
-        ce_slots_root,
-        de_slots_root,
-        "/data/user/0",
-        "/data/user_de/0",
+        layout::CE_SLOTS_ROOT,
+        layout::DE_SLOTS_ROOT,
+        layout::USER_CE_ROOT,
+        layout::USER_DE_ROOT,
     )?;
     let android = SystemAndroidOps::new(
         build_id,
-        ce_slots_root,
-        de_slots_root,
-        "/data/user/0",
-        "/data/user_de/0",
+        layout::CE_SLOTS_ROOT,
+        layout::DE_SLOTS_ROOT,
+        layout::USER_CE_ROOT,
+        layout::USER_DE_ROOT,
     );
     Ok(ProductionRuntime {
         inner: Runtime::new(packages, slots, android),

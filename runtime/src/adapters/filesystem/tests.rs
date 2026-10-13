@@ -12,11 +12,11 @@ fn resource_preserve_policy() -> RestorePolicy {
     RestorePolicy::PreservePaths {
         paths: vec![
             RestorePath {
-                domain: RestoreDomain::Ce,
+                domain: ArchiveDomain::Ce,
                 path: "files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer".to_owned(),
             },
             RestorePath {
-                domain: RestoreDomain::Ce,
+                domain: ArchiveDomain::Ce,
                 path: "files/UE4Game/DeltaForce/DeltaForce/Saved/Dolphin/*/Paks".to_owned(),
             },
         ],
@@ -712,8 +712,8 @@ fn base_restore_capacity_excludes_preserved_resource_trees() {
     fs::write(staged_de.join("new-device"), b"new-device").unwrap();
     let policy = resource_preserve_policy();
     let required_without_resources =
-        copied_tree_bytes_excluding(&target_ce, &policy.paths_for(RestoreDomain::Ce)).unwrap()
-            + copied_tree_bytes_excluding(&target_de, &policy.paths_for(RestoreDomain::De))
+        copied_tree_bytes_excluding(&target_ce, &policy.paths_for(ArchiveDomain::Ce)).unwrap()
+            + copied_tree_bytes_excluding(&target_de, &policy.paths_for(ArchiveDomain::De))
                 .unwrap()
             + copied_tree_bytes(staged_ce).unwrap()
             + copied_tree_bytes(staged_de).unwrap();

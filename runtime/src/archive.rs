@@ -14,6 +14,7 @@ use thiserror::Error;
 use zeroize::Zeroize as _;
 
 use crate::links::link_resolves_inside;
+use crate::validation::{self, MAX_PATH_BYTES};
 
 const MAGIC: &[u8; 8] = b"UCSBKP01";
 const FLAG_ENCRYPTED: u8 = 1;
@@ -23,7 +24,6 @@ const MAX_CONTROL_FRAME_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ACCOUNTS: usize = 256;
 const MAX_ENTRIES: usize = 1_000_000;
-const MAX_PATH_BYTES: usize = 4096;
 const MAX_LOGICAL_BYTES: u64 = 1 << 40;
 const EXCLUDED_TOP_LEVEL: [&str; 2] = ["cache", "code_cache"];
 
@@ -1333,40 +1333,27 @@ fn validate_signing_identity(
     kind: ArchiveSigningKind,
     digests: &[String],
 ) -> Result<(), ArchiveError> {
-    if digests.is_empty()
-        || digests.len() > 16
-        || digests.iter().any(|digest| {
-            digest.len() != 64
-                || !digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        })
-        || digests.iter().collect::<BTreeSet<_>>().len() != digests.len()
-        || (kind == ArchiveSigningKind::Multiple
-            && (digests.len() < 2
-                || !digests
-                    .windows(2)
-                    .all(|pair| pair[0].as_str() < pair[1].as_str())))
-    {
-        return Err(ArchiveError::Invalid);
-    }
-    Ok(())
+    validation::is_signing_digest_set(kind == ArchiveSigningKind::Multiple, digests)
+        .then_some(())
+        .ok_or(ArchiveError::Invalid)
 }
 
 fn validate_backup_profile(profile: &BackupProfile) -> Result<(), ArchiveError> {
     validate_profile_identity(&profile.id, profile.revision, &profile.rules_digest)?;
-    if profile.rules.is_empty() || profile.rules.len() > 64 {
+    if profile.rules.is_empty()
+        || profile.rules.len() > validation::MAX_PATH_RULES
+        || !profile
+            .rules
+            .iter()
+            .all(|rule| validation::is_path_pattern(&rule.path))
+        || validation::any_patterns_overlap(
+            profile
+                .rules
+                .iter()
+                .map(|rule| (rule.domain, rule.path.as_str())),
+        )
+    {
         return Err(ArchiveError::Invalid);
-    }
-    for rule in &profile.rules {
-        validate_profile_path(&rule.path)?;
-    }
-    for (index, left) in profile.rules.iter().enumerate() {
-        for right in profile.rules.iter().skip(index + 1) {
-            if left.domain == right.domain && profile_patterns_overlap(&left.path, &right.path) {
-                return Err(ArchiveError::Invalid);
-            }
-        }
     }
     Ok(())
 }
@@ -1377,32 +1364,7 @@ fn validate_profile_identity(
     rules_digest: &str,
 ) -> Result<(), ArchiveError> {
     validate_archive_id(id)?;
-    if revision == 0
-        || rules_digest.len() != 64
-        || !rules_digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err(ArchiveError::Invalid);
-    }
-    Ok(())
-}
-
-fn validate_profile_path(value: &str) -> Result<(), ArchiveError> {
-    if value.is_empty() || value.len() > MAX_PATH_BYTES || value.starts_with('/') {
-        return Err(ArchiveError::Invalid);
-    }
-    let segments = value.split('/').collect::<Vec<_>>();
-    if segments.is_empty()
-        || segments.iter().any(|segment| {
-            segment.is_empty()
-                || matches!(*segment, "." | ".." | "**")
-                || (*segment != "*"
-                    && !segment.bytes().all(|byte| {
-                        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-                    }))
-        })
-    {
+    if revision == 0 || !validation::is_sha256(rules_digest) {
         return Err(ArchiveError::Invalid);
     }
     Ok(())
@@ -1424,16 +1386,6 @@ fn profile_path_matches(pattern: &str, path: &Path) -> bool {
             .all(|(expected, actual)| *expected == "*" || *expected == actual)
 }
 
-fn profile_patterns_overlap(left: &str, right: &str) -> bool {
-    let left = left.split('/').collect::<Vec<_>>();
-    let right = right.split('/').collect::<Vec<_>>();
-    let shared = left.len().min(right.len());
-    left.iter()
-        .take(shared)
-        .zip(right.iter().take(shared))
-        .all(|(left, right)| left == right || *left == "*" || *right == "*")
-}
-
 fn validate_manifest_entry(entry: &ManifestEntry) -> Result<(), ArchiveError> {
     if entry.mtime_seconds > i64::MAX as u64 {
         return Err(ArchiveError::Invalid);
@@ -1441,12 +1393,7 @@ fn validate_manifest_entry(entry: &ManifestEntry) -> Result<(), ArchiveError> {
     match entry.kind {
         ManifestEntryKind::File => {
             let digest = entry.sha256.as_deref().ok_or(ArchiveError::Invalid)?;
-            if digest.len() != 64
-                || !digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-                || entry.link_target.is_some()
-            {
+            if !validation::is_sha256(digest) || entry.link_target.is_some() {
                 return Err(ArchiveError::Invalid);
             }
         }
@@ -1671,16 +1618,9 @@ impl ManifestEntry {
 }
 
 fn validate_archive_id(value: &str) -> Result<(), ArchiveError> {
-    (!value.is_empty()
-        && value.len() <= 64
-        && value != "."
-        && value != ".."
-        && !value.starts_with('.')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')))
-    .then_some(())
-    .ok_or(ArchiveError::Invalid)
+    validation::is_identifier(value)
+        .then_some(())
+        .ok_or(ArchiveError::Invalid)
 }
 
 fn validate_relative_path(path: &Path) -> Result<(), ArchiveError> {

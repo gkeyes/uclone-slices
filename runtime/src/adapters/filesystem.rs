@@ -11,12 +11,13 @@ use std::process::Command;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::layout;
 use crate::links::link_resolves_inside;
 #[cfg(target_os = "android")]
 use crate::links::visit_tree_nofollow;
 use crate::model::{
-    AccountIoIntent, AccountIoToken, ArchiveAccountId, PackageAggregate, PackageBinding,
-    PackageName, RebindIntent, RestoreBatchResult, RestoreDomain, RestorePolicy, RestoreStaging,
+    AccountIoIntent, AccountIoToken, ArchiveAccountId, ArchiveDomain, PackageAggregate,
+    PackageBinding, PackageName, RebindIntent, RestoreBatchResult, RestorePolicy, RestoreStaging,
     SeedMode, Slot, SlotId, TransferId,
 };
 use crate::ports::{AdapterError, PackageStore, SlotStorage};
@@ -429,17 +430,10 @@ impl FileSlotStorage {
         )
     }
 
-    fn storage_roots(&self) -> Result<(PathBuf, PathBuf), AdapterError> {
-        Ok((
-            self.ce_slots_root
-                .parent()
-                .ok_or_else(|| AdapterError::new("CE slots root has no storage parent"))?
-                .to_path_buf(),
-            self.de_slots_root
-                .parent()
-                .ok_or_else(|| AdapterError::new("DE slots root has no storage parent"))?
-                .to_path_buf(),
-        ))
+    /// `<storage root>/<area>/<parts...>` in both domains.
+    fn area_paths(&self, area: &str, parts: &[&str]) -> Result<(PathBuf, PathBuf), AdapterError> {
+        layout::storage_paths(&self.ce_slots_root, &self.de_slots_root, area, parts)
+            .ok_or_else(|| AdapterError::new("slots root has no storage parent"))
     }
 
     fn transfer_account_paths(
@@ -448,19 +442,10 @@ impl FileSlotStorage {
         token: &AccountIoToken,
         account: &ArchiveAccountId,
     ) -> Result<(PathBuf, PathBuf), AdapterError> {
-        let (ce_root, de_root) = self.storage_roots()?;
-        Ok((
-            ce_root
-                .join("transfers")
-                .join(token.as_str())
-                .join(package.as_str())
-                .join(account.as_str()),
-            de_root
-                .join("transfers")
-                .join(token.as_str())
-                .join(package.as_str())
-                .join(account.as_str()),
-        ))
+        self.area_paths(
+            layout::TRANSFERS_DIR,
+            &[token.as_str(), package.as_str(), account.as_str()],
+        )
     }
 
     fn maintenance_paths(
@@ -468,17 +453,7 @@ impl FileSlotStorage {
         package: &PackageName,
         token: &AccountIoToken,
     ) -> Result<(PathBuf, PathBuf), AdapterError> {
-        let (ce_root, de_root) = self.storage_roots()?;
-        Ok((
-            ce_root
-                .join("maintenance")
-                .join(token.as_str())
-                .join(package.as_str()),
-            de_root
-                .join("maintenance")
-                .join(token.as_str())
-                .join(package.as_str()),
-        ))
+        self.area_paths(layout::MAINTENANCE_DIR, &[token.as_str(), package.as_str()])
     }
 
     fn base_alias_paths(
@@ -486,17 +461,7 @@ impl FileSlotStorage {
         package: &PackageName,
         token: &AccountIoToken,
     ) -> Result<(PathBuf, PathBuf), AdapterError> {
-        let (ce_root, de_root) = self.storage_roots()?;
-        Ok((
-            ce_root
-                .join("maintenance-base")
-                .join(token.as_str())
-                .join(package.as_str()),
-            de_root
-                .join("maintenance-base")
-                .join(token.as_str())
-                .join(package.as_str()),
-        ))
+        self.area_paths(layout::BASE_ALIAS_DIR, &[token.as_str(), package.as_str()])
     }
 
     fn rollback_paths(
@@ -505,19 +470,10 @@ impl FileSlotStorage {
         token: &AccountIoToken,
         target: &SlotId,
     ) -> Result<(PathBuf, PathBuf), AdapterError> {
-        let (ce_root, de_root) = self.storage_roots()?;
-        Ok((
-            ce_root
-                .join("rollback")
-                .join(token.as_str())
-                .join(package.as_str())
-                .join(target.as_str()),
-            de_root
-                .join("rollback")
-                .join(token.as_str())
-                .join(package.as_str())
-                .join(target.as_str()),
-        ))
+        self.area_paths(
+            layout::ROLLBACK_DIR,
+            &[token.as_str(), package.as_str(), target.as_str()],
+        )
     }
 
     #[cfg(target_os = "android")]
@@ -594,8 +550,8 @@ impl FileSlotStorage {
     ) -> Result<(), AdapterError> {
         let mut requirements = Vec::with_capacity(2);
         for (staged, target, domain) in [
-            (staged_ce, target_ce, RestoreDomain::Ce),
-            (staged_de, target_de, RestoreDomain::De),
+            (staged_ce, target_ce, ArchiveDomain::Ce),
+            (staged_de, target_de, ArchiveDomain::De),
         ] {
             let target_device = fs::metadata(target).map_err(io_error)?.dev();
             let (staging_device, available) = self.available_bytes(staged)?;
@@ -812,7 +768,7 @@ impl SlotStorage for FileSlotStorage {
             }
             validate_staged_tree(path)?;
         }
-        for (path, domain) in [(&ce, RestoreDomain::Ce), (&de, RestoreDomain::De)] {
+        for (path, domain) in [(&ce, ArchiveDomain::Ce), (&de, ArchiveDomain::De)] {
             if !resolve_preserve_roots(path, &policy.paths_for(domain))?.is_empty() {
                 return Err(AdapterError::state_conflict(
                     "staged account overlaps a preserved resource path",
@@ -896,7 +852,7 @@ impl SlotStorage for FileSlotStorage {
             &target_ce,
             &rollback_ce,
             target.is_base(),
-            &policy.paths_for(RestoreDomain::Ce),
+            &policy.paths_for(ArchiveDomain::Ce),
         );
         if let Err(error) = ce_result {
             let _rollback = rollback_domain(&target_ce, &rollback_ce, target.is_base());
@@ -907,7 +863,7 @@ impl SlotStorage for FileSlotStorage {
             &target_de,
             &rollback_de,
             target.is_base(),
-            &policy.paths_for(RestoreDomain::De),
+            &policy.paths_for(ArchiveDomain::De),
         );
         if let Err(error) = de_result {
             let de_rollback = rollback_domain(&target_de, &rollback_de, target.is_base());
@@ -958,16 +914,15 @@ impl SlotStorage for FileSlotStorage {
     ) -> Result<(), AdapterError> {
         let (alias_ce, alias_de) = self.base_alias_paths(package, token)?;
         unmount_base_aliases(&alias_ce, &alias_de)?;
-        let (ce_root, de_root) = self.storage_roots()?;
-        for root in [&ce_root, &de_root] {
-            for category in ["transfers", "maintenance", "maintenance-base", "rollback"] {
-                remove_tree_if_exists(
-                    &root
-                        .join(category)
-                        .join(token.as_str())
-                        .join(package.as_str()),
-                )?;
-            }
+        for area in [
+            layout::TRANSFERS_DIR,
+            layout::MAINTENANCE_DIR,
+            layout::BASE_ALIAS_DIR,
+            layout::ROLLBACK_DIR,
+        ] {
+            let (ce, de) = self.area_paths(area, &[token.as_str(), package.as_str()])?;
+            remove_tree_if_exists(&ce)?;
+            remove_tree_if_exists(&de)?;
         }
         Ok(())
     }

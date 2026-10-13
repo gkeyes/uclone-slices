@@ -23,7 +23,7 @@ fn identifiers_only_enforce_operational_grammar() {
 fn restore_policy_accepts_single_wildcards_and_rejects_unsafe_or_overlapping_paths() {
     let valid = RestorePolicy::PreservePaths {
         paths: vec![RestorePath {
-            domain: RestoreDomain::Ce,
+            domain: ArchiveDomain::Ce,
             path: "files/Dolphin/*/Paks".to_owned(),
         }],
     };
@@ -33,7 +33,7 @@ fn restore_policy_accepts_single_wildcards_and_rejects_unsafe_or_overlapping_pat
         assert_eq!(
             RestorePolicy::PreservePaths {
                 paths: vec![RestorePath {
-                    domain: RestoreDomain::Ce,
+                    domain: ArchiveDomain::Ce,
                     path: path.to_owned(),
                 }],
             }
@@ -44,11 +44,11 @@ fn restore_policy_accepts_single_wildcards_and_rejects_unsafe_or_overlapping_pat
     let overlapping = RestorePolicy::PreservePaths {
         paths: vec![
             RestorePath {
-                domain: RestoreDomain::Ce,
+                domain: ArchiveDomain::Ce,
                 path: "files/game".to_owned(),
             },
             RestorePath {
-                domain: RestoreDomain::Ce,
+                domain: ArchiveDomain::Ce,
                 path: "files/game/Paks".to_owned(),
             },
         ],

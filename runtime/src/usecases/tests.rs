@@ -1887,7 +1887,7 @@ fn restore_lease_setup_failure_keeps_the_intent_when_staging_cleanup_fails() {
         TransferId::new("transfer-setup-cleanup").unwrap(),
         vec![RestoreMapping {
             archive_account_id: archive_id,
-            archive_kind: ArchivedAccountKind::Slot,
+            archive_kind: ArchiveAccountKind::Slot,
             name: DisplayName::new("Restored work").unwrap(),
             target: RestoreTarget::New,
             restore_policy: RestorePolicy::Replace,
@@ -1929,7 +1929,7 @@ fn begin_new_slot_restore(runtime: &mut TestRuntime) -> (AccountIoToken, Archive
             TransferId::new("transfer-metadata").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Slot,
+                archive_kind: ArchiveAccountKind::Slot,
                 name: DisplayName::new("Restored work").unwrap(),
                 target: RestoreTarget::New,
                 restore_policy: RestorePolicy::Replace,
@@ -2037,7 +2037,7 @@ fn restore_blocks_launch_before_exposing_base_or_maintenance_views() {
             TransferId::new("transfer-order").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Base").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2079,7 +2079,7 @@ fn restore_policy_is_persisted_in_schema_two_while_schema_one_defaults_to_replac
     let archive_id = ArchiveAccountId::new("account-policy").unwrap();
     let policy = RestorePolicy::PreservePaths {
         paths: vec![RestorePath {
-            domain: RestoreDomain::Ce,
+            domain: ArchiveDomain::Ce,
             path: "files/UE4Game/DeltaForce/DeltaForce/Saved/Puffer".to_owned(),
         }],
     };
@@ -2090,7 +2090,7 @@ fn restore_policy_is_persisted_in_schema_two_while_schema_one_defaults_to_replac
             TransferId::new("transfer-policy").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Base").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2143,7 +2143,7 @@ fn insufficient_base_rollback_capacity_preserves_ready_intent_and_staging() {
             transfer_id.clone(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Base").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2224,7 +2224,7 @@ fn insufficient_base_capacity_from_an_active_slot_can_abort_to_the_previous_view
             transfer_id.clone(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Base").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2291,14 +2291,14 @@ fn base_capacity_check_leaves_maintenance_after_an_earlier_slot_restore() {
             vec![
                 RestoreMapping {
                     archive_account_id: slot_archive.clone(),
-                    archive_kind: ArchivedAccountKind::Slot,
+                    archive_kind: ArchiveAccountKind::Slot,
                     name: DisplayName::new("Work").unwrap(),
                     target: RestoreTarget::New,
                     restore_policy: RestorePolicy::Replace,
                 },
                 RestoreMapping {
                     archive_account_id: base_archive.clone(),
-                    archive_kind: ArchivedAccountKind::Base,
+                    archive_kind: ArchiveAccountKind::Base,
                     name: DisplayName::new("Base").unwrap(),
                     target: RestoreTarget::Existing {
                         slot: SlotId::base(),
@@ -2341,7 +2341,7 @@ fn single_account_restore_replaces_base_without_launching_the_app() {
             TransferId::new("transfer-0").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Ignored Base name").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2386,7 +2386,7 @@ fn abort_after_final_cleanup_failure_finishes_the_committed_restore() {
             TransferId::new("transfer-cleanup-retry").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Slot,
+                archive_kind: ArchiveAccountKind::Slot,
                 name: DisplayName::new("Restored work").unwrap(),
                 target: RestoreTarget::New,
                 restore_policy: RestorePolicy::Replace,
@@ -2441,7 +2441,7 @@ fn boot_recovery_after_final_cleanup_failure_preserves_the_committed_restore() {
             TransferId::new("transfer-cleanup-boot").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Slot,
+                archive_kind: ArchiveAccountKind::Slot,
                 name: DisplayName::new("Restored work").unwrap(),
                 target: RestoreTarget::New,
                 restore_policy: RestorePolicy::Replace,
@@ -2495,7 +2495,7 @@ fn base_restore_leaves_the_maintenance_view_before_replacing_base() {
             TransferId::new("transfer-base-view").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Base").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2539,7 +2539,7 @@ fn boot_recovery_leaves_maintenance_before_rolling_back_base() {
             transfer_id.clone(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Base").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2620,7 +2620,7 @@ fn restored_new_account_is_committed_to_the_ordinary_aggregate_only_after_data_s
             TransferId::new("transfer-1").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Slot,
+                archive_kind: ArchiveAccountKind::Slot,
                 name: DisplayName::new("Restored work").unwrap(),
                 target: RestoreTarget::New,
                 restore_policy: RestorePolicy::Replace,
@@ -2661,7 +2661,7 @@ fn abort_before_the_first_restore_commit_does_not_stop_or_relaunch_the_app() {
             TransferId::new("transfer-abort").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id,
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Base").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2703,7 +2703,7 @@ fn abort_after_maintenance_never_relaunches_a_previously_disabled_package() {
             TransferId::new("transfer-disabled").unwrap(),
             vec![RestoreMapping {
                 archive_account_id: archive_id.clone(),
-                archive_kind: ArchivedAccountKind::Base,
+                archive_kind: ArchiveAccountKind::Base,
                 name: DisplayName::new("Base").unwrap(),
                 target: RestoreTarget::Existing {
                     slot: SlotId::base(),
@@ -2736,7 +2736,7 @@ fn abort_after_maintenance_never_relaunches_a_previously_disabled_package() {
 fn single_account_restore_never_crosses_the_base_account_boundary() {
     let slot_archive_to_base = vec![RestoreMapping {
         archive_account_id: ArchiveAccountId::new("account-1").unwrap(),
-        archive_kind: ArchivedAccountKind::Slot,
+        archive_kind: ArchiveAccountKind::Slot,
         name: DisplayName::new("Work").unwrap(),
         target: RestoreTarget::Existing {
             slot: SlotId::base(),
@@ -2745,7 +2745,7 @@ fn single_account_restore_never_crosses_the_base_account_boundary() {
     }];
     let base_archive_to_new = vec![RestoreMapping {
         archive_account_id: ArchiveAccountId::new("base").unwrap(),
-        archive_kind: ArchivedAccountKind::Base,
+        archive_kind: ArchiveAccountKind::Base,
         name: DisplayName::new("Base").unwrap(),
         target: RestoreTarget::New,
         restore_policy: RestorePolicy::Replace,

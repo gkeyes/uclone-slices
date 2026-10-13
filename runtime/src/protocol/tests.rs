@@ -308,3 +308,41 @@ fn runtime_with_slot() -> Runtime<MemoryPackageStore, MemorySlotStorage, MemoryA
         .unwrap();
     runtime
 }
+
+#[test]
+fn shared_archive_enums_keep_their_wire_names() {
+    use crate::model::{ArchiveAccountKind, ArchiveDomain, ArchiveScope};
+
+    for (value, wire) in [
+        (serde_json::to_string(&ArchiveScope::Account), "\"account\""),
+        (
+            serde_json::to_string(&ArchiveScope::AllAccounts),
+            "\"all_accounts\"",
+        ),
+        (serde_json::to_string(&ArchiveAccountKind::Base), "\"base\""),
+        (serde_json::to_string(&ArchiveAccountKind::Slot), "\"slot\""),
+        (serde_json::to_string(&ArchiveDomain::Ce), "\"ce\""),
+        (serde_json::to_string(&ArchiveDomain::De), "\"de\""),
+    ] {
+        assert_eq!(value.unwrap(), wire);
+    }
+}
+
+#[test]
+fn shared_restore_fixture_round_trips_through_the_merged_types() {
+    let request: serde_json::Value =
+        serde_json::from_str(&fixture("begin_restore_io.request.json".to_owned())).unwrap();
+    let mappings: Vec<RestoreMapping> =
+        serde_json::from_value(request["mappings"].clone()).unwrap();
+    let archived_state: ArchivedState =
+        serde_json::from_value(request["archived_state"].clone()).unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&mappings).unwrap(),
+        request["mappings"]
+    );
+    assert_eq!(
+        serde_json::to_value(&archived_state).unwrap(),
+        request["archived_state"]
+    );
+}

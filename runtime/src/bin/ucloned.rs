@@ -12,13 +12,12 @@ use std::sync::{Arc, Mutex};
 
 use boot::{BOOT_ID_PATH, prepare_runtime_root, reconcile_once_per_boot, wait_for_user0_ready};
 use rpc::{OPERATION_FAILED_RESPONSE, RequestHandler, serialize_transaction, spawn_connection};
+use uclone_slices_runtime::layout::RUNTIME_ROOT;
 use uclone_slices_runtime::{handle_line, production};
-
-const DEFAULT_ROOT: &str = "/data/adb/uclone-slices-v2";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root =
-        PathBuf::from(env::var("UCLONE_RUNTIME_ROOT").unwrap_or_else(|_| DEFAULT_ROOT.to_owned()));
+        PathBuf::from(env::var("UCLONE_RUNTIME_ROOT").unwrap_or_else(|_| RUNTIME_ROOT.to_owned()));
     let socket = env::var("UCLONE_RUNTIME_SOCKET")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("runtime.sock"));

@@ -6,15 +6,14 @@ use thiserror::Error;
 
 use crate::model::{
     AccountIoIntent, AccountIoKind, AccountIoLease, AccountIoPhase, AccountIoScope,
-    AccountIoSource, AccountIoStatus, AccountIoToken, ArchiveAccountId, ArchiveScope,
-    ArchivedAccountKind, ArchivedState, BindingState, Capabilities, DisplayName, ModelError,
-    ObservedView, PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection,
-    PackageName, PackageSnapshot, RebindIntent, ResolvedRestoreMapping, RestoreBatchResult,
-    RestoreItemResult, RestoreItemState, RestoreMapping, RestoreTarget, SeedMode, SigningIdentity,
-    SlotId, TransferId,
+    AccountIoSource, AccountIoStatus, AccountIoToken, ArchiveAccountId, ArchiveAccountKind,
+    ArchiveScope, ArchivedState, BindingState, Capabilities, DisplayName, ModelError, ObservedView,
+    PackageAggregate, PackageBinding, PackageEnabledState, PackageInspection, PackageName,
+    PackageSnapshot, RebindIntent, ResolvedRestoreMapping, RestoreBatchResult, RestoreItemResult,
+    RestoreItemState, RestoreMapping, RestoreTarget, SeedMode, SigningIdentity, SlotId, TransferId,
 };
 #[cfg(test)]
-use crate::model::{RestoreDomain, RestorePath, RestorePolicy};
+use crate::model::{ArchiveDomain, RestorePath, RestorePolicy};
 use crate::ports::{AdapterError, AndroidOps, PackageStore, SlotStorage};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -2028,9 +2027,9 @@ fn validate_restore_mapping_rules(
     }
     if mappings.iter().any(|mapping| match &mapping.target {
         RestoreTarget::Existing { slot } => {
-            (mapping.archive_kind == ArchivedAccountKind::Base) != slot.is_base()
+            (mapping.archive_kind == ArchiveAccountKind::Base) != slot.is_base()
         }
-        RestoreTarget::New => mapping.archive_kind == ArchivedAccountKind::Base,
+        RestoreTarget::New => mapping.archive_kind == ArchiveAccountKind::Base,
     }) {
         return Err(RuntimeError::InvalidRequest);
     }
@@ -2043,7 +2042,7 @@ fn validate_restore_mapping_rules(
         ArchiveScope::AllAccounts => {
             let base_mappings = mappings
                 .iter()
-                .filter(|mapping| mapping.archive_kind == ArchivedAccountKind::Base)
+                .filter(|mapping| mapping.archive_kind == ArchiveAccountKind::Base)
                 .count();
             if base_mappings != 1 {
                 return Err(RuntimeError::InvalidRequest);

@@ -5,6 +5,9 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use crate::archive::{ArchiveAccountKind, ArchiveDomain, ArchiveScope};
+use crate::validation;
+
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModelError {
     #[error("invalid package name")]
@@ -30,14 +33,7 @@ pub struct PackageName(String);
 impl PackageName {
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        let valid = !value.is_empty()
-            && value.contains('.')
-            && !value.starts_with('.')
-            && !value.ends_with('.')
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_'));
-        valid
+        validation::is_package_name(&value)
             .then_some(Self(value))
             .ok_or(ModelError::InvalidPackage)
     }
@@ -86,10 +82,7 @@ impl SlotId {
 
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        let numbered = value.strip_prefix("slot-").is_some_and(|number| {
-            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-        });
-        (value == "base" || numbered)
+        validation::is_slot_id(&value)
             .then_some(Self(value))
             .ok_or(ModelError::InvalidSlot)
     }
@@ -217,30 +210,9 @@ impl SigningIdentity {
     }
 
     pub fn validate(&self) -> Result<(), ModelError> {
-        let valid_digest = |value: &String| {
-            value.len() == 64
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-        };
-        if self.sha256.is_empty() || self.sha256.len() > 16 || !self.sha256.iter().all(valid_digest)
-        {
-            return Err(ModelError::InvalidSigningIdentity);
-        }
-        let unique = self.sha256.iter().collect::<BTreeSet<_>>();
-        if unique.len() != self.sha256.len() {
-            return Err(ModelError::InvalidSigningIdentity);
-        }
-        if self.kind == SigningKind::Multiple
-            && (self.sha256.len() < 2
-                || !self
-                    .sha256
-                    .windows(2)
-                    .all(|pair| pair[0].as_str() < pair[1].as_str()))
-        {
-            return Err(ModelError::InvalidSigningIdentity);
-        }
-        Ok(())
+        validation::is_signing_digest_set(self.kind == SigningKind::Multiple, &self.sha256)
+            .then_some(())
+            .ok_or(ModelError::InvalidSigningIdentity)
     }
 
     pub fn is_compatible_with(&self, persisted: &Self) -> bool {
@@ -339,17 +311,6 @@ impl ObservedView {
     }
 }
 
-fn valid_account_io_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value != "."
-        && value != ".."
-        && !value.starts_with('.')
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct AccountIoToken(String);
@@ -357,12 +318,9 @@ pub struct AccountIoToken(String);
 impl AccountIoToken {
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        (value.len() == 32
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')))
-        .then_some(Self(value))
-        .ok_or(ModelError::InvalidState)
+        validation::is_io_token(&value)
+            .then_some(Self(value))
+            .ok_or(ModelError::InvalidState)
     }
 
     pub fn from_bytes(bytes: [u8; 16]) -> Self {
@@ -402,7 +360,7 @@ pub struct ArchiveAccountId(String);
 impl ArchiveAccountId {
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        valid_account_io_id(&value)
+        validation::is_identifier(&value)
             .then_some(Self(value))
             .ok_or(ModelError::InvalidState)
     }
@@ -435,7 +393,7 @@ pub struct TransferId(String);
 impl TransferId {
     pub fn new(value: impl Into<String>) -> Result<Self, ModelError> {
         let value = value.into();
-        valid_account_io_id(&value)
+        validation::is_identifier(&value)
             .then_some(Self(value))
             .ok_or(ModelError::InvalidState)
     }
@@ -469,53 +427,18 @@ pub enum AccountIoKind {
     Restore,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchiveScope {
-    Account,
-    AllAccounts,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchivedAccountKind {
-    Base,
-    Slot,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RestoreDomain {
-    Ce,
-    De,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RestorePath {
-    pub domain: RestoreDomain,
+    pub domain: ArchiveDomain,
     pub path: String,
 }
 
 impl RestorePath {
     pub(crate) fn validate(&self) -> Result<(), ModelError> {
-        if self.path.is_empty() || self.path.len() > 4096 || self.path.starts_with('/') {
-            return Err(ModelError::InvalidState);
-        }
-        let segments = self.path.split('/').collect::<Vec<_>>();
-        if segments.is_empty()
-            || segments.iter().any(|segment| {
-                segment.is_empty()
-                    || matches!(*segment, "." | ".." | "**")
-                    || (*segment != "*"
-                        && !segment.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-                        }))
-            })
-        {
-            return Err(ModelError::InvalidState);
-        }
-        Ok(())
+        validation::is_path_pattern(&self.path)
+            .then_some(())
+            .ok_or(ModelError::InvalidState)
     }
 }
 
@@ -534,7 +457,7 @@ impl RestorePolicy {
         let Self::PreservePaths { paths } = self else {
             return Ok(());
         };
-        if paths.is_empty() || paths.len() > 64 {
+        if paths.is_empty() || paths.len() > validation::MAX_PATH_RULES {
             return Err(ModelError::InvalidState);
         }
         for path in paths {
@@ -543,18 +466,15 @@ impl RestorePolicy {
         if paths.iter().collect::<BTreeSet<_>>().len() != paths.len() {
             return Err(ModelError::InvalidState);
         }
-        for (index, left) in paths.iter().enumerate() {
-            for right in paths.iter().skip(index + 1) {
-                if left.domain == right.domain && restore_patterns_overlap(&left.path, &right.path)
-                {
-                    return Err(ModelError::InvalidState);
-                }
-            }
+        if validation::any_patterns_overlap(
+            paths.iter().map(|path| (path.domain, path.path.as_str())),
+        ) {
+            return Err(ModelError::InvalidState);
         }
         Ok(())
     }
 
-    pub(crate) fn paths_for(&self, domain: RestoreDomain) -> Vec<&str> {
+    pub(crate) fn paths_for(&self, domain: ArchiveDomain) -> Vec<&str> {
         match self {
             Self::Replace => Vec::new(),
             Self::PreservePaths { paths } => paths
@@ -564,16 +484,6 @@ impl RestorePolicy {
                 .collect(),
         }
     }
-}
-
-fn restore_patterns_overlap(left: &str, right: &str) -> bool {
-    let left = left.split('/').collect::<Vec<_>>();
-    let right = right.split('/').collect::<Vec<_>>();
-    let shared = left.len().min(right.len());
-    left.iter()
-        .take(shared)
-        .zip(right.iter().take(shared))
-        .all(|(left, right)| left == right || *left == "*" || *right == "*")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -587,7 +497,7 @@ pub enum RestoreTarget {
 #[serde(deny_unknown_fields)]
 pub struct RestoreMapping {
     pub archive_account_id: ArchiveAccountId,
-    pub archive_kind: ArchivedAccountKind,
+    pub archive_kind: ArchiveAccountKind,
     pub name: DisplayName,
     pub target: RestoreTarget,
     #[serde(default)]
@@ -697,7 +607,7 @@ pub struct AccountIoStatus {
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResolvedRestoreMapping {
     pub archive_account_id: ArchiveAccountId,
-    pub archive_kind: ArchivedAccountKind,
+    pub archive_kind: ArchiveAccountKind,
     pub name: DisplayName,
     pub previous_name: Option<DisplayName>,
     pub target_slot: SlotId,

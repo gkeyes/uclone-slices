@@ -6,6 +6,7 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::layout;
 use crate::model::{
     AccountIoToken, Capabilities, ObservedView, PackageEnabledState, PackageIdentity,
     PackageInspection, PackageName, SlotId,
@@ -109,24 +110,13 @@ impl SystemAndroidOps {
         package: &PackageName,
         token: &AccountIoToken,
     ) -> Result<(PathBuf, PathBuf), AdapterError> {
-        let ce_root = self
-            .ce_slots_root
-            .parent()
-            .ok_or_else(|| AdapterError::new("CE slots root has no storage parent"))?;
-        let de_root = self
-            .de_slots_root
-            .parent()
-            .ok_or_else(|| AdapterError::new("DE slots root has no storage parent"))?;
-        Ok((
-            ce_root
-                .join("maintenance")
-                .join(token.as_str())
-                .join(package.as_str()),
-            de_root
-                .join("maintenance")
-                .join(token.as_str())
-                .join(package.as_str()),
-        ))
+        layout::storage_paths(
+            &self.ce_slots_root,
+            &self.de_slots_root,
+            layout::MAINTENANCE_DIR,
+            &[token.as_str(), package.as_str()],
+        )
+        .ok_or_else(|| AdapterError::new("slots root has no storage parent"))
     }
 
     fn package_enabled_state(
@@ -892,13 +882,13 @@ fn paired_view(ce: Option<Option<SlotId>>, de: Option<Option<SlotId>>) -> Observ
 fn app_domain_view(roots: &[String], package: &PackageName) -> Option<Option<SlotId>> {
     if roots
         .iter()
-        .any(|root| root.contains("/uclone-slices-v2/maintenance/"))
+        .any(|root| root.contains(layout::MAINTENANCE_MOUNT_MARKER))
     {
         return None;
     }
     let v2_roots: Vec<_> = roots
         .iter()
-        .filter(|root| root.contains("/uclone-slices-v2/slots/"))
+        .filter(|root| root.contains(layout::SLOTS_MOUNT_MARKER))
         .collect();
     if v2_roots.is_empty() {
         return Some(None);
@@ -926,7 +916,7 @@ fn mount_roots(content: &str, mount_point: &Path) -> Vec<String> {
 }
 
 fn slot_from_mount_root(root: &str, package: &PackageName) -> Option<SlotId> {
-    let marker = format!("/uclone-slices-v2/slots/{}/", package.as_str());
+    let marker = format!("{}{}/", layout::SLOTS_MOUNT_MARKER, package.as_str());
     let slot = root.split_once(&marker)?.1;
     (!slot.contains('/'))
         .then(|| SlotId::new(slot.to_owned()).ok())
@@ -934,8 +924,7 @@ fn slot_from_mount_root(root: &str, package: &PackageName) -> Option<SlotId> {
 }
 
 fn maintenance_from_mount_root(root: &str, package: &PackageName) -> Option<AccountIoToken> {
-    let marker = "/uclone-slices-v2/maintenance/";
-    let tail = root.split_once(marker)?.1;
+    let tail = root.split_once(layout::MAINTENANCE_MOUNT_MARKER)?.1;
     let (token, owner) = tail.split_once('/')?;
     (owner == package.as_str() && !token.contains('/'))
         .then(|| AccountIoToken::new(token.to_owned()).ok())

@@ -8,12 +8,11 @@ use uclone_slices_runtime::archive::{
     create_backup_with_progress, inspect_backup, read_control_frame, restore_backup_with_progress,
     write_response,
 };
-
-const MANAGER_PACKAGE: &str = "com.uclone.slices.v2";
-const CE_SLOTS_ROOT: &str = "/data/misc_ce/0/uclone-slices-v2/slots";
-const DE_SLOTS_ROOT: &str = "/data/misc_de/0/uclone-slices-v2/slots";
-const CE_TRANSFERS_ROOT: &str = "/data/misc_ce/0/uclone-slices-v2/transfers";
-const DE_TRANSFERS_ROOT: &str = "/data/misc_de/0/uclone-slices-v2/transfers";
+use uclone_slices_runtime::layout::{
+    CE_SLOTS_ROOT, CE_TRANSFERS_ROOT, DE_SLOTS_ROOT, DE_TRANSFERS_ROOT, USER_CE_ROOT, USER_DE_ROOT,
+    manager_cache_roots,
+};
+use uclone_slices_runtime::validation;
 
 fn main() {
     let response = match run() {
@@ -110,14 +109,7 @@ fn require_end_of_input(reader: &mut impl Read) -> Result<(), ArchiveError> {
 
 fn validate_manager_cache_path(path: &Path, must_exist: bool) -> Result<(), ArchiveError> {
     validate_absolute_normal_path(path)?;
-    let allowed = [
-        PathBuf::from("/data/user/0")
-            .join(MANAGER_PACKAGE)
-            .join("cache"),
-        PathBuf::from("/data/data")
-            .join(MANAGER_PACKAGE)
-            .join("cache"),
-    ];
+    let allowed = manager_cache_roots();
     let root = allowed
         .iter()
         .find(|root| path.starts_with(root))
@@ -135,14 +127,7 @@ fn validate_manager_cache_path(path: &Path, must_exist: bool) -> Result<(), Arch
 }
 
 fn manager_cache_owner(path: &Path) -> Result<(u32, u32), ArchiveError> {
-    let allowed = [
-        PathBuf::from("/data/user/0")
-            .join(MANAGER_PACKAGE)
-            .join("cache"),
-        PathBuf::from("/data/data")
-            .join(MANAGER_PACKAGE)
-            .join("cache"),
-    ];
+    let allowed = manager_cache_roots();
     let root = allowed
         .iter()
         .find(|root| path.starts_with(root))
@@ -178,11 +163,11 @@ fn validate_backup_source(
     de_path: &Path,
 ) -> Result<(), ArchiveError> {
     validate_package(package)?;
-    validate_identifier(slot)?;
+    require(validation::is_slot_id(slot))?;
     let expected = if slot == "base" {
         (
-            PathBuf::from("/data/user/0").join(package),
-            PathBuf::from("/data/user_de/0").join(package),
+            PathBuf::from(USER_CE_ROOT).join(package),
+            PathBuf::from(USER_DE_ROOT).join(package),
         )
     } else {
         (
@@ -221,12 +206,9 @@ fn validate_transfer_destination(
             _ => Err(ArchiveError::Invalid),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    validate_identifier(values[0])?;
-    if values[0].len() != 32 {
-        return Err(ArchiveError::Invalid);
-    }
+    require(validation::is_io_token(values[0]))?;
     validate_package(values[1])?;
-    validate_identifier(values[2])?;
+    require(validation::is_identifier(values[2]))?;
     require_real_directory(path)
 }
 
@@ -243,34 +225,11 @@ fn validate_absolute_normal_path(path: &Path) -> Result<(), ArchiveError> {
 }
 
 fn validate_package(value: &str) -> Result<(), ArchiveError> {
-    if value.len() > 255
-        || value.split('.').count() < 2
-        || value.split('.').any(|part| {
-            part.is_empty()
-                || part.len() > 63
-                || !part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        })
-    {
-        return Err(ArchiveError::Invalid);
-    }
-    Ok(())
+    require(validation::is_package_name(value))
 }
 
-fn validate_identifier(value: &str) -> Result<(), ArchiveError> {
-    if value.is_empty()
-        || value.len() > 64
-        || value == "."
-        || value == ".."
-        || value.starts_with('.')
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(ArchiveError::Invalid);
-    }
-    Ok(())
+fn require(valid: bool) -> Result<(), ArchiveError> {
+    valid.then_some(()).ok_or(ArchiveError::Invalid)
 }
 
 fn require_real_directory(path: &Path) -> Result<(), ArchiveError> {
