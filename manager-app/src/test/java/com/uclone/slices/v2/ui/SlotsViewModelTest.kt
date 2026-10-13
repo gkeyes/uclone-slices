@@ -1013,6 +1013,23 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun anAddAppPageRestoredByTheBackStackLoadsTheCatalog() {
+        val apps = RefreshingCatalogSource()
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+        val viewModel = slotsViewModel(client, apps, Dispatchers.Unconfined)
+        assertFalse(viewModel.state.value.appCatalogLoaded)
+
+        viewModel.onIntent(UiIntent.DestinationChanged(ManagerDestination.AddApp))
+
+        assertTrue(viewModel.state.value.appCatalogLoaded)
+        assertEquals(1, apps.catalogReads)
+        assertEquals(
+            setOf("com.example.app", "com.other.app"),
+            viewModel.state.value.installedApps.map(InstalledApp::packageName).toSet(),
+        )
+    }
+
+    @Test
     fun homeOrderIsEditedInTheViewModelAndSavedOnlyOnSave() {
         val preferences = MemoryManagerUiPreferences()
         val viewModel = slotsViewModel(

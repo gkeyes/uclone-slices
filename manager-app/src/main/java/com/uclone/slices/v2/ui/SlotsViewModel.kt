@@ -202,6 +202,18 @@ internal class SlotsViewModel(
     private fun destinationChanged(destination: ManagerDestination, packageName: String?) {
         val previous = this.destination
         this.destination = destination
+        // An Add App page restored by the back stack (after process death) needs the catalog
+        // too. A refresh still running loads it when it ends, as it does for the visible page.
+        val snapshot = state.value
+        if (
+            destination == ManagerDestination.AddApp &&
+            !snapshot.appCatalogLoaded &&
+            !snapshot.appCatalogLoading &&
+            snapshot.operation !is OperationUiState.Refreshing &&
+            snapshot.operation != OperationUiState.RestartingRuntime
+        ) {
+            loadAppCatalog()
+        }
         // A package page restored by the back stack (after process death) names its package
         // while this view model has no selection yet: select it now if it is known, otherwise
         // when the refresh lists it.
