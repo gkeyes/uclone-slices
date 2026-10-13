@@ -299,6 +299,7 @@ internal fun SwitchRow(
     enabled: Boolean = true,
     titleColor: Color = TextPrimary,
     horizontalPadding: Dp = Space.md,
+    animateSummary: Boolean = true,
 ) {
     val haptic = LocalHapticFeedback.current
     val toggle: (Boolean) -> Unit = {
@@ -328,8 +329,15 @@ internal fun SwitchRow(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(text = title, color = titleColor, fontSize = TypeScale.body, lineHeight = 22.sp)
             if (!summary.isNullOrBlank()) {
-                AnimatedContent(summary, transitionSpec = fadeThrough(), label = "switch-summary") {
+                val summaryText: @Composable (String) -> Unit = {
                     Text(text = it, color = TextSecondary, fontSize = TypeScale.subhead, lineHeight = 20.sp)
+                }
+                if (animateSummary) {
+                    AnimatedContent(summary, transitionSpec = fadeThrough(), label = "switch-summary") {
+                        summaryText(it)
+                    }
+                } else {
+                    summaryText(summary)
                 }
             }
         }

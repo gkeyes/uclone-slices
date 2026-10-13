@@ -46,9 +46,17 @@ internal fun StatusDot(tone: Tone, modifier: Modifier = Modifier, size: Dp = 10.
     )
 }
 
-/** StatusChip: tone container + tone text with a dot; colours animate, label fades through. */
+/**
+ * StatusChip: tone container + tone text with a dot; colours animate, and a changing label fades
+ * through. Pass [animateText] = false for a label that never changes to skip the AnimatedContent.
+ */
 @Composable
-internal fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier) {
+internal fun StatusChip(
+    text: String,
+    tone: Tone,
+    modifier: Modifier = Modifier,
+    animateText: Boolean = true,
+) {
     val container by animateColorAsState(tone.container(), Motion.effects(), label = "chip-bg")
     val content by animateColorAsState(tone.onContainer(), Motion.effects(), label = "chip-fg")
     Row(
@@ -66,15 +74,21 @@ internal fun StatusChip(text: String, tone: Tone, modifier: Modifier = Modifier)
                 .clip(CircleShape)
                 .background(content),
         )
-        AnimatedContent(text, transitionSpec = fadeThrough(), label = "chip-text") {
+        val label: @Composable (String) -> Unit = {
             Text(text = it, color = content, fontSize = TypeScale.caption, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        }
+        if (animateText) {
+            AnimatedContent(text, transitionSpec = fadeThrough(), label = "chip-text") { label(it) }
+        } else {
+            label(text)
         }
     }
 }
 
 /**
  * Inline banner for warnings, results and recovery prompts: tone container, optional headline,
- * body text and an optional slot for actions.
+ * body text and an optional slot for actions. Changing text fades through; pass [animateText] =
+ * false for text that never changes to skip the AnimatedContent.
  */
 @Composable
 internal fun Banner(
@@ -83,6 +97,7 @@ internal fun Banner(
     modifier: Modifier = Modifier,
     title: String? = null,
     gutter: Boolean = true,
+    animateText: Boolean = true,
     content: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val container by animateColorAsState(tone.container(), Motion.effects(), label = "banner-bg")
@@ -109,8 +124,13 @@ internal fun Banner(
             if (title != null) {
                 Text(text = title, color = onContainer, fontSize = TypeScale.body, fontWeight = FontWeight.SemiBold)
             }
-            AnimatedContent(text, transitionSpec = fadeThrough(), label = "banner-text") {
+            val body: @Composable (String) -> Unit = {
                 Text(text = it, color = onContainer, fontSize = TypeScale.subhead, lineHeight = 20.sp)
+            }
+            if (animateText) {
+                AnimatedContent(text, transitionSpec = fadeThrough(), label = "banner-text") { body(it) }
+            } else {
+                body(text)
             }
             content?.invoke(this)
         }

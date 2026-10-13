@@ -117,6 +117,7 @@ internal fun BackupSetupContent(
                     summary = stringResource(R.string.password_protection_default),
                     checked = state.passwordProtected,
                     onCheckedChange = { onIntent(BackupUiIntent.PasswordProtectionChanged(it)) },
+                    animateSummary = false,
                 )
                 AnimatedVisibility(
                     visible = state.passwordProtected,
@@ -164,6 +165,7 @@ internal fun BackupSetupContent(
                     text = stringResource(R.string.profile_backup_automatic),
                     tone = Tone.Info,
                     modifier = Modifier.animateItem(),
+                    animateText = false,
                 )
             }
         }

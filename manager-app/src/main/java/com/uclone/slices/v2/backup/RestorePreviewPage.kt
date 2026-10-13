@@ -134,6 +134,7 @@ internal fun RestorePreviewContent(
                 Banner(
                     text = stringResource(R.string.signature_mismatch_warning),
                     tone = Tone.Danger,
+                    animateText = false,
                 )
             }
         }

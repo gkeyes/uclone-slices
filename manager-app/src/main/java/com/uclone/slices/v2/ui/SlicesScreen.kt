@@ -279,6 +279,7 @@ private fun DeleteSpaceSheet(
                 text = stringResource(R.string.delete_space_data_warning),
                 tone = Tone.Danger,
                 gutter = false,
+                animateText = false,
             )
             SheetNote(stringResource(R.string.delete_space_current_preserved))
         }

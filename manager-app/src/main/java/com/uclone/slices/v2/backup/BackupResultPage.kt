@@ -103,7 +103,11 @@ internal fun ResultContent(
             restoreResult.result.items.any { it.state == RestoreItemState.Restored }
         ) {
             item(key = "not_started") {
-                Banner(text = stringResource(R.string.restore_app_not_started), tone = Tone.Info)
+                Banner(
+                    text = stringResource(R.string.restore_app_not_started),
+                    tone = Tone.Info,
+                    animateText = false,
+                )
             }
         }
         restoreResult?.let { completed ->

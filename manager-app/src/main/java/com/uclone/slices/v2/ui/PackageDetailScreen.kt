@@ -236,7 +236,11 @@ private fun CurrentSpaceCard(
             }
         }
         Spacer(Modifier.height(Space.md))
-        StatusChip(text = stringResource(R.string.currently_using), tone = Tone.Success)
+        StatusChip(
+            text = stringResource(R.string.currently_using),
+            tone = Tone.Success,
+            animateText = false,
+        )
         AnimatedContent(
             targetState = activeSlot,
             transitionSpec = fadeThrough(),
