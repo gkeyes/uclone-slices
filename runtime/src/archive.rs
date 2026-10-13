@@ -13,6 +13,8 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use zeroize::Zeroize as _;
 
+use crate::links::link_resolves_inside;
+
 const MAGIC: &[u8; 8] = b"UCSBKP01";
 const FLAG_ENCRYPTED: u8 = 1;
 const MAX_CONTROL_FRAME_BYTES: u64 = 4 * 1024 * 1024;
@@ -592,6 +594,12 @@ fn restore_backup_inner(
             require_empty_real_directory(&destination.ce_path)?;
             require_empty_real_directory(&destination.de_path)?;
         }
+        ensure_restore_capacity(
+            destinations
+                .iter()
+                .flat_map(|destination| [&destination.ce_path, &destination.de_path]),
+            manifest.logical_size,
+        )?;
         let expected = manifest_entry_index(&manifest);
         let mut seen = BTreeSet::new();
         let mut entry_count = 0_usize;
@@ -804,7 +812,7 @@ fn hash_domain_files(
         if entry.kind != ManifestEntryKind::File {
             continue;
         }
-        let file = File::open(safe_join(root, Path::new(&entry.path))?).map_err(io_error)?;
+        let file = open_regular_nofollow(&safe_join(root, Path::new(&entry.path))?)?;
         let mut reader = HashingReader::new(file.take(entry.size), progress);
         std::io::copy(&mut reader, &mut std::io::sink()).map_err(io_error)?;
         let (digest, read) = reader.finish();
@@ -966,7 +974,10 @@ fn collect_entries(
             });
         } else if metadata.file_type().is_symlink() {
             let target = fs::read_link(&path).map_err(io_error)?;
-            if target.is_absolute() || !relative_link_stays_inside(context.root, &path, &target) {
+            if target.is_absolute()
+                || !relative_link_stays_inside(context.root, &path, &target)
+                || !link_resolves_inside(context.root, &path).map_err(io_error)?
+            {
                 return Err(ArchiveError::Invalid);
             }
             entries.push(ManifestEntry {
@@ -1013,7 +1024,10 @@ fn collect_excluded_stats(
         }
     } else if metadata.file_type().is_symlink() {
         let target = fs::read_link(path).map_err(io_error)?;
-        if target.is_absolute() || !relative_link_stays_inside(root, path, &target) {
+        if target.is_absolute()
+            || !relative_link_stays_inside(root, path, &target)
+            || !link_resolves_inside(root, path).map_err(io_error)?
+        {
             return Err(ArchiveError::Invalid);
         }
     } else {
@@ -1116,7 +1130,7 @@ fn append_domain<W: Write>(
                 header.set_cksum();
                 // Hash while streaming instead of re-reading the file before appending it.
                 // A mismatch fails the whole archive, which is still an unpublished temp file.
-                let file = File::open(source).map_err(io_error)?;
+                let file = open_regular_nofollow(&source)?;
                 let mut reader = HashingReader::new(file.take(entry.size), progress);
                 builder
                     .append_data(&mut header, archive_path, &mut reader)
@@ -1695,6 +1709,42 @@ fn ensure_safe_parent(root: &Path, output: &Path) -> Result<(), ArchiveError> {
     Ok(())
 }
 
+/// Opens a file that the scan saw as a regular file, refusing it if it has since been replaced by a
+/// symbolic link or by something else, so root never reads through a link the app swapped in.
+fn open_regular_nofollow(path: &Path) -> Result<File, ArchiveError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(path)
+        .map_err(io_error)?;
+    let metadata = file.metadata().map_err(io_error)?;
+    if !metadata.file_type().is_file() || metadata.nlink() != 1 {
+        return Err(ArchiveError::Invalid);
+    }
+    Ok(file)
+}
+
+/// Refuses a restore that would not fit before anything is written.
+///
+/// `f_bavail` leaves out the blocks the filesystem reserves for root, so a restore running as root
+/// fails cleanly instead of eating into that reserve and filling `/data` completely.
+fn ensure_restore_capacity<'a>(
+    roots: impl IntoIterator<Item = &'a PathBuf>,
+    required: u64,
+) -> Result<(), ArchiveError> {
+    let mut devices = BTreeSet::new();
+    for root in roots {
+        if !devices.insert(fs::metadata(root).map_err(io_error)?.dev()) {
+            continue;
+        }
+        let stats = rustix::fs::statvfs(root.as_path()).map_err(io_error)?;
+        if required > stats.f_bavail.saturating_mul(stats.f_frsize) {
+            return Err(ArchiveError::InsufficientStorage);
+        }
+    }
+    Ok(())
+}
+
 fn require_real_directory(path: &Path) -> Result<(), ArchiveError> {
     let metadata = fs::symlink_metadata(path).map_err(io_error)?;
     (metadata.file_type().is_dir() && !metadata.file_type().is_symlink())
@@ -2073,6 +2123,30 @@ mod tests {
         );
         assert!(fs::read_dir(ce).unwrap().next().is_none());
         assert!(fs::read_dir(de).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn restore_that_does_not_fit_is_refused_before_writing() -> Result<(), ArchiveError> {
+        let temp = tempfile::tempdir().map_err(io_error)?;
+        let root = temp.path().to_path_buf();
+
+        ensure_restore_capacity([&root, &root], 0)?;
+        assert!(matches!(
+            ensure_restore_capacity([&root], u64::MAX),
+            Err(ArchiveError::InsufficientStorage),
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn file_swapped_for_a_symlink_after_the_scan_is_not_read() -> Result<(), ArchiveError> {
+        let temp = tempfile::tempdir().map_err(io_error)?;
+        fs::write(temp.path().join("secret"), b"secret").map_err(io_error)?;
+        symlink("secret", temp.path().join("swapped")).map_err(io_error)?;
+
+        assert!(open_regular_nofollow(&temp.path().join("secret")).is_ok());
+        assert!(open_regular_nofollow(&temp.path().join("swapped")).is_err());
+        Ok(())
     }
 
     #[test]
