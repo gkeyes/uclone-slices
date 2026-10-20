@@ -482,6 +482,6 @@ private fun DefaultAccountSheet(
                 )
             }
         }
-        SheetNote(stringResource(R.string.default_account_temporary_flows))
+        Footnote(stringResource(R.string.default_account_temporary_flows))
     }
 }
