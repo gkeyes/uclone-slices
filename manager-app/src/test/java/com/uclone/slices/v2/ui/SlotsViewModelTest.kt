@@ -37,6 +37,32 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun pendingModuleMetadataCannotMakeAnOldDaemonAcceptDefaultAccountWrites() {
+        val commands = mutableListOf<RuntimeCommand>()
+        val client = object : RuntimeClient {
+            override suspend fun execute(command: RuntimeCommand): RuntimeReply {
+                commands += command
+                return if (command == RuntimeCommand.Probe) {
+                    // The old executable echoes the newly installed module's environment.
+                    com.uclone.slices.v2.runtime.RuntimeProtocol.decode(
+                        """{"ok":{"build_id":"${BuildConfig.RUNTIME_PROTOCOL_BUILD_ID}"}}""",
+                    )
+                } else {
+                    RuntimeReply.Error(ErrorCode.InvalidRequest)
+                }
+            }
+        }
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.SetDefaultSlot("com.example.app", "base"))
+
+        assertTrue(viewModel.state.value.runtimeReady)
+        assertFalse(viewModel.state.value.runtimeCompatible)
+        assertEquals(UiNotice.RuntimeVersionMismatch, viewModel.state.value.notice)
+        assertEquals(listOf<RuntimeCommand>(RuntimeCommand.Probe), commands)
+    }
+
+    @Test
     fun defaultAccountChoiceSavesPolicyWithoutActivatingAndCanBeDisabled() {
         val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
