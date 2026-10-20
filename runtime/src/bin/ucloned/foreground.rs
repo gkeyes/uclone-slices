@@ -35,9 +35,10 @@ pub(super) struct Snapshot {
 #[derive(Debug, Clone)]
 struct Session {
     since: u128,
-    anchor: Option<(i32, u32)>,
+    identities: BTreeSet<(i32, u32)>,
     tasks: BTreeSet<i32>,
     packages: BTreeSet<String>,
+    continuation: bool,
 }
 
 /// Exceptions exist only for successful Slice activations and only for their current visit.
@@ -80,9 +81,10 @@ impl Sessions {
             package.to_owned(),
             Session {
                 since,
-                anchor,
+                identities: anchor.into_iter().collect(),
                 tasks: anchor.into_iter().map(|(task, _pid)| task).collect(),
                 packages: BTreeSet::from([package.to_owned()]),
+                continuation: snapshot.is_some_and(|snapshot| snapshot.locked),
             },
         );
         // A launch while the screen is locked must not inherit an earlier lock event forever.
@@ -101,13 +103,26 @@ impl Sessions {
             if activity.package == *package {
                 let Some(pid) = activity.pid else { return true };
                 let identity = (activity.task, pid);
-                match session.anchor {
-                    None => {
-                        session.anchor = Some(identity);
-                        session.tasks.insert(activity.task);
-                        true
-                    }
-                    Some(anchor) => anchor == identity,
+                // Internal Activities can use other processes or tasks. A temporary
+                // external flow or screen lock can also outlive the original process.
+                let known_origin = activity
+                    .caller
+                    .as_ref()
+                    .is_some_and(|caller| session.packages.contains(caller))
+                    || activity
+                        .result_task
+                        .is_some_and(|task| session.tasks.contains(&task));
+                if session.identities.is_empty()
+                    || session.identities.contains(&identity)
+                    || known_origin
+                    || session.continuation
+                {
+                    session.identities.insert(identity);
+                    session.tasks.insert(activity.task);
+                    session.continuation = false;
+                    true
+                } else {
+                    false
                 }
             } else if activity.home {
                 false
@@ -124,9 +139,10 @@ impl Sessions {
                 // A later Home or unrelated task removes the whole chain.
                 session.tasks.insert(activity.task);
                 session.packages.insert(activity.package.clone());
+                session.continuation = true;
                 true
             } else {
-                session.anchor.is_none() && activity.package == "com.uclone.slices.v2"
+                session.identities.is_empty() && activity.package == "com.uclone.slices.v2"
             }
         });
     }
@@ -136,6 +152,11 @@ impl Sessions {
             self.event_locked = locked;
         }
         if snapshot.locked || self.event_locked {
+            for session in self.manual.values_mut() {
+                if snapshot.locked || event.timestamp >= session.since {
+                    session.continuation = true;
+                }
+            }
             return None;
         }
         // Apply the event's visit as well as the live snapshot. If Home -> App happened

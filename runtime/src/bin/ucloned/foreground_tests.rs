@@ -213,3 +213,93 @@ fn failed_automatic_switch_does_not_loop_on_its_rollback_relaunch() {
     sessions.observe(&event(&home(), 21), &snapshot(home()));
     assert_eq!(sessions.observe(&event(&app, 22), &snap), Some(app.package));
 }
+
+#[test]
+fn internal_multi_process_activity_keeps_the_manual_session_until_home() {
+    let app = activity("com.example.app", 42, 1234);
+    let initial = snapshot(app.clone());
+    for task in [42, 84] {
+        let mut sessions = Sessions::default();
+        sessions.grant(&app.package, 10, Some(&initial));
+        let internal = Activity {
+            caller: Some(app.package.clone()),
+            ..activity(&app.package, task, 9999)
+        };
+        assert_eq!(
+            sessions.observe(&event(&internal, 11), &snapshot(internal.clone())),
+            None
+        );
+        assert!(sessions.manual.contains_key(&app.package));
+        sessions.observe(&event(&home(), 12), &snapshot(home()));
+        assert_eq!(
+            sessions.observe(&event(&internal, 13), &snapshot(internal.clone())),
+            Some(app.package.clone())
+        );
+    }
+}
+
+#[test]
+fn temporary_return_survives_process_recreation() {
+    let app = activity("com.example.app", 42, 1234);
+    let mut sessions = Sessions::default();
+    sessions.grant(&app.package, 10, Some(&snapshot(app.clone())));
+    let payment = Activity {
+        caller: Some(app.package.clone()),
+        ..activity("com.example.payment", 99, 5555)
+    };
+    sessions.observe(&event(&payment, 11), &snapshot(payment.clone()));
+    let recreated = Activity {
+        pid: Some(9999),
+        ..app
+    };
+    assert_eq!(
+        sessions.observe(&event(&recreated, 12), &snapshot(recreated.clone())),
+        None
+    );
+    assert_eq!(
+        sessions.observe(&event(&recreated, 13), &snapshot(recreated.clone())),
+        None
+    );
+    sessions.observe(&event(&home(), 14), &snapshot(home()));
+    assert_eq!(
+        sessions.observe(&event(&recreated, 15), &snapshot(recreated.clone())),
+        Some(recreated.package)
+    );
+}
+
+#[test]
+fn lock_return_survives_process_recreation() {
+    let app = activity("com.example.app", 42, 1234);
+    let mut sessions = Sessions::default();
+    sessions.grant(&app.package, 10, Some(&snapshot(app.clone())));
+    let locked = Snapshot {
+        locked: true,
+        foreground: None,
+        activities: vec![],
+    };
+    sessions.observe(
+        &Event {
+            timestamp: 11,
+            kind: EventKind::Keyguard(true),
+        },
+        &locked,
+    );
+    let recreated = Activity {
+        pid: Some(9999),
+        ..app
+    };
+    assert_eq!(
+        sessions.observe(
+            &Event {
+                timestamp: 12,
+                kind: EventKind::Keyguard(false)
+            },
+            &snapshot(recreated.clone())
+        ),
+        None
+    );
+    assert_eq!(
+        sessions.observe(&event(&recreated, 13), &snapshot(recreated.clone())),
+        None
+    );
+}
