@@ -60,6 +60,9 @@ class SlotsViewModelTest {
         client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
         viewModel.onIntent(UiIntent.ConfirmDeleteSlot)
         assertEquals("slot-1", viewModel.state.value.selected?.defaultSlot)
+        assertNull(viewModel.state.value.pendingDelete)
+        viewModel.onIntent(UiIntent.RequestDeleteSlot("slot-1"))
+        assertTrue(viewModel.state.value.pendingDelete!!.disablesDefaultAccount)
         viewModel.onIntent(UiIntent.ConfirmDeleteSlot)
         assertNull(viewModel.state.value.selected?.defaultSlot)
     }
