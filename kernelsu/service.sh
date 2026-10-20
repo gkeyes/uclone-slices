@@ -14,7 +14,7 @@ PID_EXE=
 EXPECTED_PROBE_RESPONSE=
 
 [ -n "$BUILD_ID" ] || exit 1
-EXPECTED_PROBE_RESPONSE=$(printf '{"ok":{"build_id":"%s"}}' "$BUILD_ID")
+EXPECTED_PROBE_RESPONSE=$(printf '{"ok":{"build_id":"%s","binary_build_id":"%s"}}' "$BUILD_ID" "$BUILD_ID")
 
 secure_directory() {
     DIRECTORY=$1

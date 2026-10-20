@@ -876,12 +876,13 @@ internal class SlotsViewModel(
         }
         when (val probe = client.execute(RuntimeCommand.Probe)) {
             is RuntimeReply.Capabilities -> {
-                val compatible = probe.buildId == BuildConfig.RUNTIME_PROTOCOL_BUILD_ID
+                val compatible = probe.buildId == BuildConfig.RUNTIME_PROTOCOL_BUILD_ID &&
+                    probe.binaryBuildId == BuildConfig.RUNTIME_PROTOCOL_BUILD_ID
                 mutableState.update {
                     it.copy(
                         runtimeReady = true,
                         runtimeCompatible = compatible,
-                        buildId = probe.buildId,
+                        buildId = probe.binaryBuildId.orEmpty(),
                         packages = if (compatible) it.packages else emptyList(),
                         selected = if (compatible) it.selected else null,
                         posted = if (compatible) {

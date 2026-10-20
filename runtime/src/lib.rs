@@ -12,6 +12,9 @@ pub mod validation;
 pub use composition::{CompositionError, ProductionRuntime, production};
 pub use usecases::RuntimeError;
 
+/// Identity compiled into the executable, independent of module metadata or launch environment.
+pub const BINARY_BUILD_ID: &str = env!("CARGO_PKG_VERSION");
+
 pub fn handle_line(runtime: &mut ProductionRuntime, expected_build_id: &str, line: &str) -> String {
     protocol::handle_line(runtime.inner_mut(), expected_build_id, line)
 }
