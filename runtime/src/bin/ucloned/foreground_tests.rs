@@ -238,6 +238,27 @@ fn a_pending_home_task_does_not_end_the_visit_until_the_app_really_leaves() {
 }
 
 #[test]
+fn a_task_front_hint_cannot_reopen_the_app_without_its_resume_event() {
+    let app = activity("com.example.app", 42, 1234);
+    let snap = snapshot(app.clone());
+    let mut sessions = Sessions::default();
+    sessions.grant(&app.package, 10, Some(&snap));
+    sessions.observe(&event(&home(), 11), &snapshot(home()));
+
+    assert_eq!(
+        sessions.observe(
+            &Event {
+                timestamp: 12,
+                kind: EventKind::TaskFront(app.task)
+            },
+            &snap,
+        ),
+        None,
+    );
+    assert_eq!(sessions.observe(&event(&app, 13), &snap), Some(app.package));
+}
+
+#[test]
 fn process_recreation_is_a_new_entry_even_if_the_task_id_is_unchanged() {
     let app = activity("com.example.app", 42, 1234);
     let mut sessions = Sessions::default();

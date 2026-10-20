@@ -164,7 +164,7 @@ impl Sessions {
             }
             return None;
         }
-        let confirms_entry = !outdated
+        let matches_foreground = !outdated
             && snapshot
                 .foreground
                 .as_ref()
@@ -174,7 +174,7 @@ impl Sessions {
                     EventKind::Keyguard(_) => false,
                 });
         // Bringing a task forward can precede its resume, or be cancelled by a gesture.
-        if matches!(event.kind, EventKind::TaskFront(_)) && !confirms_entry {
+        if matches!(event.kind, EventKind::TaskFront(_)) && !matches_foreground {
             return None;
         }
         // A recorded Home resume ends the visit even if dumpsys still shows the app.
@@ -204,7 +204,8 @@ impl Sessions {
                 self.last_entry = None;
             }
         }
-        if !confirms_entry {
+        // Task-front hints carry no Activity identity and can precede a cancelled resume.
+        if !matches_foreground || !matches!(event.kind, EventKind::Resumed(_)) {
             return None;
         }
         let activity = snapshot.foreground.as_ref()?;
