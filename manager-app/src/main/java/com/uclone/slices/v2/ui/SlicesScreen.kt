@@ -368,6 +368,9 @@ private fun DeleteSpaceSheet(
                 animateText = false,
             )
             SheetNote(stringResource(R.string.delete_space_current_preserved))
+            if (deletion.disablesDefaultAccount) {
+                SheetNote(stringResource(R.string.delete_default_account_warning))
+            }
         }
         SheetActions(
             cancelText = stringResource(R.string.cancel),
@@ -574,6 +577,8 @@ private fun OperationDialog(visible: Boolean, operation: OperationUiState) {
             stringResource(R.string.operation_unenrolling, operation.appLabel)
         is OperationUiState.SavingRebootLaunch ->
             stringResource(R.string.operation_saving_reboot_launch)
+        is OperationUiState.SavingDefaultSlot ->
+            stringResource(R.string.operation_saving_default_account)
         is OperationUiState.RebindingConfiguration ->
             stringResource(R.string.operation_rebinding)
         OperationUiState.RestartingRuntime ->

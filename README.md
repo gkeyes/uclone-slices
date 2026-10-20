@@ -5,13 +5,14 @@
 
 UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前版本为 **v0.2.5**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 协议 ID 为 `0.2.3`；Manager 与 KernelSU 模块需使用同一版本。
+当前版本为 **v0.2.6**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 协议 ID 为 `0.2.6`；Manager 与 KernelSU 模块需使用同一版本。
 
 ## 功能
 
 - 同一个 App 可保存系统原始空间和多个独立分账号。
 - 可创建空白分账号，也可复制系统原始空间。
 - 点击账号即可完成切换并打开 App。
+- 每个 App 可选择默认账号；外部打开或真正离开后返回时自动回默认，Slice 内选择的账号在当前会话有效。拍照、文件选择、支付和锁屏等临时流程返回时保留当前账号。
 - 支持重命名、删除分账号，以及取消应用配置。
 - 支持备份或恢复 Base、单个分账号和全部账号，备份默认使用密码加密。
 - 三角洲行动会自动跳过可重新下载的游戏资源；恢复到已有空间时保留本地资源，只覆盖账号数据。
@@ -44,7 +45,7 @@ Release 产物由 GitHub Actions 从同一提交 SHA 生成：
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.2.3`（协议 ID）。
+4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.2.6`（协议 ID）。
 
 Release APK 使用固定证书签名，CI 会校验证书；覆盖安装即可，不要卸载或清数据。
 
@@ -56,9 +57,10 @@ Release APK 使用固定证书签名，CI 会校验证书；覆盖安装即可�
 4. 当前空间使用西瓜红高亮；再次点击当前空间只重新启动 App。
 5. 普通空间可在详情页重命名或删除。
 6. 已配置 App 的菜单可开启“重启后自动切换并打开 App”；默认关闭时重启恢复只切换空间，不启动 App。
-7. 首页标题栏的“备份”图标进入“备份与恢复”，可备份全部账号、单独备份 Base 或单独备份一个分账号，页面和通知显示完成百分比。
-8. 恢复时选择 `.ucsbackup`，输入密码并核对来源；Base 目标固定，分账号可覆盖现有分账号或恢复为新分账号。
-9. 同一菜单可执行“取消配置并移除分空间”。
+7. 应用详情页的“默认账号”可选择原始空间或任意已有账号，也可关闭；删除默认账号会同时关闭自动回默认。详细规则见 [默认账号与前台会话](docs/DEFAULT_ACCOUNT.md)。
+8. 首页标题栏的“备份”图标进入“备份与恢复”，可备份全部账号、单独备份 Base 或单独备份一个分账号，页面和通知显示完成百分比。
+9. 恢复时选择 `.ucsbackup`，输入密码并核对来源；Base 目标固定，分账号可覆盖现有分账号或恢复为新分账号。
+10. 同一菜单可执行“取消配置并移除分空间”。
 
 取消配置会切回 Base 并移除登记记录，UClone 管理的独立 CE/DE 空间不会立即删除，而是移入回收区保留 7 天，之后由 Runtime 在开机协调或下一次取消配置时永久删除。取消配置不卸载 App，也不删除系统原始数据。
 
@@ -80,9 +82,9 @@ flowchart LR
 - KernelSU Shell 只负责收紧控制面权限，并在 init mount namespace 启动 Runtime。
 - Runtime 只保留 `PackageStore`、`SlotStorage`、`AndroidOps` 三个底层端口。
 
-当前 wire 有十八个操作：
+当前 wire 有十九个操作：
 
-`probe`、`list_packages`、`get_package`、`enroll`、`rebind_package`、`create_slot`、`activate_slot`、`rename_slot`、`delete_slot`、`unenroll`、`set_launch_after_reboot`、`begin_backup_io`、`finish_backup_io`、`begin_restore_io`、`commit_restore_account`、`finish_restore_io`、`abort_account_io`、`list_account_io_status`
+`probe`、`list_packages`、`get_package`、`enroll`、`rebind_package`、`create_slot`、`activate_slot`、`rename_slot`、`delete_slot`、`unenroll`、`set_launch_after_reboot`、`set_default_slot`、`begin_backup_io`、`finish_backup_io`、`begin_restore_io`、`commit_restore_account`、`finish_restore_io`、`abort_account_io`、`list_account_io_status`
 
 `probe` 保持旧格式；其余请求必须携带与 Runtime 精确匹配的稳定协议 ID。以后只新增 App 备份规则时，可以只升级 Manager。
 

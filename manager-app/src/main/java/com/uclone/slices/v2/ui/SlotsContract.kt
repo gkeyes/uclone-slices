@@ -62,6 +62,7 @@ sealed interface OperationUiState {
         val appLabel: String,
     ) : OperationUiState
     data class SavingRebootLaunch(val packageName: String) : OperationUiState
+    data class SavingDefaultSlot(val packageName: String) : OperationUiState
     data class RebindingConfiguration(val packageName: String) : OperationUiState
     data object RestartingRuntime : OperationUiState
 }
@@ -86,6 +87,7 @@ internal val OperationUiState.blocksScreen: Boolean
         is OperationUiState.ActivatingSpace,
         is OperationUiState.RenamingSpace,
         is OperationUiState.SavingRebootLaunch,
+        is OperationUiState.SavingDefaultSlot,
         -> false
     }
 
@@ -132,6 +134,7 @@ data class DeleteSpaceUi(
     val packageName: String,
     val slotId: String,
     val name: String,
+    val disablesDefaultAccount: Boolean = false,
 )
 
 data class UnenrollAppUi(
@@ -200,6 +203,7 @@ sealed interface UiIntent {
         val packageName: String,
         val enabled: Boolean,
     ) : UiIntent
+    data class SetDefaultSlot(val packageName: String, val slotId: String?) : UiIntent
     data class QuickActivateSlot(val packageName: String, val slotId: String) : UiIntent
 
     /**

@@ -799,6 +799,8 @@ pub struct PackageAggregate {
     active_slot: SlotId,
     #[serde(default)]
     launch_after_reboot: bool,
+    #[serde(default)]
+    default_slot: Option<SlotId>,
     next_slot_number: u64,
     lifecycle: Lifecycle,
 }
@@ -814,6 +816,7 @@ impl PackageAggregate {
             }],
             active_slot: SlotId::base(),
             launch_after_reboot: false,
+            default_slot: None,
             next_slot_number: 1,
             lifecycle: Lifecycle::Ready,
         }
@@ -841,6 +844,10 @@ impl PackageAggregate {
         }
         if base_count != 1
             || !ids.contains(&self.active_slot)
+            || self
+                .default_slot
+                .as_ref()
+                .is_some_and(|slot| !ids.contains(slot))
             || self.next_slot_number == 0
             || self.next_slot_number <= highest_number
         {
@@ -900,6 +907,19 @@ impl PackageAggregate {
     pub fn set_launch_after_reboot(&mut self, enabled: bool) -> Result<(), ModelError> {
         self.require_ready()?;
         self.launch_after_reboot = enabled;
+        self.validate()
+    }
+
+    pub fn default_slot(&self) -> Option<&SlotId> {
+        self.default_slot.as_ref()
+    }
+
+    pub fn set_default_slot(&mut self, slot: Option<SlotId>) -> Result<(), ModelError> {
+        self.require_ready()?;
+        if slot.as_ref().is_some_and(|slot| !self.has_slot(slot)) {
+            return Err(ModelError::SlotNotFound);
+        }
+        self.default_slot = slot;
         self.validate()
     }
 
@@ -970,6 +990,9 @@ impl PackageAggregate {
             .position(|slot| slot.id() == target)
             .ok_or(ModelError::StateConflict)?;
         self.slots.remove(index);
+        if self.default_slot.as_ref() == Some(target) {
+            self.default_slot = None;
+        }
         self.lifecycle = Lifecycle::Ready;
         self.validate()
     }
@@ -1162,6 +1185,7 @@ impl PackageAggregate {
             package: self.package.clone(),
             active_slot: self.active_slot.clone(),
             launch_after_reboot: self.launch_after_reboot,
+            default_slot: self.default_slot.clone(),
             binding_state,
             slots: self
                 .slots
@@ -1201,6 +1225,8 @@ pub struct PackageSnapshot {
     pub package: PackageName,
     pub active_slot: SlotId,
     pub launch_after_reboot: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_slot: Option<SlotId>,
     pub binding_state: BindingState,
     pub slots: Vec<SlotSnapshot>,
 }

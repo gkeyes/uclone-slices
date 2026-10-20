@@ -2878,3 +2878,44 @@ fn single_account_restore_never_crosses_the_base_account_boundary() {
         Err(RuntimeError::InvalidRequest),
     );
 }
+
+#[test]
+fn default_account_return_uses_the_normal_transaction_and_is_idempotent() {
+    let package = package();
+    let (mut runtime, slot) = with_slot();
+    runtime
+        .set_default_slot(&package, Some(SlotId::base()))
+        .unwrap();
+    runtime.activate_slot(&package, &slot).unwrap();
+    assert!(runtime.activate_default_account(&package).unwrap());
+    let snapshot = runtime.get_package(&package).unwrap();
+    assert_eq!(snapshot.active_slot, SlotId::base());
+    assert_eq!(snapshot.default_slot, Some(SlotId::base()));
+    let (packages, slots, android) = runtime.into_parts();
+    let calls_before = android.calls().len();
+    let mut runtime = Runtime::new(packages, slots, android);
+    assert!(!runtime.activate_default_account(&package).unwrap());
+    let (_packages, _slots, android) = runtime.into_parts();
+    assert_eq!(android.calls().len(), calls_before);
+}
+
+#[test]
+fn default_account_return_does_not_interrupt_an_account_io_lease() {
+    let package = package();
+    let (mut runtime, slot) = with_slot();
+    runtime
+        .set_default_slot(&package, Some(slot.clone()))
+        .unwrap();
+    let lease = runtime
+        .begin_backup_io(&package, AccountIoScope::Account { slot: slot.clone() })
+        .unwrap();
+    assert_eq!(
+        runtime.activate_default_account(&package),
+        Err(RuntimeError::IoBusy)
+    );
+    runtime.finish_backup_io(&lease.io_token).unwrap();
+    assert_eq!(
+        runtime.get_package(&package).unwrap().active_slot,
+        SlotId::base()
+    );
+}

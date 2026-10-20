@@ -247,4 +247,13 @@
     <string name="move_up">上移</string>
     <string name="move_down">下移</string>
     <string name="reorder_actions">排序操作</string>
+    <string name="default_account_title">默认账号</string>
+    <string name="default_account_set_action">设置默认账号</string>
+    <string name="default_account_description">从外部打开或离开后返回时，自动进入默认账号。</string>
+    <string name="default_account_temporary_flows">拍照、选文件、支付或锁屏后返回，保留当前账号。分账号可从 Slice 内选择打开。</string>
+    <string name="default_account_off">关闭自动回默认</string>
+    <string name="default_account_off_short">未设置</string>
+    <string name="default_account_selected">已选</string>
+    <string name="delete_default_account_warning">这个账号是默认账号。删除成功后将同时关闭自动回默认。</string>
+    <string name="operation_saving_default_account">正在保存默认账号</string>
 </resources>

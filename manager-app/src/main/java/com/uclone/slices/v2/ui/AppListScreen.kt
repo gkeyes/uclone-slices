@@ -489,12 +489,14 @@ private fun ManagedAppCard(
                     )
                 }
             }
+            val defaultAccountText = stringResource(R.string.default_account_set_action)
             val launchAfterRebootText = stringResource(R.string.launch_after_reboot_action)
             val backupAllText = stringResource(R.string.backup_all_accounts_action)
             val unenrollText = stringResource(R.string.unenroll_app_action)
             SlicesOverflowMenu(
                 items = buildList {
                     if (ready) {
+                        add(SlicesMenuItem(text = defaultAccountText, onClick = onOpen))
                         add(
                             SlicesMenuItem(
                                 text = launchAfterRebootText,
