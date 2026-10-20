@@ -37,6 +37,48 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun pendingModuleMetadataCannotMakeAnOldDaemonAcceptDefaultAccountWrites() {
+        val commands = mutableListOf<RuntimeCommand>()
+        val client = object : RuntimeClient {
+            override suspend fun execute(command: RuntimeCommand): RuntimeReply {
+                commands += command
+                return if (command == RuntimeCommand.Probe) {
+                    // The old executable echoes the newly installed module's environment.
+                    com.uclone.slices.v2.runtime.RuntimeProtocol.decode(
+                        """{"ok":{"build_id":"${BuildConfig.RUNTIME_PROTOCOL_BUILD_ID}"}}""",
+                    )
+                } else {
+                    RuntimeReply.Error(ErrorCode.InvalidRequest)
+                }
+            }
+        }
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.SetDefaultSlot("com.example.app", "base"))
+
+        assertTrue(viewModel.state.value.runtimeReady)
+        assertFalse(viewModel.state.value.runtimeCompatible)
+        assertEquals("", viewModel.state.value.buildId)
+        assertEquals(UiNotice.RuntimeVersionMismatch, viewModel.state.value.notice)
+        assertEquals(listOf<RuntimeCommand>(RuntimeCommand.Probe), commands)
+    }
+
+    @Test
+    fun matchingMetadataWithADifferentExecutableBlocksWrites() {
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.nextReply = RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, "older-executable")
+
+        viewModel.onIntent(UiIntent.Refresh)
+        viewModel.onIntent(UiIntent.SetDefaultSlot("com.example.app", "slot-1"))
+
+        assertFalse(viewModel.state.value.operationsAllowed)
+        assertEquals("older-executable", viewModel.state.value.buildId)
+        assertEquals(UiNotice.RuntimeVersionMismatch, viewModel.state.value.notice)
+        assertTrue(client.commands.none { it is RuntimeCommand.SetDefaultSlot })
+    }
+
+    @Test
     fun defaultAccountChoiceSavesPolicyWithoutActivatingAndCanBeDisabled() {
         val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
@@ -1366,7 +1408,7 @@ private open class FakeRuntimeClient(
             return it
         }
         return when (command) {
-            RuntimeCommand.Probe -> RuntimeReply.Capabilities(buildId)
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities(buildId, buildId)
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(
                 if (enrolled) listOf(snapshot) else emptyList(),
             )
@@ -1454,7 +1496,7 @@ private class BlockingRuntimeClient : RuntimeClient {
 
     override suspend fun execute(command: RuntimeCommand): RuntimeReply =
         when (command) {
-            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION)
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION)
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(emptyList())
             is RuntimeCommand.Enroll,
             is RuntimeCommand.GetPackage,
@@ -1504,7 +1546,7 @@ private class BlockingRebindRuntimeClient : RuntimeClient {
 
     override suspend fun execute(command: RuntimeCommand): RuntimeReply =
         when (command) {
-            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION)
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION)
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(listOf(snapshot))
             is RuntimeCommand.Enroll,
             is RuntimeCommand.GetPackage,
@@ -1541,7 +1583,7 @@ private class BlockingQuickRuntimeClient : RuntimeClient {
 
     override suspend fun execute(command: RuntimeCommand): RuntimeReply =
         when (command) {
-            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION)
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION)
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(listOf(snapshot))
             is RuntimeCommand.ActivateSlot -> {
                 activationCommands += command

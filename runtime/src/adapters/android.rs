@@ -513,6 +513,7 @@ impl AndroidOps for SystemAndroidOps {
         }
         Ok(Capabilities {
             build_id: self.build_id.clone(),
+            binary_build_id: crate::BINARY_BUILD_ID.to_owned(),
         })
     }
 

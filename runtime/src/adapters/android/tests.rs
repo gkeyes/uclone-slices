@@ -111,6 +111,24 @@ fn output(stdout: impl Into<String>) -> CommandOutput {
     }
 }
 
+#[test]
+fn probe_reports_the_compiled_identity_independently_of_launch_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let runner = RecordingRunner {
+        outputs: VecDeque::from([output("0\n"), output("RUNNING_UNLOCKED\n")]),
+        commands: Rc::new(RefCell::new(Vec::new())),
+    };
+    let (mut android, commands) = system_with_runner(root.path(), runner);
+    android.build_id = "pending-module-version".to_owned();
+
+    let capabilities = android.probe().unwrap();
+
+    assert_eq!(capabilities.build_id, "pending-module-version");
+    assert_eq!(capabilities.binary_build_id, crate::BINARY_BUILD_ID);
+    assert_ne!(capabilities.binary_build_id, capabilities.build_id);
+    assert_eq!(commands.borrow().len(), 2);
+}
+
 #[derive(Debug)]
 struct MountRunner {
     commands: RecordedCommands,

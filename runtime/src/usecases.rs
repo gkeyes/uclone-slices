@@ -1033,6 +1033,7 @@ where
     pub fn activate_default_account(
         &mut self,
         package: &PackageName,
+        still_foreground: impl FnMut() -> bool,
     ) -> Result<bool, RuntimeError> {
         let Some(aggregate) = self
             .packages
@@ -1048,14 +1049,23 @@ where
         if aggregate.active_slot() == &target {
             return Ok(false);
         }
-        self.activate_slot(package, &target)?;
-        Ok(true)
+        let result = self.activate_slot_when(package, &target, still_foreground)?;
+        Ok(result.active_slot == target)
     }
 
     pub fn activate_slot(
         &mut self,
         package: &PackageName,
         target: &SlotId,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        self.activate_slot_when(package, target, || true)
+    }
+
+    fn activate_slot_when(
+        &mut self,
+        package: &PackageName,
+        target: &SlotId,
+        mut permitted: impl FnMut() -> bool,
     ) -> Result<PackageSnapshot, RuntimeError> {
         let (mut aggregate, inspection) = self.load_ready(package)?;
         if !aggregate.has_slot(target) {
@@ -1076,6 +1086,9 @@ where
         if !observed.matches(&previous) {
             return Err(RuntimeError::StateConflict);
         }
+        if !permitted() {
+            return aggregate.snapshot().map_err(model_error);
+        }
         if &previous == target {
             self.android
                 .launch_verified(package, target)
@@ -1087,14 +1100,31 @@ where
         self.packages
             .save(&aggregate)
             .map_err(|error| logged_adapter("activate_slot", package, "save_intent", error))?;
+        if !permitted() {
+            // The user left while preflight or journal persistence was in flight.
+            // Clear only the intent: the app and its paired view have not been touched.
+            aggregate.abort_activation(&previous).map_err(model_error)?;
+            self.packages.save(&aggregate).map_err(|error| {
+                logged_adapter("activate_slot", package, "cancel_departure", error)
+            })?;
+            return aggregate.snapshot().map_err(model_error);
+        }
         if let Err(error) = self.android.force_stop(package) {
             log_adapter("activate_slot", package, "force_stop", &error);
-            self.restore_after_failed_stop(&mut aggregate, &previous, inspection.was_running)?;
+            self.restore_after_failed_stop(
+                &mut aggregate,
+                &previous,
+                inspection.was_running && permitted(),
+            )?;
             return Err(RuntimeError::OperationFailed);
         }
         if let Err(error) = self.android.apply_view(package, target) {
             log_adapter("activate_slot", package, "apply_target", &error);
-            self.rollback_activation(&mut aggregate, &previous, inspection.was_running)?;
+            self.rollback_activation(
+                &mut aggregate,
+                &previous,
+                inspection.was_running && permitted(),
+            )?;
             return Err(RuntimeError::OperationFailed);
         }
         let observed = self
@@ -1102,7 +1132,11 @@ where
             .observe_view(package)
             .map_err(|error| logged_adapter("activate_slot", package, "verify_target", error));
         if !matches!(observed, Ok(view) if view.matches(target)) {
-            self.rollback_activation(&mut aggregate, &previous, inspection.was_running)?;
+            self.rollback_activation(
+                &mut aggregate,
+                &previous,
+                inspection.was_running && permitted(),
+            )?;
             return Err(RuntimeError::OperationFailed);
         }
 

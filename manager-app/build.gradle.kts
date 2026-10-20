@@ -69,9 +69,9 @@ android {
         applicationId = "com.uclone.slices.v2"
         minSdk = 29
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.2.6"
-        buildConfigField("String", "RUNTIME_PROTOCOL_BUILD_ID", "\"0.2.6\"")
+        versionCode = 18
+        versionName = "0.2.7"
+        buildConfigField("String", "RUNTIME_PROTOCOL_BUILD_ID", "\"0.2.7\"")
         buildConfigField("String", "ARCHIVE_HELPER_SHA256", "\"$archiveHelperChecksum\"")
     }
 

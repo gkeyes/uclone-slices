@@ -2887,16 +2887,91 @@ fn default_account_return_uses_the_normal_transaction_and_is_idempotent() {
         .set_default_slot(&package, Some(SlotId::base()))
         .unwrap();
     runtime.activate_slot(&package, &slot).unwrap();
-    assert!(runtime.activate_default_account(&package).unwrap());
+    assert!(runtime.activate_default_account(&package, || true).unwrap());
     let snapshot = runtime.get_package(&package).unwrap();
     assert_eq!(snapshot.active_slot, SlotId::base());
     assert_eq!(snapshot.default_slot, Some(SlotId::base()));
     let (packages, slots, android) = runtime.into_parts();
     let calls_before = android.calls().len();
     let mut runtime = Runtime::new(packages, slots, android);
-    assert!(!runtime.activate_default_account(&package).unwrap());
+    assert!(!runtime.activate_default_account(&package, || true).unwrap());
     let (_packages, _slots, android) = runtime.into_parts();
     assert_eq!(android.calls().len(), calls_before);
+}
+
+#[test]
+fn default_account_return_cancels_if_the_user_leaves_during_preflight_or_journaling() {
+    for permitted_checks in [0, 1] {
+        let package = package();
+        let (mut runtime, slot) = with_slot();
+        runtime
+            .set_default_slot(&package, Some(SlotId::base()))
+            .unwrap();
+        runtime.activate_slot(&package, &slot).unwrap();
+        let (packages, slots, android) = runtime.into_parts();
+        let calls_before = android.calls().len();
+        let mut runtime = Runtime::new(packages, slots, android);
+        let mut checks = 0;
+
+        assert!(
+            !runtime
+                .activate_default_account(&package, || {
+                    checks += 1;
+                    checks <= permitted_checks
+                })
+                .unwrap()
+        );
+
+        let (packages, _slots, android) = runtime.into_parts();
+        let aggregate = packages.load(&package).unwrap().unwrap();
+        assert!(aggregate.is_ready());
+        assert_eq!(aggregate.active_slot(), &slot);
+        assert_eq!(aggregate.default_slot(), Some(&SlotId::base()));
+        assert!(android.view(&package).unwrap().matches(&slot));
+        assert_eq!(checks, permitted_checks + 1);
+        assert!(!android.calls()[calls_before..].iter().any(|call| matches!(
+            call,
+            AndroidCall::ForceStop(_) | AndroidCall::Apply(_, _) | AndroidCall::Launch(_, _)
+        )));
+    }
+}
+
+#[test]
+fn automatic_rollback_restores_the_account_without_reopening_after_departure() {
+    let package = package();
+    let (mut runtime, slot) = with_slot();
+    runtime
+        .set_default_slot(&package, Some(SlotId::base()))
+        .unwrap();
+    runtime.activate_slot(&package, &slot).unwrap();
+    let (packages, slots, mut android) = runtime.into_parts();
+    let calls_before = android.calls().len();
+    android.fail_next(AndroidFailure::Apply);
+    let mut runtime = Runtime::new(packages, slots, android);
+    let mut checks = 0;
+
+    assert_eq!(
+        runtime.activate_default_account(&package, || {
+            checks += 1;
+            checks <= 2
+        }),
+        Err(RuntimeError::OperationFailed)
+    );
+
+    let (packages, _slots, android) = runtime.into_parts();
+    let aggregate = packages.load(&package).unwrap().unwrap();
+    assert!(aggregate.is_ready());
+    assert_eq!(aggregate.active_slot(), &slot);
+    assert!(android.view(&package).unwrap().matches(&slot));
+    assert!(!android.is_running(&package));
+    assert!(android.calls()[calls_before..].iter().any(|call| matches!(
+        call, AndroidCall::Apply(_, target) if target == &slot
+    )));
+    assert!(
+        !android.calls()[calls_before..]
+            .iter()
+            .any(|call| matches!(call, AndroidCall::Launch(_, _)))
+    );
 }
 
 #[test]
@@ -2910,7 +2985,7 @@ fn default_account_return_does_not_interrupt_an_account_io_lease() {
         .begin_backup_io(&package, AccountIoScope::Account { slot: slot.clone() })
         .unwrap();
     assert_eq!(
-        runtime.activate_default_account(&package),
+        runtime.activate_default_account(&package, || true),
         Err(RuntimeError::IoBusy)
     );
     runtime.finish_backup_io(&lease.io_token).unwrap();

@@ -20,7 +20,7 @@ grep -F 'readlink "/proc/$PID/exe"' "$SERVICE" >/dev/null
 grep -F '[ -S "$SOCKET" ]' "$SERVICE" >/dev/null
 grep -F 'printf '\''{"op":"probe"}\n'\''' "$SERVICE" >/dev/null
 grep -F '"$MODDIR/bin/slotctl" rpc' "$SERVICE" >/dev/null
-grep -F 'EXPECTED_PROBE_RESPONSE=$(printf '\''{"ok":{"build_id":"%s"}}'\'' "$BUILD_ID")' "$SERVICE" >/dev/null
+grep -F 'EXPECTED_PROBE_RESPONSE=$(printf '\''{"ok":{"build_id":"%s","binary_build_id":"%s"}}'\'' "$BUILD_ID" "$BUILD_ID")' "$SERVICE" >/dev/null
 grep -F '[ "$PROBE_RESPONSE" = "$EXPECTED_PROBE_RESPONSE" ]' "$SERVICE" >/dev/null
 grep -F 'chmod 0600 "$SOCKET"' "$SERVICE" >/dev/null
 grep -F 'kill -9 "$PID"' "$SERVICE" >/dev/null

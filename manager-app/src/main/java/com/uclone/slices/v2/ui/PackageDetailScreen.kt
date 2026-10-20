@@ -115,15 +115,28 @@ internal fun PackageDetailScreen(
             }
             item(key = "default_account") {
                 GroupCard(modifier = Modifier.animateItem()) {
-                    ListRow(
-                        title = stringResource(R.string.default_account_title),
-                        value = packageSnapshot.slots.firstOrNull { it.id == packageSnapshot.defaultSlot }
-                            ?.let { spaceDisplayName(it, stringResource(R.string.system_original_space)) }
-                            ?: stringResource(R.string.default_account_off_short),
+                    SwitchRow(
+                        title = stringResource(R.string.auto_default_account_title),
+                        checked = packageSnapshot.defaultSlot != null,
+                        onCheckedChange = { enabled ->
+                            if (enabled) {
+                                defaultSheetVisible = true
+                            } else {
+                                onIntent(UiIntent.SetDefaultSlot(packageSnapshot.packageName, null))
+                            }
+                        },
                         summary = stringResource(R.string.default_account_description),
                         enabled = actionsEnabled,
-                        onClick = { defaultSheetVisible = true },
                     )
+                    if (packageSnapshot.defaultSlot != null) {
+                        ListRow(
+                            title = stringResource(R.string.default_account_title),
+                            value = packageSnapshot.slots.firstOrNull { it.id == packageSnapshot.defaultSlot }
+                                ?.let { spaceDisplayName(it, stringResource(R.string.system_original_space)) },
+                            enabled = actionsEnabled,
+                            onClick = { defaultSheetVisible = true },
+                        )
+                    }
                 }
             }
             item(key = "other_header") {
@@ -453,28 +466,20 @@ private fun DefaultAccountSheet(
     visible: Boolean,
     snapshot: PackageSnapshot,
     enabled: Boolean,
-    onSelect: (String?) -> Unit,
+    onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     BottomSheet(
         visible = visible,
         onDismiss = onDismiss,
-        title = stringResource(R.string.default_account_title),
-        summary = stringResource(R.string.default_account_description),
+        title = stringResource(R.string.default_account_choose_title),
+        summary = stringResource(R.string.default_account_choose_description),
     ) {
         Column {
-            ListRow(
-                title = stringResource(R.string.default_account_off),
-                value = if (snapshot.defaultSlot == null) stringResource(R.string.default_account_selected) else null,
-                valueColor = Accent,
-                chevron = false,
-                enabled = visible && enabled,
-                onClick = { onSelect(null) },
-            )
             snapshot.slots.forEach { slot ->
                 ListRow(
                     title = spaceDisplayName(slot, stringResource(R.string.system_original_space)),
-                    value = if (snapshot.defaultSlot == slot.id) stringResource(R.string.default_account_selected) else null,
+                    value = if (snapshot.defaultSlot == slot.id) stringResource(R.string.default_account_current) else null,
                     valueColor = Accent,
                     chevron = false,
                     enabled = visible && enabled,

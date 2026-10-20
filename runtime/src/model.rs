@@ -1234,6 +1234,7 @@ pub struct PackageSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Capabilities {
     pub build_id: String,
+    pub binary_build_id: String,
 }
 
 #[cfg(test)]

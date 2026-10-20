@@ -66,7 +66,7 @@ internal fun RuntimeStatusScreen(
                 ListRow(
                     title = stringResource(R.string.runtime_version),
                     value = state.buildId.takeIf(String::isNotBlank)
-                        ?: stringResource(R.string.unavailable),
+                        ?: stringResource(R.string.runtime_version_unverified),
                     valueColor = TextPrimary,
                 )
             }

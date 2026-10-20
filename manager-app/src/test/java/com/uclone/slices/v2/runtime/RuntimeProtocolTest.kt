@@ -127,6 +127,26 @@ class RuntimeProtocolTest {
     }
 
     @Test
+    fun legacyProbeDoesNotVerifyTheActualExecutableVersion() {
+        val reply = RuntimeProtocol.decode(
+            """{"ok":{"build_id":"${BuildConfig.RUNTIME_PROTOCOL_BUILD_ID}"}}""",
+        ) as RuntimeReply.Capabilities
+
+        assertEquals(BuildConfig.RUNTIME_PROTOCOL_BUILD_ID, reply.buildId)
+        assertEquals(null, reply.binaryBuildId)
+    }
+
+    @Test
+    fun executableIdentityIsNotReplacedByUpdatedModuleMetadata() {
+        val reply = RuntimeProtocol.decode(
+            """{"ok":{"build_id":"${BuildConfig.RUNTIME_PROTOCOL_BUILD_ID}","binary_build_id":"older-executable"}}""",
+        ) as RuntimeReply.Capabilities
+
+        assertEquals(BuildConfig.RUNTIME_PROTOCOL_BUILD_ID, reply.buildId)
+        assertEquals("older-executable", reply.binaryBuildId)
+    }
+
+    @Test
     fun everyRuntimeErrorCodeHasAUiBranch() {
         ErrorCode.entries.forEach { code ->
             val decoded = RuntimeProtocol.decode(

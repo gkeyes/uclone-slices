@@ -13,7 +13,7 @@
     <string name="environment_version_mismatch">运行环境版本不匹配</string>
     <string name="environment_ready_description">数据空间切换服务可用</string>
     <string name="environment_unavailable_description">点击查看状态并重新连接</string>
-    <string name="environment_version_mismatch_description">当前仅可查看，请先升级模块</string>
+    <string name="environment_version_mismatch_description">请完成模块更新，重启手机后再试</string>
 
     <string name="add_app">添加应用</string>
     <string name="add_app_subtitle">选择需要配置独立数据空间的应用</string>
@@ -174,10 +174,11 @@
     <string name="unenroll_confirm">取消配置并移除</string>
 
     <string name="runtime_status_title">运行环境</string>
-    <string name="runtime_status_subtitle">查看 Manager 当前能够确认的 Runtime 状态</string>
+    <string name="runtime_status_subtitle">查看当前实际运行的后台程序状态</string>
     <string name="runtime_ready_long">Runtime 已连接，可以创建、切换并启动数据空间。</string>
     <string name="runtime_unavailable_long">Manager 无法连接 Runtime，空间操作暂时不可用。</string>
-    <string name="runtime_version_mismatch_long">Manager 已连接 Runtime，但版本不一致。为保护分空间，所有写入、切换和删除操作均已禁用，请先升级模块。</string>
+    <string name="runtime_version_mismatch_long">当前后台程序尚未与管理器匹配。请完成模块更新并重启手机；更新生效前暂停空间操作。</string>
+    <string name="runtime_version_unverified">尚未确认</string>
     <string name="runtime_details">连接详情</string>
     <string name="runtime_connection">Runtime 连接</string>
     <string name="runtime_version">Runtime 版本</string>
@@ -187,7 +188,7 @@
     <string name="refresh_status">刷新状态</string>
     <string name="reconnect">重新连接</string>
     <string name="restart_runtime">重启 Runtime</string>
-    <string name="restart_runtime_hint">仅在连接不上或版本不一致时使用；正常运行的 Runtime 不会被打断。</string>
+    <string name="restart_runtime_hint">用于恢复后台连接。模块更新需要重启手机才能生效，重新连接不会应用待生效的模块更新。</string>
     <string name="runtime_log">最近日志</string>
     <string name="load_runtime_log">查看日志</string>
     <string name="runtime_log_empty">暂无日志</string>
@@ -216,7 +217,7 @@
     <string name="error_operation_failed">操作未完整完成，请刷新确认当前空间</string>
     <string name="error_identity_protected">旧分空间已保护，当前应用身份不兼容，无法安全接管</string>
     <string name="error_signing_unavailable">无法读取应用签名，旧分空间保持不动</string>
-    <string name="error_runtime_version_mismatch">Manager 与 Runtime 版本不一致；当前仅可查看，请先升级模块</string>
+    <string name="error_runtime_version_mismatch">后台程序尚未更新，请完成模块更新并重启手机后再试</string>
     <string name="error_account_io_busy">该应用正在备份或恢复，完成后再操作</string>
     <string name="error_storage_insufficient">存储空间不足，未做任何改动</string>
     <string name="error_runtime_restart_failed">Runtime 没有启动成功，可查看日志或重启手机</string>
@@ -248,12 +249,13 @@
     <string name="move_down">下移</string>
     <string name="reorder_actions">排序操作</string>
     <string name="default_account_title">默认账号</string>
+    <string name="auto_default_account_title">自动回默认账号</string>
+    <string name="default_account_choose_title">选择默认账号</string>
+    <string name="default_account_choose_description">选择后开启自动回默认。保存设置不会立即切换账号。</string>
     <string name="default_account_set_action">设置默认账号</string>
     <string name="default_account_description">从外部打开或离开后返回时，自动进入默认账号。</string>
     <string name="default_account_temporary_flows">拍照、选文件、支付或锁屏后返回，保留当前账号。分账号可从 Slice 内选择打开。</string>
-    <string name="default_account_off">关闭自动回默认</string>
-    <string name="default_account_off_short">未设置</string>
-    <string name="default_account_selected">已选</string>
+    <string name="default_account_current">当前默认</string>
     <string name="delete_default_account_warning">这个账号是默认账号。删除成功后将同时关闭自动回默认。</string>
     <string name="operation_saving_default_account">正在保存默认账号</string>
 </resources>

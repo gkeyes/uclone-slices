@@ -18,7 +18,7 @@ use rpc::{
     serialize_transaction, spawn_connection,
 };
 use uclone_slices_runtime::layout::RUNTIME_ROOT;
-use uclone_slices_runtime::{handle_line, production};
+use uclone_slices_runtime::{BINARY_BUILD_ID, handle_line, production};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env::args().nth(1).as_deref() == Some("--observe-foreground") {
@@ -29,7 +29,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket = env::var("UCLONE_RUNTIME_SOCKET")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("runtime.sock"));
-    let build_id = env::var("UCLONE_BUILD_ID")?;
+    let declared_build_id = env::var("UCLONE_BUILD_ID")?;
+    if declared_build_id != BINARY_BUILD_ID {
+        return Err("module configuration does not match the executable build".into());
+    }
+    let build_id = BINARY_BUILD_ID.to_owned();
     prepare_runtime_root(&root)?;
     wait_for_user0_ready();
     let boot_id = fs::read_to_string(BOOT_ID_PATH)?;
