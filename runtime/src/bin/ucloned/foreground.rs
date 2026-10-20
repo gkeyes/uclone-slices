@@ -46,6 +46,7 @@ struct Session {
 pub(super) struct Sessions {
     manual: BTreeMap<String, Session>,
     last_entry: Option<(String, i32, u32)>,
+    latest_event: u128,
     event_locked: bool,
     failed_visits: BTreeMap<String, u128>,
 }
@@ -148,7 +149,11 @@ impl Sessions {
     }
 
     fn observe(&mut self, event: &Event, snapshot: &Snapshot) -> Option<String> {
-        if let EventKind::Keyguard(locked) = event.kind {
+        let outdated = event.timestamp < self.latest_event;
+        self.latest_event = self.latest_event.max(event.timestamp);
+        if let EventKind::Keyguard(locked) = event.kind
+            && !outdated
+        {
             self.event_locked = locked;
         }
         if snapshot.locked || self.event_locked {
@@ -159,8 +164,21 @@ impl Sessions {
             }
             return None;
         }
-        // Apply the event's visit as well as the live snapshot. If Home -> App happened
-        // faster than dumpsys, the recorded Home still ends the old foreground session.
+        let confirms_entry = !outdated
+            && snapshot
+                .foreground
+                .as_ref()
+                .is_some_and(|activity| match &event.kind {
+                    EventKind::Resumed(component) => activity.component == *component,
+                    EventKind::TaskFront(task) => activity.task == *task,
+                    EventKind::Keyguard(_) => false,
+                });
+        // Bringing a task forward can precede its resume, or be cancelled by a gesture.
+        if matches!(event.kind, EventKind::TaskFront(_)) && !confirms_entry {
+            return None;
+        }
+        // A recorded Home resume ends the visit even if dumpsys still shows the app.
+        // It never proves that the app has been entered again: wait for that app's event.
         let historical = match &event.kind {
             EventKind::Resumed(component) => snapshot
                 .activities
@@ -185,6 +203,9 @@ impl Sessions {
             {
                 self.last_entry = None;
             }
+        }
+        if !confirms_entry {
+            return None;
         }
         let activity = snapshot.foreground.as_ref()?;
         let pid = activity.pid?;
@@ -490,7 +511,20 @@ fn apply_observation(
         .map_err(|_error| std::io::Error::other("foreground session lock poisoned"))?
         .observe(event, snapshot);
     if let Some(package) = target {
-        match production(root, build_id)?.activate_default_account(&package) {
+        let Some(expected) = snapshot.foreground.as_ref() else {
+            return Ok(());
+        };
+        let still_foreground = || {
+            read_snapshot().is_ok_and(|live| {
+                !live.locked
+                    && live.foreground.as_ref().is_some_and(|current| {
+                        current.component == expected.component
+                            && current.task == expected.task
+                            && current.pid == expected.pid
+                    })
+            })
+        };
+        match production(root, build_id)?.activate_default_account(&package, still_foreground) {
             Ok(true) => eprintln!("op=foreground_default package={package} result=switched"),
             Ok(false) => {}
             Err(error) => {

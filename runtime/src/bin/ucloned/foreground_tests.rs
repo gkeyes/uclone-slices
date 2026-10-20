@@ -160,16 +160,81 @@ fn buffered_home_before_manual_launch_cannot_cancel_that_launch() {
 }
 
 #[test]
+fn leaving_for_home_never_relaunches_the_app_from_a_stale_snapshot() {
+    let app = activity("com.example.app", 42, 1234);
+    let mut stale = snapshot(app.clone());
+    stale.activities.push(home());
+    let mut sessions = Sessions::default();
+    sessions.grant(&app.package, 10, Some(&stale));
+    assert_eq!(sessions.observe(&event(&app, 11), &stale), None);
+
+    assert_eq!(sessions.observe(&event(&home(), 12), &stale), None);
+    assert!(!sessions.manual.contains_key(&app.package));
+    assert_eq!(
+        sessions.observe(&event(&app, 13), &stale),
+        Some(app.package)
+    );
+}
+
+#[test]
+fn an_out_of_order_app_event_cannot_reopen_an_app_after_home() {
+    let app = activity("com.example.app", 42, 1234);
+    let snap = snapshot(app.clone());
+    let mut sessions = Sessions::default();
+    sessions.observe(&event(&app, 10), &snap);
+    sessions.observe(&event(&home(), 20), &snapshot(home()));
+
+    assert_eq!(sessions.observe(&event(&app, 19), &snap), None);
+    assert_eq!(sessions.observe(&event(&app, 21), &snap), Some(app.package));
+}
+
+#[test]
+fn a_late_home_resume_ends_the_old_visit_but_cannot_itself_reopen_the_app() {
+    let app = activity("com.example.app", 42, 1234);
+    let mut snap = snapshot(app.clone());
+    snap.activities.push(home());
+    let mut sessions = Sessions::default();
+    sessions.grant(&app.package, 10, Some(&snap));
+    assert_eq!(sessions.observe(&event(&app, 12), &snap), None);
+
+    assert_eq!(sessions.observe(&event(&home(), 11), &snap), None);
+    assert!(!sessions.manual.contains_key(&app.package));
+    assert_eq!(sessions.observe(&event(&app, 13), &snap), Some(app.package));
+}
+
+#[test]
 fn fast_home_return_is_not_lost_when_the_live_snapshot_is_already_back_in_the_app() {
     let app = activity("com.example.app", 42, 1234);
     let mut snap = snapshot(app.clone());
     snap.activities.push(home());
     let mut sessions = Sessions::default();
     sessions.grant(&app.package, 10, Some(&snap));
+    assert_eq!(sessions.observe(&event(&home(), 11), &snap), None);
+    assert_eq!(sessions.observe(&event(&app, 12), &snap), Some(app.package));
+}
+
+#[test]
+fn a_pending_home_task_does_not_end_the_visit_until_the_app_really_leaves() {
+    let app = activity("com.example.app", 42, 1234);
+    let mut snap = snapshot(app.clone());
+    snap.activities.push(home());
+    let mut sessions = Sessions::default();
+    sessions.grant(&app.package, 10, Some(&snap));
+
     assert_eq!(
-        sessions.observe(&event(&home(), 11), &snap),
-        Some(app.package)
+        sessions.observe(
+            &Event {
+                timestamp: 11,
+                kind: EventKind::TaskFront(home().task)
+            },
+            &snap,
+        ),
+        None,
     );
+    assert!(sessions.manual.contains_key(&app.package));
+    assert_eq!(sessions.observe(&event(&app, 12), &snap), None);
+    sessions.observe(&event(&home(), 13), &snapshot(home()));
+    assert_eq!(sessions.observe(&event(&app, 14), &snap), Some(app.package));
 }
 
 #[test]
