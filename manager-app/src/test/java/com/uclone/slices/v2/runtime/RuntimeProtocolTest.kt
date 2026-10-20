@@ -23,6 +23,7 @@ class RuntimeProtocolTest {
                 "com.example.app",
                 true,
             ),
+            "set_default_slot" to RuntimeCommand.SetDefaultSlot("com.example.app", "slot-1"),
             "get_package" to RuntimeCommand.GetPackage("com.example.app"),
             "create_slot" to RuntimeCommand.CreateSlot(
                 "com.example.app",

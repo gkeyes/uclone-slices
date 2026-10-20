@@ -1015,6 +1015,43 @@ where
         aggregate.snapshot().map_err(model_error)
     }
 
+    pub fn set_default_slot(
+        &mut self,
+        package: &PackageName,
+        slot: Option<SlotId>,
+    ) -> Result<PackageSnapshot, RuntimeError> {
+        let (mut aggregate, _inspection) = self.load_ready(package)?;
+        aggregate.set_default_slot(slot).map_err(model_error)?;
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("set_default_slot", package, "save", error))?;
+        aggregate.snapshot().map_err(model_error)
+    }
+
+    /// An observation never enrolls an app or starts one already using its default account.
+    /// `activate_slot` performs the identity, account-I/O and paired-view checks before mutation.
+    pub fn activate_default_account(
+        &mut self,
+        package: &PackageName,
+    ) -> Result<bool, RuntimeError> {
+        let Some(aggregate) = self
+            .packages
+            .load(package)
+            .map_err(|error| logged_adapter("activate_default_account", package, "load", error))?
+        else {
+            return Ok(false);
+        };
+        aggregate.validate().map_err(model_error)?;
+        let Some(target) = aggregate.default_slot().cloned() else {
+            return Ok(false);
+        };
+        if aggregate.active_slot() == &target {
+            return Ok(false);
+        }
+        self.activate_slot(package, &target)?;
+        Ok(true)
+    }
+
     pub fn activate_slot(
         &mut self,
         package: &PackageName,

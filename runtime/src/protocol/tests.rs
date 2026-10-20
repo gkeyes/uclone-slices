@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use super::*;
 use crate::adapters::{MemoryAndroidOps, MemoryPackageStore, MemorySlotStorage};
 
-const CLIENT_BUILD_ID: &str = "0.2.3";
+const CLIENT_BUILD_ID: &str = "0.2.6";
 
 #[test]
 fn shared_fixtures_cover_the_core_command_flow() {
@@ -97,7 +97,7 @@ fn unenroll_rejects_fields_that_have_no_consumer() {
     let response = handle_line(
         &mut runtime,
         CLIENT_BUILD_ID,
-        r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.2.3"}"#,
+        r#"{"op":"unenroll","package":"com.example.app","slot":"base","client_build_id":"0.2.6"}"#,
     );
 
     assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -114,7 +114,7 @@ fn reboot_launch_setting_requires_a_boolean() {
     let response = handle_line(
         &mut runtime,
         CLIENT_BUILD_ID,
-        r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.2.3"}"#,
+        r#"{"op":"set_launch_after_reboot","package":"com.example.app","enabled":"yes","client_build_id":"0.2.6"}"#,
     );
 
     assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -129,8 +129,8 @@ fn rebind_rejects_invalid_certificate_digests_and_unknown_signing_fields() {
     );
 
     for request in [
-        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.2.3"}"#,
-        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.2.3"}"#,
+        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["bad"]},"trust_legacy":false,"client_build_id":"0.2.6"}"#,
+        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"future":true},"trust_legacy":false,"client_build_id":"0.2.6"}"#,
     ] {
         assert_eq!(
             handle_line(&mut runtime, CLIENT_BUILD_ID, request),
@@ -150,7 +150,7 @@ fn reset_marker_only_accepts_the_ui_backed_true_value() {
     let response = handle_line(
         &mut runtime,
         CLIENT_BUILD_ID,
-        r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.2.3"}"#,
+        r#"{"op":"enroll","package":"com.example.app","reset":false,"client_build_id":"0.2.6"}"#,
     );
 
     assert_eq!(response, "{\"error\":{\"code\":\"invalid_request\"}}\n");
@@ -243,8 +243,8 @@ fn account_backup_io_is_exposed_as_a_versioned_runtime_transaction() {
 
     let response = handle_line(
         &mut runtime,
-        "0.2.3",
-        r#"{"op":"begin_backup_io","package":"com.example.app","scope":{"kind":"account","slot":"base"},"client_build_id":"0.2.3"}"#,
+        "0.2.6",
+        r#"{"op":"begin_backup_io","package":"com.example.app","scope":{"kind":"account","slot":"base"},"client_build_id":"0.2.6"}"#,
     );
 
     assert!(response.contains("\"io_token\""), "response: {response}");
@@ -257,8 +257,8 @@ fn account_io_status_is_queryable_without_mutating_package_state() {
 
     let response = handle_line(
         &mut runtime,
-        "0.2.3",
-        r#"{"op":"list_account_io_status","client_build_id":"0.2.3"}"#,
+        "0.2.6",
+        r#"{"op":"list_account_io_status","client_build_id":"0.2.6"}"#,
     );
 
     assert_eq!(response, "{\"ok\":{\"account_io\":[]}}\n");
@@ -372,7 +372,7 @@ fn decode(object: &serde_json::Map<String, serde_json::Value>) -> Result<Command
 #[test]
 fn every_shared_request_fixture_decodes_with_its_flat_client_build_id() {
     let fixtures = request_fixtures();
-    assert_eq!(fixtures.len(), 18);
+    assert_eq!(fixtures.len(), 19);
     for (name, object) in fixtures {
         assert!(decode(&object).is_ok(), "fixture: {name}");
     }
@@ -430,16 +430,74 @@ fn malformed_frames_and_unknown_ops_are_invalid_requests() {
         "",
         "[]",
         r#""probe""#,
-        r#"{"client_build_id":"0.2.3"}"#,
-        r#"{"op":7,"client_build_id":"0.2.3"}"#,
-        r#"{"op":"format_device","client_build_id":"0.2.3"}"#,
-        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},"trust_legacy":null,"client_build_id":"0.2.3"}"#,
-        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},"trust_legacy":"true","client_build_id":"0.2.3"}"#,
+        r#"{"client_build_id":"0.2.6"}"#,
+        r#"{"op":7,"client_build_id":"0.2.6"}"#,
+        r#"{"op":"format_device","client_build_id":"0.2.6"}"#,
+        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},"trust_legacy":null,"client_build_id":"0.2.6"}"#,
+        r#"{"op":"rebind_package","package":"com.example.app","signing":{"kind":"lineage","sha256":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]},"trust_legacy":"true","client_build_id":"0.2.6"}"#,
     ] {
         assert_eq!(
             decode_command(line, CLIENT_BUILD_ID),
             Err(DecodeError::InvalidRequest),
             "request: {line}"
         );
+    }
+}
+
+#[test]
+fn default_account_setting_changes_policy_without_switching_or_launching() {
+    let mut runtime = runtime_with_slot();
+    let request = format!(
+        r#"{{"op":"set_default_slot","package":"com.example.app","slot":"slot-1","client_build_id":"{CLIENT_BUILD_ID}"}}"#,
+    );
+    let response: serde_json::Value =
+        serde_json::from_str(&handle_line(&mut runtime, CLIENT_BUILD_ID, &request)).unwrap();
+    assert_eq!(response["ok"]["package"]["default_slot"], "slot-1");
+    assert_eq!(response["ok"]["package"]["active_slot"], "base");
+}
+
+#[test]
+fn default_account_can_be_disabled_and_rejects_a_missing_slot() {
+    let mut runtime = runtime_with_slot();
+    for slot in [r#""base""#, "null"] {
+        let request = format!(
+            r#"{{"op":"set_default_slot","package":"com.example.app","slot":{slot},"client_build_id":"{CLIENT_BUILD_ID}"}}"#,
+        );
+        let response: serde_json::Value =
+            serde_json::from_str(&handle_line(&mut runtime, CLIENT_BUILD_ID, &request)).unwrap();
+        assert!(response.get("ok").is_some(), "{response}");
+    }
+    let request = format!(
+        r#"{{"op":"set_default_slot","package":"com.example.app","slot":"slot-999","client_build_id":"{CLIENT_BUILD_ID}"}}"#,
+    );
+    let response: serde_json::Value =
+        serde_json::from_str(&handle_line(&mut runtime, CLIENT_BUILD_ID, &request)).unwrap();
+    assert_eq!(response["error"]["code"], "not_found");
+}
+
+#[test]
+fn default_account_shared_fixture_is_a_complete_runtime_flow() {
+    let mut runtime = runtime_with_slot();
+    let actual = handle_line(
+        &mut runtime,
+        CLIENT_BUILD_ID,
+        fixture("set_default_slot.request.json".to_owned()).trim(),
+    );
+    assert_eq!(
+        actual.trim(),
+        fixture("set_default_slot.response.json".to_owned()).trim()
+    );
+}
+
+#[test]
+fn default_account_setting_requires_explicit_slot_or_null() {
+    let mut runtime = runtime_with_slot();
+    for extra in ["", r#","slot":42"#, r#","slot":"../app""#] {
+        let request = format!(
+            r#"{{"op":"set_default_slot","package":"com.example.app"{extra},"client_build_id":"{CLIENT_BUILD_ID}"}}"#,
+        );
+        let response: serde_json::Value =
+            serde_json::from_str(&handle_line(&mut runtime, CLIENT_BUILD_ID, &request)).unwrap();
+        assert_eq!(response["error"]["code"], "invalid_request");
     }
 }

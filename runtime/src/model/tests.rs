@@ -248,3 +248,50 @@ fn unenrollment_is_a_durable_terminal_intent() {
     assert!(restored.is_unenrolling());
     assert!(restored.validate().is_ok());
 }
+
+#[test]
+fn default_slot_policy_migrates_off_and_round_trips_without_changing_active_slot() {
+    let mut aggregate = PackageAggregate::enrolled(package(), identity());
+    let mut legacy = serde_json::to_value(&aggregate).unwrap();
+    legacy.as_object_mut().unwrap().remove("default_slot");
+    let migrated: PackageAggregate = serde_json::from_value(legacy).unwrap();
+    assert_eq!(migrated.default_slot(), None);
+    aggregate.set_default_slot(Some(SlotId::base())).unwrap();
+    assert_eq!(aggregate.active_slot(), &SlotId::base());
+    let restored: PackageAggregate =
+        serde_json::from_str(&serde_json::to_string(&aggregate).unwrap()).unwrap();
+    assert_eq!(
+        restored.snapshot().unwrap().default_slot,
+        Some(SlotId::base())
+    );
+    aggregate.set_default_slot(None).unwrap();
+    assert_eq!(aggregate.default_slot(), None);
+}
+
+#[test]
+fn deleting_default_slot_disables_policy_only_when_deletion_finishes() {
+    let mut aggregate = PackageAggregate::enrolled(package(), identity());
+    let slot = aggregate
+        .reserve_slot(DisplayName::new("Work").unwrap())
+        .unwrap();
+    let target = slot.id().clone();
+    aggregate.begin_creation(&slot, false).unwrap();
+    aggregate.finish_creation(slot).unwrap();
+    aggregate.set_default_slot(Some(target.clone())).unwrap();
+    aggregate.begin_deletion(&target).unwrap();
+    assert_eq!(aggregate.default_slot(), Some(&target));
+    aggregate.finish_deletion(&target).unwrap();
+    assert_eq!(aggregate.default_slot(), None);
+    assert_eq!(aggregate.active_slot(), &SlotId::base());
+}
+
+#[test]
+fn invalid_default_slot_is_rejected_without_replacing_existing_policy() {
+    let mut aggregate = PackageAggregate::enrolled(package(), identity());
+    aggregate.set_default_slot(Some(SlotId::base())).unwrap();
+    assert_eq!(
+        aggregate.set_default_slot(Some(SlotId::numbered(999))),
+        Err(ModelError::SlotNotFound)
+    );
+    assert_eq!(aggregate.default_slot(), Some(&SlotId::base()));
+}

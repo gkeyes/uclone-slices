@@ -1,5 +1,7 @@
 #[path = "ucloned/boot.rs"]
 mod boot;
+#[path = "ucloned/foreground.rs"]
+mod foreground;
 #[path = "ucloned/rpc.rs"]
 mod rpc;
 
@@ -19,6 +21,9 @@ use uclone_slices_runtime::layout::RUNTIME_ROOT;
 use uclone_slices_runtime::{handle_line, production};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if env::args().nth(1).as_deref() == Some("--observe-foreground") {
+        return foreground::observe_once();
+    }
     let root =
         PathBuf::from(env::var("UCLONE_RUNTIME_ROOT").unwrap_or_else(|_| RUNTIME_ROOT.to_owned()));
     let socket = env::var("UCLONE_RUNTIME_SOCKET")
@@ -43,12 +48,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
     let transaction_lock = Arc::new(Mutex::new(()));
+    let sessions = Arc::new(Mutex::new(foreground::Sessions::default()));
+    foreground::spawn(
+        root.clone(),
+        build_id.clone(),
+        Arc::clone(&transaction_lock),
+        Arc::clone(&sessions),
+    );
     let handler_root = root;
     let handler_build_id = build_id;
     let handler: Arc<RequestHandler> = Arc::new(move |line| {
         serialize_transaction(&transaction_lock, || {
             match production(&handler_root, handler_build_id.clone()) {
-                Ok(mut runtime) => handle_line(&mut runtime, &handler_build_id, line),
+                Ok(mut runtime) => {
+                    let response = handle_line(&mut runtime, &handler_build_id, line);
+                    if let Ok(mut sessions) = sessions.lock() {
+                        sessions.completed_request(line, &response);
+                    }
+                    response
+                }
                 Err(error) => {
                     eprintln!("ucloned Runtime unavailable: {error}");
                     OPERATION_FAILED_RESPONSE.to_owned()

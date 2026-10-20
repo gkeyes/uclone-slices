@@ -50,6 +50,7 @@ internal fun PackageDetailScreen(
     var createSheetVisible by rememberSaveable(packageSnapshot.packageName) {
         mutableStateOf(false)
     }
+    var defaultSheetVisible by rememberSaveable(packageSnapshot.packageName) { mutableStateOf(false) }
     val appLabel = installedApp?.label ?: packageSnapshot.packageName
     val operationsEnabled = state.operationsAllowed &&
         packageSnapshot.bindingState == BindingState.Ready
@@ -111,6 +112,19 @@ internal fun PackageDetailScreen(
                         },
                     modifier = Modifier.staggerIn(0, play),
                 )
+            }
+            item(key = "default_account") {
+                GroupCard(modifier = Modifier.animateItem()) {
+                    ListRow(
+                        title = stringResource(R.string.default_account_title),
+                        value = packageSnapshot.slots.firstOrNull { it.id == packageSnapshot.defaultSlot }
+                            ?.let { spaceDisplayName(it, stringResource(R.string.system_original_space)) }
+                            ?: stringResource(R.string.default_account_off_short),
+                        summary = stringResource(R.string.default_account_description),
+                        enabled = actionsEnabled,
+                        onClick = { defaultSheetVisible = true },
+                    )
+                }
             }
             item(key = "other_header") {
                 SectionHeader(
@@ -176,6 +190,16 @@ internal fun PackageDetailScreen(
         }
 
         CompositionLocalProvider(LocalGlassBackdrop provides backdrop) {
+            DefaultAccountSheet(
+                visible = defaultSheetVisible,
+                snapshot = packageSnapshot,
+                enabled = actionsEnabled,
+                onSelect = { slotId ->
+                    defaultSheetVisible = false
+                    onIntent(UiIntent.SetDefaultSlot(packageSnapshot.packageName, slotId))
+                },
+                onDismiss = { defaultSheetVisible = false },
+            )
             CreateSpaceSheet(
                 visible = createSheetVisible,
                 seed = state.seed,
@@ -423,3 +447,41 @@ private fun CreateSpaceSheet(
 }
 
 private const val SheetResetDelayMs = 260L
+
+@Composable
+private fun DefaultAccountSheet(
+    visible: Boolean,
+    snapshot: PackageSnapshot,
+    enabled: Boolean,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    BottomSheet(
+        visible = visible,
+        onDismiss = onDismiss,
+        title = stringResource(R.string.default_account_title),
+        summary = stringResource(R.string.default_account_description),
+    ) {
+        Column {
+            ListRow(
+                title = stringResource(R.string.default_account_off),
+                value = if (snapshot.defaultSlot == null) stringResource(R.string.default_account_selected) else null,
+                valueColor = Accent,
+                chevron = false,
+                enabled = visible && enabled,
+                onClick = { onSelect(null) },
+            )
+            snapshot.slots.forEach { slot ->
+                ListRow(
+                    title = spaceDisplayName(slot, stringResource(R.string.system_original_space)),
+                    value = if (snapshot.defaultSlot == slot.id) stringResource(R.string.default_account_selected) else null,
+                    valueColor = Accent,
+                    chevron = false,
+                    enabled = visible && enabled,
+                    onClick = { onSelect(slot.id) },
+                )
+            }
+        }
+        Footnote(stringResource(R.string.default_account_temporary_flows))
+    }
+}

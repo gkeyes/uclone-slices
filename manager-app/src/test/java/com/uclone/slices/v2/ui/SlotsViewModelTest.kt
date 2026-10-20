@@ -37,6 +37,70 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun defaultAccountChoiceSavesPolicyWithoutActivatingAndCanBeDisabled() {
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        viewModel.onIntent(UiIntent.SetDefaultSlot("com.example.app", "slot-1"))
+        assertEquals(RuntimeCommand.SetDefaultSlot("com.example.app", "slot-1"), client.commands.last())
+        assertEquals("base", viewModel.state.value.packages.single().activeSlot)
+        assertEquals("slot-1", viewModel.state.value.selected?.defaultSlot)
+        viewModel.onIntent(UiIntent.SetDefaultSlot("com.example.app", null))
+        assertNull(viewModel.state.value.selected?.defaultSlot)
+        assertTrue(client.commands.none { it is RuntimeCommand.ActivateSlot })
+    }
+
+    @Test
+    fun deletingDefaultAccountWarnsAndClearsPolicyOnlyAfterSuccess() {
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot().copy(defaultSlot = "slot-1")))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage("com.example.app"))
+        viewModel.onIntent(UiIntent.RequestDeleteSlot("slot-1"))
+        assertTrue(viewModel.state.value.pendingDelete!!.disablesDefaultAccount)
+        client.nextReply = RuntimeReply.Error(ErrorCode.OperationFailed)
+        viewModel.onIntent(UiIntent.ConfirmDeleteSlot)
+        assertEquals("slot-1", viewModel.state.value.selected?.defaultSlot)
+        assertNull(viewModel.state.value.pendingDelete)
+        viewModel.onIntent(UiIntent.RequestDeleteSlot("slot-1"))
+        assertTrue(viewModel.state.value.pendingDelete!!.disablesDefaultAccount)
+        viewModel.onIntent(UiIntent.ConfirmDeleteSlot)
+        assertNull(viewModel.state.value.selected?.defaultSlot)
+    }
+
+    @Test
+    fun resumeRefreshesAutomaticallyChangedAccountsWithoutAUserOperation() {
+        val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot().copy(defaultSlot = "base")))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        client.snapshot = client.snapshot.copy(activeSlot = "slot-1")
+        viewModel.onIntent(UiIntent.AppResumed)
+        assertEquals(RuntimeCommand.ListPackages, client.commands.last())
+        assertEquals("slot-1", viewModel.state.value.packages.single().activeSlot)
+        assertFalse(viewModel.state.value.busy)
+    }
+
+    @Test
+    fun aLateAutomaticAccountRefreshNeverOverwritesANewerTap() {
+        val original = packageSnapshot().copy(defaultSlot = "base")
+        val pending = CompletableDeferred<RuntimeReply>()
+        var deferList = false
+        val client = object : FakeRuntimeClient(initialPackages = listOf(original)) {
+            override suspend fun execute(command: RuntimeCommand): RuntimeReply =
+                if (deferList && command == RuntimeCommand.ListPackages) {
+                    pending.await()
+                } else {
+                    super.execute(command)
+                }
+        }
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        deferList = true
+        viewModel.onIntent(UiIntent.AppResumed)
+        assertFalse(viewModel.state.value.busy)
+        viewModel.onIntent(UiIntent.QuickActivateSlot("com.example.app", "slot-1"))
+        pending.complete(RuntimeReply.Packages(listOf(original)))
+        assertEquals("slot-1", viewModel.state.value.packages.single().activeSlot)
+    }
+
+    @Test
     fun initializationRefreshesRuntimePackagesAndLocalApps() {
         val client = FakeRuntimeClient(initialPackages = listOf(packageSnapshot()))
 
@@ -1342,12 +1406,17 @@ private open class FakeRuntimeClient(
             is RuntimeCommand.DeleteSlot -> {
                 snapshot = snapshot.copy(
                     slots = snapshot.slots.filterNot { it.id == command.slotId },
+                    defaultSlot = snapshot.defaultSlot.takeUnless { it == command.slotId },
                 )
                 RuntimeReply.Package(snapshot)
             }
             is RuntimeCommand.Unenroll -> {
                 enrolled = false
                 RuntimeReply.Ack
+            }
+            is RuntimeCommand.SetDefaultSlot -> {
+                snapshot = snapshot.copy(defaultSlot = command.slotId)
+                RuntimeReply.Package(snapshot)
             }
             is RuntimeCommand.SetLaunchAfterReboot -> {
                 snapshot = snapshot.copy(launchAfterReboot = command.enabled)
@@ -1413,6 +1482,7 @@ private class BlockingRuntimeClient : RuntimeClient {
             is RuntimeCommand.RebindPackage,
             is RuntimeCommand.Unenroll,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.SetDefaultSlot,
             is RuntimeCommand.BeginBackupIo,
             is RuntimeCommand.FinishBackupIo,
             is RuntimeCommand.BeginRestoreIo,
@@ -1451,6 +1521,7 @@ private class BlockingRebindRuntimeClient : RuntimeClient {
             is RuntimeCommand.DeleteSlot,
             is RuntimeCommand.Unenroll,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.SetDefaultSlot,
             is RuntimeCommand.BeginBackupIo,
             is RuntimeCommand.FinishBackupIo,
             is RuntimeCommand.BeginRestoreIo,
@@ -1487,6 +1558,7 @@ private class BlockingQuickRuntimeClient : RuntimeClient {
             is RuntimeCommand.RenameSlot,
             is RuntimeCommand.DeleteSlot,
             is RuntimeCommand.SetLaunchAfterReboot,
+            is RuntimeCommand.SetDefaultSlot,
             is RuntimeCommand.BeginBackupIo,
             is RuntimeCommand.FinishBackupIo,
             is RuntimeCommand.BeginRestoreIo,

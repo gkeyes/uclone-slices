@@ -78,3 +78,20 @@
 | `actions/download-artifact` `9000827…` | `v8.0.2` 提交（Dependabot #16），与已固定的 upload-artifact v7 搭配；只在 `v*` 标签的发布 job 中读取同一次运行已验证的产物 | CI workflow |
 
 `tools/check-decision-alignment.sh` 只检查重复声明是否一致：发布版本、versionCode、Rust 工具链、Manager minSdk 与 Rust Android API。它不设置文件长度、执行次数或覆盖率阈值。
+
+## v0.2.6 默认账号
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| 每 App `default_slot: null / base / 已有槽`，旧配置默认为 null | 用户确认任意账号可作默认、可关闭；同一 Aggregate 保存唯一策略，默认槽删除提交时清空 | 模型迁移/删除测试，Runtime 协议 fixture 与 Manager 消费和 ViewModel 测试 |
+| 分账号手动会话只在成功 `activate_slot` RPC 后放行 | 用户确认分账号只由 Slice 内打开；记录任务和进程身份，真正离开后作废，冷启动不能复用旧进程会话 | 前台会话行为测试与真机矩阵 |
+| `logcat -b events -v epoch,uid,usec` 的系统 UID 1000 事件及 `dumpsys activity activities` | Android 17 目标机只读输出已确认 `wm_set_resumed_activity`、`wm_task_to_front`、`wm_set_keyguard_shown` 与 ActivityRecord、任务、进程、来源、resultTo、默认显示锁屏状态；事件时间用于排除手动启动前的积压事件，事件及实时快照共同避免快速 Home 返回漏判 | 系统 UID/用户/显示过滤、解析 fixture、快速返回与锁屏测试；真机观察工具 `ucloned --observe-foreground` |
+| Manager / KernelSU / crate `0.2.6`，versionCode 17，wire `0.2.6` | 本次增加默认策略请求和快照字段，并需要模块常驻前台观测；旧模块不得与新 Manager 混装 | 版本对齐脚本与签名交付检查 |
+
+默认策略不改变现有归档格式；恢复账号数据保留当前设备上的默认策略。设置策略不会立即切换或拉起后台 App。
+
+前台事件流断开时清除无法继续验证的临时放行并重连；1 秒仅为进程监督的失败退避，防止立即失败造成忙循环，不用于判定后台时限或作为验收门槛。自动切换失败保留原事务的回滚语义，回滚重启不触发自动重试循环；真正离开后再次进入才重试。
+
+内部 Activity 可以声明独立 `android:process`；见 [Android Activity 文档](https://developer.android.com/guide/topics/manifest/activity-element#proc)。当前访问中的 App 自身启动与已识别回调即使换进程或任务也保持账号，不能只按 PID 差异判定冷启动；外部来源的进程重建仍重新检查默认账号。
+
+临时跨 App 流程或锁屏可能比原进程存活更久，因此识别到这些连续流程时允许返回后建立新的任务/进程身份；真正的 Home 或无关 App 会先移除整次会话，不能复用临时放行。

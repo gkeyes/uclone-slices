@@ -36,6 +36,11 @@ pub enum Command {
         package: PackageName,
         enabled: bool,
     },
+    SetDefaultSlot {
+        package: PackageName,
+        #[serde(deserialize_with = "deserialize_required_slot")]
+        slot: Option<SlotId>,
+    },
     CreateSlot {
         package: PackageName,
         name: DisplayName,
@@ -191,6 +196,13 @@ fn decode_command(line: &str, expected_build_id: &str) -> Result<Command, Decode
     serde_json::from_value(value).map_err(|_error| DecodeError::InvalidRequest)
 }
 
+fn deserialize_required_slot<'de, D>(deserializer: D) -> Result<Option<SlotId>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<SlotId>::deserialize(deserializer)
+}
+
 fn dispatch<P, S, A>(runtime: &mut Runtime<P, S, A>, command: Command) -> Response
 where
     P: PackageStore,
@@ -220,6 +232,9 @@ where
             .map(|()| SuccessPayload::Empty {}),
         Command::SetLaunchAfterReboot { package, enabled } => runtime
             .set_launch_after_reboot(&package, enabled)
+            .map(|package| SuccessPayload::Package { package }),
+        Command::SetDefaultSlot { package, slot } => runtime
+            .set_default_slot(&package, slot)
             .map(|package| SuccessPayload::Package { package }),
         Command::CreateSlot {
             package,

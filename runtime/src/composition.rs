@@ -33,6 +33,12 @@ impl ProductionRuntime {
         self.inner.reconcile_boot()
     }
 
+    pub fn activate_default_account(&mut self, package: &str) -> Result<bool, RuntimeError> {
+        let package = crate::model::PackageName::new(package)
+            .map_err(|_error| RuntimeError::InvalidRequest)?;
+        self.inner.activate_default_account(&package)
+    }
+
     pub(crate) fn inner_mut(&mut self) -> &mut InnerRuntime {
         &mut self.inner
     }

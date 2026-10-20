@@ -83,11 +83,13 @@ internal class SlotsViewModel(
         when (intent) {
             UiIntent.Refresh -> runOperation(OperationUiState.Refreshing) { refresh() }
             UiIntent.AppResumed -> {
-                // Coming back to the Manager only reconnects when the Runtime was unreachable,
-                // so a quick tap after returning is never swallowed by a routine refresh.
+                // Reconnect an unavailable Runtime; automatic account updates use a passive read
+                // so returning never swallows a quick tap behind a busy refresh.
                 val snapshot = state.value
                 if (snapshot.initialLoadComplete && !snapshot.runtimeReady) {
                     runOperation(OperationUiState.Refreshing) { refresh() }
+                } else if (snapshot.operationsAllowed && snapshot.packages.any { it.defaultSlot != null }) {
+                    refreshAutomaticAccounts(snapshot.packages)
                 }
             }
             UiIntent.RestartRuntime -> runOperation(OperationUiState.RestartingRuntime) {
@@ -132,6 +134,7 @@ internal class SlotsViewModel(
             }
             is UiIntent.SetLaunchAfterReboot ->
                 setLaunchAfterReboot(intent.packageName, intent.enabled)
+            is UiIntent.SetDefaultSlot -> setDefaultSlot(intent.packageName, intent.slotId)
             is UiIntent.QuickActivateSlot ->
                 quickActivateSlot(intent.packageName, intent.slotId)
             is UiIntent.DestinationChanged ->
@@ -536,6 +539,59 @@ internal class SlotsViewModel(
         }
     }
 
+    private fun refreshAutomaticAccounts(before: List<PackageSnapshot>) {
+        // This read does not make the UI busy. A tap can proceed immediately, and a stale
+        // refresh never overwrites the result of a newer account operation.
+        scope.launch {
+            val reply = client.execute(RuntimeCommand.ListPackages)
+            if (reply is RuntimeReply.Packages) {
+                synchronized(operationLock) {
+                    if (!operationActive && state.value.packages === before) {
+                        mutableState.update { current ->
+                            val selected = current.selected?.let { selected ->
+                                reply.packages.firstOrNull { it.packageName == selected.packageName }
+                            }
+                            current.copy(
+                                packages = reply.packages,
+                                selected = selected,
+                                seed = if (selected != null && selected.activeSlot != BASE_SLOT_ID) {
+                                    SeedMode.Blank
+                                } else {
+                                    current.seed
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun setDefaultSlot(packageName: String, slotId: String?) {
+        val snapshot = state.value
+        if (!snapshot.operationsAllowed) {
+            showUnavailableOrMismatch()
+            return
+        }
+        if (snapshot.busy) return
+        val target = snapshot.packages.firstOrNull { it.packageName == packageName }
+        if (target == null || (slotId != null && target.slots.none { it.id == slotId })) {
+            mutableState.update { it.copy(posted = post(UiNotice.MissingEntity)) }
+            return
+        }
+        if (target.bindingState != BindingState.Ready) {
+            mutableState.update { it.copy(posted = post(UiNotice.IdentityProtected)) }
+            return
+        }
+        if (target.defaultSlot == slotId) return
+        runOperation(OperationUiState.SavingDefaultSlot(packageName)) {
+            applyHomePackageReply(
+                client.execute(RuntimeCommand.SetDefaultSlot(packageName, slotId)),
+                successNotice = null,
+            )
+        }
+    }
+
     private fun setLaunchAfterReboot(packageName: String, enabled: Boolean) {
         val snapshot = state.value
         if (!snapshot.operationsAllowed) {
@@ -636,6 +692,7 @@ internal class SlotsViewModel(
                     packageName = selected.packageName,
                     slotId = slot.id,
                     name = slot.name,
+                    disablesDefaultAccount = selected.defaultSlot == slot.id,
                 ),
                 pendingRename = null,
             )
