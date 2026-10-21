@@ -7,6 +7,7 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
-# Vector loads this entry point by name from assets/xposed_init inside system_server.
+# Vector loads the modern API 102 entry from META-INF/xposed/java_init.list.
 -keep class com.uclone.slices.v2.gate.** { *; }
--dontwarn de.robv.android.xposed.**
+-adaptresourcefilecontents META-INF/xposed/java_init.list
+-dontwarn io.github.libxposed.annotation.**
