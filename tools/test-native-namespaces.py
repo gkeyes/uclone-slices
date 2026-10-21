@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 
+sys.excepthook = sys.__excepthook__
 
 libc = ctypes.CDLL(None, use_errno=True)
 libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p]
@@ -70,7 +71,8 @@ def execute(arguments, runtime_slot=None):
                 private_namespace()
                 bind_account(runtime_slot)
             os.execv(arguments[0], arguments)
-        except BaseException:
+        except BaseException as error:
+            os.write(2, ("namespace exec failed: " + str(error) + "\n").encode())
             os._exit(125)
     os.close(writer)
     chunks = []
@@ -102,7 +104,8 @@ def application(masked=False):
                 values += [os.pread(fd, 64, 0).decode().strip() for fd in (old_ce, old_de)]
                 os.write(writer, (",".join(values) + "\n").encode())
             os._exit(0)
-        except BaseException:
+        except BaseException as error:
+            os.write(2, ("synthetic App setup failed: " + str(error) + "\n").encode())
             os._exit(125)
     os.close(commands)
     os.close(writer)
@@ -159,6 +162,8 @@ def main():
         os.chmod(root + destination, 0o700)
     os.chmod(root + RUNTIME, 0o700)
     os.makedirs(root + "/proc")
+    # Propagation flags operate on mountpoints, not ordinary chroot directories.
+    mount(root, root)
     os.chroot(root)
     os.chdir("/")
     mount("proc", "/proc", 0, "proc")
