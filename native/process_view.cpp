@@ -60,7 +60,8 @@ bool bind_paths(int fd, const std::vector<std::string>& paths) {
   return true;
 }
 
-bool install(const Request& request) {
+bool install(const Request& request, const char*& stage) {
+  stage = "identity";
   if (getuid() != 0 || request.pid <= 1 || !identity_matches(request)) return false;
   std::string proc = "/proc/" + std::to_string(request.pid);
   slice::Fd target(open((proc + "/ns/mnt").c_str(), O_RDONLY | O_CLOEXEC));
@@ -84,9 +85,13 @@ bool install(const Request& request) {
   slice::Fd ce(open(ce_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   slice::Fd de(open(de_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   struct stat ce_stat{}, de_stat{};
+  stage = "sources";
   if (!ce || !de || fstat(ce.get(), &ce_stat) != 0 || fstat(de.get(), &de_stat) != 0) return false;
-  if (!identity_matches(request) || setns(target.get(), CLONE_NEWNS) != 0 ||
-      fchdir(target_root.get()) != 0 || chroot(".") != 0 || chdir("/") != 0) return false;
+  stage = "namespace";
+  if (!identity_matches(request) || setns(target.get(), CLONE_NEWNS) != 0) return false;
+  stage = "root";
+  if (fchdir(target_root.get()) != 0 || chroot(".") != 0 || chdir("/") != 0) return false;
+  stage = "aliases";
   auto ce_aliases = aliases(request.package, true, request.isolated);
   auto de_aliases = aliases(request.package, false, request.isolated);
   if (!ce_aliases || !de_aliases) return false;
@@ -98,10 +103,15 @@ bool install(const Request& request) {
   }
   // Retain incoming Android volume updates while preventing account mounts from
   // propagating out to init/Zygote or another App namespace.
+  stage = "propagation";
   if (mount(nullptr, "/", nullptr, MS_SLAVE | MS_REC, nullptr) != 0) return false;
   // Android may mask every private-data path of an isolated UID. Keep that masking;
   // never create or expose an App data directory merely to make a mount succeed.
-  if (!bind_paths(ce.get(), *ce_aliases) || !bind_paths(de.get(), *de_aliases)) return false;
+  stage = "ce-bind";
+  if (!bind_paths(ce.get(), *ce_aliases)) return false;
+  stage = "de-bind";
+  if (!bind_paths(de.get(), *de_aliases)) return false;
+  stage = "verification";
   return sources_match(*ce_aliases, ce_stat) && sources_match(*de_aliases, de_stat) &&
          identity_matches(request);
 }
@@ -122,9 +132,10 @@ int main(int argc, char** argv) {
     else return 2;
   }
   Request request{*pid, *uid, *started, argv[4], argv[5], inherited, isolated};
-  if (!install(request)) {
+  const char* stage = "request";
+  if (!install(request, stage)) {
     // No source paths, account names, or process payloads are written to logs.
-    std::fprintf(stderr, "process view refused (%d)\n", errno);
+    std::fprintf(stderr, "process view refused at %s (%d)\n", stage, errno);
     return 1;
   }
   return 0;
