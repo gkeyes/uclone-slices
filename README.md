@@ -5,7 +5,7 @@
 
 UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前版本为 **v0.2.7**，支持账号空间的创建、切换、备份和恢复，不包含桌面 Hook。Runtime 协议 ID 为 `0.2.7`；Manager 与 KernelSU 模块需使用同一版本。
+当前开发候选版为 **v0.3.0**，Runtime 协议 ID 为 `0.3.0`。新增启动前默认账号门禁和按进程固定的 CE/DE 视图；Manager 与 KernelSU 模块需成对更新，启用 Vector 的系统框架作用域并重启。完整真机行为验收状态见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。
 
 ## 功能
 
@@ -28,6 +28,7 @@ UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空�
 | CPU | arm64 |
 | Root | KernelSU，能够加载模块并授予 Manager 权限 |
 | 用户 | 已解锁的 user0 |
+| 注入框架 | Vector（兼容 Xposed API 82）及 Zygisk API 4 |
 | App | 具有 Launcher 入口的普通第三方 App |
 
 暂不支持工作资料、第二用户、system/shared-UID App，或 UID/签名不兼容的替换安装。身份不兼容时旧空间会被保护，不能自动接管。
@@ -79,7 +80,9 @@ flowchart LR
 - `PackageAggregate` 仍是唯一稳定业务状态；备份/恢复只增加可清理的事务 intent/result sidecar。
 - Use Case 完整处理操作顺序和中断恢复。
 - Manager 负责 SAF、归档、压缩、加密、预览和结果展示，不直接切换或替换账号目录。
-- KernelSU Shell 只负责收紧控制面权限，并在 init mount namespace 启动 Runtime。
+- KernelSU Shell 收紧控制面权限，并从 init 派生独立 slave mount namespace 启动 Runtime；namespace anchor 在 daemon 重启期间保留事务视图。
+- Vector 在系统启动入口和业务 Application 绑定前执行门禁；Zygisk companion 在业务代码运行前固定每个配置 App 进程的 CE/DE 视图。
+- 启动许可、进程证明和临时会话均为当前启动的派生状态，账号真相仍只有 Aggregate。
 - Runtime 只保留 `PackageStore`、`SlotStorage`、`AndroidOps` 三个底层端口。
 
 当前 wire 有十九个操作：
@@ -98,6 +101,7 @@ flowchart LR
 - `manager-app/`：Compose Manager。
 - `protocol/fixtures/`：Rust 与 Kotlin 共用的协议 fixtures。
 - `kernelsu/`：KernelSU 模块启动层。
+- `native/`：Zygisk 接入、进程视图 worker 与 namespace anchor。
 - `docs/`：开发约束、设置来源、真机验收和 ADR。
 - `tools/`：构建与校验脚本，以及只读设备诊断脚本 `diagnose-runtime.sh`。
 
@@ -112,6 +116,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
 
 ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-manager-helper.sh
+ANDROID_NDK_HOME=/path/to/android-ndk ./tools/build-native.sh
+# Linux disposable namespaces, requires sudo and g++ static libraries
+./tools/test-native-namespaces.sh
 
 ./gradlew --no-daemon \
   :manager-app:testDebugUnitTest \

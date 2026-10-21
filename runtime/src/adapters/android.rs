@@ -344,7 +344,18 @@ impl SystemAndroidOps {
             PROCESS_EXIT_CONFIRMATION_WINDOW,
             PROCESS_EXIT_POLL_INTERVAL,
             || self.package_processes(uid),
-            |known| surviving_processes(known, uid),
+            |known| {
+                let mut survivors = surviving_processes(known, uid)?;
+                if self.launch_gate.is_some() {
+                    survivors.extend(
+                        tracked_processes(&self.runtime_root, uid)
+                            .map_err(|error| AdapterError::new(error.to_string()))?,
+                    );
+                    survivors.sort();
+                    survivors.dedup();
+                }
+                Ok(survivors)
+            },
         )
     }
 
@@ -590,6 +601,10 @@ impl AndroidOps for SystemAndroidOps {
     }
 
     fn force_stop(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        if let Some(gate) = self.launch_gate.as_ref() {
+            gate.block_new_processes(package.as_str())
+                .map_err(|error| AdapterError::new(error.to_string()))?;
+        }
         if let Some(policy) = force_stop_policy(package) {
             let uid = self.package_uid(package)?;
             return self.force_stop_with_policy(package, uid, policy);

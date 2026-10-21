@@ -13,6 +13,7 @@ struct Request {
   std::string package;
   std::string slot;
   bool inherited;
+  bool isolated;
 };
 
 bool identity_matches(const Request& request) {
@@ -28,8 +29,8 @@ bool sources_match(const std::vector<std::string>& paths, const struct stat& sou
   return true;
 }
 
-std::vector<std::string> aliases(const std::string& package, bool ce) {
-  std::vector<std::string> result{
+std::optional<std::vector<std::string>> aliases(const std::string& package, bool ce, bool isolated) {
+  std::vector<std::string> candidates{
       (ce ? "/data/user/0/" : "/data/user_de/0/") + package};
   std::vector<std::string> optional = ce
       ? std::vector<std::string>{"/data/data/" + package,
@@ -37,13 +38,16 @@ std::vector<std::string> aliases(const std::string& package, bool ce) {
                                 "/data_mirror/data_ce/0/" + package}
       : std::vector<std::string>{"/data_mirror/data_de/null/0/" + package,
                                 "/data_mirror/data_de/0/" + package};
-  for (const auto& path : optional) {
+  candidates.insert(candidates.end(), optional.begin(), optional.end());
+  std::vector<std::string> result;
+  for (size_t index = 0; index < candidates.size(); ++index) {
+    const auto& path = candidates[index];
     struct stat found{};
     int result_code = stat(path.c_str(), &found);
     if (result_code == 0) {
-      if (!S_ISDIR(found.st_mode)) return {};
+      if (!S_ISDIR(found.st_mode)) return std::nullopt;
       result.push_back(path);
-    } else if (errno != ENOENT && errno != ENOTDIR) return {};
+    } else if ((errno != ENOENT && errno != ENOTDIR) || (index == 0 && !isolated)) return std::nullopt;
   }
   return result;
 }
@@ -83,34 +87,41 @@ bool install(const Request& request) {
   if (!ce || !de || fstat(ce.get(), &ce_stat) != 0 || fstat(de.get(), &de_stat) != 0) return false;
   if (!identity_matches(request) || setns(target.get(), CLONE_NEWNS) != 0 ||
       fchdir(target_root.get()) != 0 || chroot(".") != 0 || chdir("/") != 0) return false;
-  auto ce_aliases = aliases(request.package, true);
-  auto de_aliases = aliases(request.package, false);
-  if (ce_aliases.empty() || de_aliases.empty()) return false;
+  auto ce_aliases = aliases(request.package, true, request.isolated);
+  auto de_aliases = aliases(request.package, false, request.isolated);
+  if (!ce_aliases || !de_aliases) return false;
   if (request.inherited) {
     // A fork sharing a verified App Zygote namespace may only verify it. It must not
     // replace a mount still used by its parent or siblings.
-    return sources_match(ce_aliases, ce_stat) && sources_match(de_aliases, de_stat) &&
+    return sources_match(*ce_aliases, ce_stat) && sources_match(*de_aliases, de_stat) &&
            identity_matches(request);
   }
   // Retain incoming Android volume updates while preventing account mounts from
   // propagating out to init/Zygote or another App namespace.
   if (mount(nullptr, "/", nullptr, MS_SLAVE | MS_REC, nullptr) != 0) return false;
-  if (!bind_paths(ce.get(), ce_aliases) || !bind_paths(de.get(), de_aliases)) return false;
-  return sources_match(ce_aliases, ce_stat) && sources_match(de_aliases, de_stat) &&
+  // Android may mask every private-data path of an isolated UID. Keep that masking;
+  // never create or expose an App data directory merely to make a mount succeed.
+  if (!bind_paths(ce.get(), *ce_aliases) || !bind_paths(de.get(), *de_aliases)) return false;
+  return sources_match(*ce_aliases, ce_stat) && sources_match(*de_aliases, de_stat) &&
          identity_matches(request);
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 7 && argc != 8) return 2;
+  if (argc < 7 || argc > 9) return 2;
   auto pid = slice::number<pid_t>(argv[1]);
   auto uid = slice::number<uid_t>(argv[2]);
   auto started = slice::number<uint64_t>(argv[3]);
   if (!pid || !uid || !started || !slice::package_name(argv[4]) ||
-      !slice::slot_name(argv[5]) || std::string_view(argv[6]) != "--install" ||
-      (argc == 8 && std::string_view(argv[7]) != "--verify-inherited")) return 2;
-  Request request{*pid, *uid, *started, argv[4], argv[5], argc == 8};
+      !slice::slot_name(argv[5]) || std::string_view(argv[6]) != "--install") return 2;
+  bool inherited = false, isolated = false;
+  for (int index = 7; index < argc; ++index) {
+    if (std::string_view(argv[index]) == "--verify-inherited" && !inherited) inherited = true;
+    else if (std::string_view(argv[index]) == "--isolated" && !isolated) isolated = true;
+    else return 2;
+  }
+  Request request{*pid, *uid, *started, argv[4], argv[5], inherited, isolated};
   if (!install(request)) {
     // No source paths, account names, or process payloads are written to logs.
     std::fprintf(stderr, "process view refused (%d)\n", errno);

@@ -65,12 +65,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(&prepare_gate),
         )
         .map_err(|error| error.to_string())?;
-        runtime
+        let prepared = runtime
             .prepare_default_account(package, || prepare_gate.ticket_live(ticket))
-            .map_err(|error| error.to_string())?;
-        prepare_gate
-            .permit_prepared(package, ticket)
             .map_err(|error| error.to_string())
+            .and_then(|_| {
+                prepare_gate
+                    .permit_prepared(package, ticket)
+                    .map_err(|error| error.to_string())
+            });
+        prepare_gate
+            .finish_transaction()
+            .map_err(|error| error.to_string())?;
+        prepared
     }))?;
     // A failed boot convergence is logged and retried on the next start in this boot (its
     // marker is not written). The socket still opens: every request re-validates its own
@@ -82,7 +88,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         production_with_launch_gate(&root, build_id.clone(), Arc::clone(&gate))
             .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
             .and_then(|mut boot_runtime| {
-                reconcile_once_per_boot(&root, boot_id.trim(), || boot_runtime.reconcile_boot())
+                let result = reconcile_once_per_boot(&root, boot_id.trim(), || {
+                    boot_runtime.reconcile_boot()
+                });
+                gate.finish_transaction()?;
+                result
             })
     })();
     if let Err(error) = boot_result {
@@ -102,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ) {
                 Ok(mut runtime) => {
                     let response = handle_line(&mut runtime, &handler_build_id, line);
-                    if let Err(error) = gate.refresh() {
+                    if let Err(error) = gate.finish_transaction() {
                         eprintln!("launch policy refresh failed: {error}");
                     }
                     response

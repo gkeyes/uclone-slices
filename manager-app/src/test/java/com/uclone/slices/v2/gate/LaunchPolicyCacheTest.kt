@@ -145,6 +145,14 @@ class LaunchPolicyCacheTest {
         assertFalse(cache.approvedProcess(target, 42, uid, 123))
     }
 
+    @Test fun aPendingMountCannotAuthorizeApplicationBinding() {
+        val cache = cache()
+        val next = JSONObject(resource("system-state.json")).put("revision", 8)
+        next.getJSONArray("processes").getJSONObject(0).put("verified", false)
+        cache.update(next)
+        assertFalse(cache.approvedProcess(target, 42, uid, 123))
+    }
+
     @Test fun aBrokenRootSnapshotCannotAuthorizeAnOldAccount() {
         val cache = cache()
         val next = JSONObject(resource("system-state.json")).put("revision", 8).put("valid", false)

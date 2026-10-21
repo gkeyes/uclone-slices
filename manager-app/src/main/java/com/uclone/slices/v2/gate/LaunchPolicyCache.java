@@ -109,6 +109,7 @@ final class LaunchPolicyCache {
         JSONObject policy = packages.get(packageName);
         JSONObject process = processes.get(pid);
         return connected && valid && policy != null && policy.optBoolean("ready") && process != null &&
+            process.optBoolean("verified") &&
             packageName.equals(process.optString("package")) && uid == process.optInt("uid", -1) &&
             started > 0 && started == process.optLong("started", -1) &&
             policy.optInt("uid", -1) == process.optInt("package_uid", -2) &&

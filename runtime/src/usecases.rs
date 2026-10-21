@@ -58,6 +58,7 @@ enum Relaunch {
 enum ReadyLoadContext {
     Interactive,
     Boot,
+    Preparation,
 }
 
 impl ReadyLoadContext {
@@ -65,6 +66,7 @@ impl ReadyLoadContext {
         match self {
             Self::Interactive => "load",
             Self::Boot => "reconcile_boot",
+            Self::Preparation => "prepare_default_account",
         }
     }
 }
@@ -1071,7 +1073,12 @@ where
         mut permitted: impl FnMut() -> bool,
         launch: bool,
     ) -> Result<PackageSnapshot, RuntimeError> {
-        let (mut aggregate, inspection) = self.load_ready(package)?;
+        let context = if launch {
+            ReadyLoadContext::Interactive
+        } else {
+            ReadyLoadContext::Preparation
+        };
+        let (mut aggregate, inspection) = self.load_ready_with_context(package, context)?;
         if !aggregate.has_slot(target) {
             return Err(RuntimeError::NotFound);
         }
@@ -1619,9 +1626,17 @@ where
         &mut self,
         package: &PackageName,
     ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
+        self.load_ready_with_context(package, ReadyLoadContext::Interactive)
+    }
+
+    fn load_ready_with_context(
+        &mut self,
+        package: &PackageName,
+        context: ReadyLoadContext,
+    ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
         self.ensure_no_account_io(package)?;
         let (aggregate, inspection) = self.load_validated(package)?;
-        self.finish_ready_load(aggregate, inspection, ReadyLoadContext::Interactive)
+        self.finish_ready_load(aggregate, inspection, context)
     }
 
     fn finish_ready_load(

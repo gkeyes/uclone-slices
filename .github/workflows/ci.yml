@@ -101,6 +101,9 @@ jobs:
       - name: Build native launch support
         run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./tools/build-native.sh
 
+      - name: Verify native namespace boundaries
+        run: ./tools/test-native-namespaces.sh
+
       - name: Validate Android apps
         env:
           RELEASE_STORE_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.RELEASE_STORE_PASSWORD || '' }}

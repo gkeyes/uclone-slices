@@ -115,6 +115,7 @@ fn pid_reuse_discards_an_old_isolated_process_record() {
         package_uid: 10123,
         slot: "base".to_owned(),
         namespace: actual.namespace,
+        verified: true,
     };
     save_process_record(root.path(), &record).unwrap();
     assert!(tracked_processes(root.path(), 10123).unwrap().is_empty());
@@ -168,6 +169,7 @@ fn shared_system_snapshot_is_produced_by_the_root_encoder() {
             package_uid: 10123,
             slot: "slot-1".to_owned(),
             namespace: "mnt:[7]".to_owned(),
+            verified: true,
         },
     );
     let expected: Value = serde_json::from_str(include_str!(
@@ -192,4 +194,42 @@ fn shared_prepared_response_and_request_use_the_live_private_contract() {
     ))
     .unwrap();
     assert!(matches!(request, Control::Prepare { ticket } if validate_token(&ticket).is_ok()));
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn pending_isolated_association_is_kept_in_stop_confirmation() {
+    let root = tempfile::tempdir().unwrap();
+    let actual = ProcessIdentity::read(std::process::id()).unwrap();
+    let mut record = ProcessRecord {
+        pid: actual.pid,
+        uid: actual.uid,
+        started: actual.started,
+        package: "com.example.app".to_owned(),
+        package_uid: 10123,
+        slot: "base".to_owned(),
+        namespace: actual.namespace,
+        verified: false,
+    };
+    save_process_record(root.path(), &record).unwrap();
+    assert_eq!(
+        tracked_processes(root.path(), 10123).unwrap(),
+        vec![PathBuf::from(format!("/proc/{}", record.pid))]
+    );
+    record.verified = true;
+    save_process_record(root.path(), &record).unwrap();
+    assert_eq!(tracked_processes(root.path(), 10123).unwrap().len(), 1);
+}
+
+#[test]
+fn process_registry_survives_daemon_restart_but_not_device_reboot() {
+    let root = tempfile::tempdir().unwrap();
+    reset_process_registry(root.path(), "boot-a").unwrap();
+    let directory = root.path().join("processes");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("record"), "old").unwrap();
+    reset_process_registry(root.path(), "boot-a").unwrap();
+    assert!(directory.join("record").exists());
+    reset_process_registry(root.path(), "boot-b").unwrap();
+    assert!(!directory.exists());
 }

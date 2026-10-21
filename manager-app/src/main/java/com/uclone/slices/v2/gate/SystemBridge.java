@@ -3,6 +3,8 @@ package com.uclone.slices.v2.gate;
 import android.content.Context;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
+import android.os.Handler;
+import android.os.HandlerThread;
 import android.system.Os;
 import android.system.StructStat;
 
@@ -17,6 +19,9 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 
 /** Root communication runs on dedicated threads and never under an Android service lock. */
 final class SystemBridge {
@@ -28,6 +33,8 @@ final class SystemBridge {
     final LaunchPolicyCache cache = new LaunchPolicyCache(BuildConfig.VERSION_NAME, this::send);
     private volatile Connection current;
     private volatile boolean disabled;
+    private Handler bindHandler;
+    private final Map<String, PendingBind> bindings = new HashMap<>();
 
     SystemBridge() {
         try {
@@ -45,6 +52,9 @@ final class SystemBridge {
     void start(Context context) {
         try { cache.managerUid(context.getPackageManager().getApplicationInfo(LaunchPolicyCache.MANAGER, 0).uid); }
         catch (Exception ignored) { fail(); return; }
+        HandlerThread bindingThread = new HandlerThread("Slice process binding");
+        bindingThread.start();
+        bindHandler = new Handler(bindingThread.getLooper());
         Thread thread = new Thread(this::connectLoop, "Slice launch control");
         thread.setDaemon(true);
         thread.start();
@@ -54,9 +64,67 @@ final class SystemBridge {
         cache.disconnected();
         Connection connection = current;
         if (connection != null) connection.close();
+        rejectBindings();
     }
 
     void disable() { disabled = true; fail(); }
+
+    void verifyProcess(String packageName, int pid, int uid, long started, Runnable ready, Runnable rejected) {
+        Handler handler = bindHandler;
+        if (handler == null || disabled) { rejected.run(); return; }
+        String key = pid + ":" + started;
+        PendingBind pending = new PendingBind(packageName, pid, uid, started, ready, rejected);
+        synchronized (bindings) {
+            if (bindings.containsKey(key)) return;
+            if (bindings.size() >= QUEUE_LIMIT) { handler.post(rejected); return; }
+            bindings.put(key, pending);
+        }
+        try {
+            JSONObject request = LaunchPolicyCache.message("verify", "pid", pid);
+            request.put("uid", uid); request.put("started", started); request.put("package", packageName);
+            send(request);
+        } catch (Exception invalid) { fail(); }
+        // Matches the private control frame deadline, not an App visit timer.
+        handler.postDelayed(() -> {
+            synchronized (bindings) {
+                if (bindings.remove(key, pending)) pending.rejected.run();
+            }
+        }, 5000);
+    }
+
+    private void completeBindings() {
+        ArrayList<Runnable> ready = new ArrayList<>();
+        synchronized (bindings) {
+            bindings.values().removeIf(pending -> {
+                if (!cache.approvedProcess(pending.packageName, pending.pid, pending.uid, pending.started)) return false;
+                ready.add(pending.ready);
+                return true;
+            });
+        }
+        Handler handler = bindHandler;
+        if (handler != null) for (Runnable callback : ready) handler.post(callback);
+    }
+
+    private void rejectBindings() {
+        ArrayList<Runnable> rejected = new ArrayList<>();
+        synchronized (bindings) {
+            for (PendingBind pending : bindings.values()) rejected.add(pending.rejected);
+            bindings.clear();
+        }
+        Handler handler = bindHandler;
+        if (handler != null) for (Runnable callback : rejected) handler.post(callback);
+    }
+
+    private static final class PendingBind {
+        final String packageName;
+        final int pid, uid;
+        final long started;
+        final Runnable ready, rejected;
+        PendingBind(String packageName, int pid, int uid, long started, Runnable ready, Runnable rejected) {
+            this.packageName = packageName; this.pid = pid; this.uid = uid; this.started = started;
+            this.ready = ready; this.rejected = rejected;
+        }
+    }
 
     private void send(JSONObject event) {
         Connection connection = current;
@@ -93,10 +161,12 @@ final class SystemBridge {
                     if (!connection.outgoing.offer(LaunchPolicyCache.message("ack", "revision", revision))) {
                         throw new IllegalStateException("launch event queue full");
                     }
+                    completeBindings();
                     backoff = 250;
                 }
             } catch (Exception ignored) {
                 cache.disconnected();
+                rejectBindings();
             } finally {
                 if (connection != null) connection.close();
                 if (current == connection) current = null;

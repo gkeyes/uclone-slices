@@ -8,6 +8,7 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ResolveInfo;
 import android.os.Handler;
+import android.os.Binder;
 import android.os.Looper;
 import android.os.Process;
 
@@ -235,9 +236,35 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
         if (process == null) return;
         ApplicationInfo app = (ApplicationInfo) field(process, "info");
         if (app == null || !bridge.cache.managed(app.packageName)) return;
-        if (!bridge.cache.approvedProcess(app.packageName, pid, uid, processStarted(pid))) {
-            refuseBind(call, pid);
-        }
+        long started;
+        try { started = processStarted(pid); }
+        catch (java.io.IOException vanished) { call.setResult(((Method) call.method).getReturnType() == void.class ? null : false); return; }
+        if (bridge.cache.approvedProcess(app.packageName, pid, uid, started)) return;
+        Object ams = call.thisObject;
+        Method method = (Method) call.method;
+        Object[] arguments = call.args.clone();
+        call.setResult(method.getReturnType() == void.class ? null : false);
+        // App-Zygote children can skip the ordinary Zygisk specialization callback.
+        // Delay Application binding, verify through Root outside the AMS lock, then
+        // resume the same checked OS operation. system_server need not read App ns FDs.
+        bridge.verifyProcess(app.packageName, pid, uid, started, () -> {
+            synchronized (ams) {
+                if (!sameProcess(pid, started)) return;
+                if (!bridge.cache.approvedProcess(app.packageName, pid, uid, started)) {
+                    Process.killProcess(pid);
+                    return;
+                }
+                long identity = Binder.clearCallingIdentity();
+                try { XposedBridge.invokeOriginalMethod(method, ams, arguments); }
+                catch (Throwable failure) { if (sameProcess(pid, started)) Process.killProcess(pid); }
+                finally { Binder.restoreCallingIdentity(identity); }
+            }
+        }, () -> { if (sameProcess(pid, started)) Process.killProcess(pid); });
+    }
+
+    private static boolean sameProcess(int pid, long started) {
+        try { return processStarted(pid) == started; }
+        catch (Exception vanished) { return false; }
     }
 
     private static void refuseBind(XC_MethodHook.MethodHookParam call, int pid) {

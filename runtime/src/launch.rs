@@ -95,6 +95,7 @@ struct State {
     claimed: BTreeSet<String>,
     policies_valid: bool,
     processes: BTreeMap<u32, ProcessRecord>,
+    blocked: BTreeSet<String>,
 }
 
 /// One daemon owns one instance. All connection/PID/permit state is disposable after boot.
@@ -103,6 +104,7 @@ pub struct LaunchGate {
     root: PathBuf,
     state: Mutex<State>,
     changed: Condvar,
+    workers: Arc<AtomicUsize>,
 }
 
 impl LaunchGate {
@@ -111,6 +113,7 @@ impl LaunchGate {
             root: root.into(),
             state: Mutex::new(State::default()),
             changed: Condvar::new(),
+            workers: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -119,7 +122,11 @@ impl LaunchGate {
     pub fn start(self: &Arc<Self>, prepare: Arc<Prepare>) -> io::Result<()> {
         let listener = listen_control()?;
         let gate = Arc::clone(self);
-        let connections = Arc::new(AtomicUsize::new(0));
+        reset_process_registry(
+            &self.root,
+            fs::read_to_string("/proc/sys/kernel/random/boot_id")?.trim(),
+        )?;
+        let connections = Arc::clone(&self.workers);
         thread::spawn(move || {
             for incoming in listener.incoming() {
                 match incoming {
@@ -175,7 +182,10 @@ impl LaunchGate {
         });
         let processes_changed = old_process_count != state.processes.len();
         match policies {
-            Ok(policies) => {
+            Ok(mut policies) => {
+                for policy in &mut policies {
+                    policy.ready &= !state.blocked.contains(&policy.package);
+                }
                 if state.policies_valid
                     && state.policies == policies
                     && !processes_changed
@@ -218,6 +228,30 @@ impl LaunchGate {
     /// cannot turn a completed default preparation into a permit for another account.
     pub fn permit_prepared(&self, package: &str, ticket: &str) -> io::Result<String> {
         self.issue_permit(package, Some(ticket), None)
+    }
+
+    pub(crate) fn block_new_processes(&self, package: &str) -> io::Result<()> {
+        self.lock()?.blocked.insert(package.to_owned());
+        self.refresh()?;
+        let (connection, revision) = {
+            let state = self.lock()?;
+            (
+                state
+                    .connection
+                    .as_ref()
+                    .ok_or_else(|| refused("system support disconnected"))?
+                    .id,
+                state.revision,
+            )
+        };
+        self.await_ack(connection, revision)
+    }
+
+    /// The daemon calls this while still holding its account transaction lock. Until
+    /// then even an App-Zygote child cannot bind after quiescence was confirmed.
+    pub fn finish_transaction(&self) -> io::Result<()> {
+        self.lock()?.blocked.clear();
+        self.refresh()
     }
 
     pub fn ticket_live(&self, ticket: &str) -> bool {
@@ -282,6 +316,12 @@ impl LaunchGate {
         ticket: Option<&str>,
         expected_slot: Option<&str>,
     ) -> io::Result<String> {
+        let aggregate =
+            validate_account_for_start(&self.root, &PackageName::new(package).map_err(invalid)?)?;
+        if expected_slot.is_some_and(|expected| expected != aggregate.active_slot().as_str()) {
+            return Err(refused("launch does not match committed account"));
+        }
+        self.lock()?.blocked.remove(package);
         self.refresh()?;
         if !self.native_ready() {
             return Err(refused("process support is not active"));
@@ -385,7 +425,12 @@ impl LaunchGate {
         self.publish()
     }
 
-    fn serve(&self, mut stream: UnixStream, peer: Peer, prepare: &Arc<Prepare>) -> io::Result<()> {
+    fn serve(
+        self: &Arc<Self>,
+        mut stream: UnixStream,
+        peer: Peer,
+        prepare: &Arc<Prepare>,
+    ) -> io::Result<()> {
         let mut reader = BufReader::new(stream.try_clone()?);
         let first = read_frame(&mut reader)?;
         let command: Control = serde_json::from_str(&first).map_err(invalid)?;
@@ -441,7 +486,7 @@ impl LaunchGate {
         }
     }
 
-    fn subscribe(&self, mut reader: BufReader<UnixStream>) -> io::Result<()> {
+    fn subscribe(self: &Arc<Self>, mut reader: BufReader<UnixStream>) -> io::Result<()> {
         reader.get_ref().set_read_timeout(None)?;
         let id = {
             let mut state = self.lock()?;
@@ -467,6 +512,34 @@ impl LaunchGate {
             loop {
                 let frame = read_subscription_frame(&mut reader)?;
                 let event: SystemEvent = serde_json::from_str(&frame).map_err(invalid)?;
+                if let SystemEvent::Verify {
+                    pid,
+                    uid,
+                    started,
+                    ref package,
+                } = event
+                {
+                    if self
+                        .workers
+                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                            (count < 32).then_some(count + 1)
+                        })
+                        .is_ok()
+                    {
+                        let permit = ControlPermit(Arc::clone(&self.workers));
+                        let gate = Arc::clone(self);
+                        let package = package.clone();
+                        // The subscription reader must remain free to receive the Ack
+                        // awaited by specialization. No Android service lock is held.
+                        thread::spawn(move || {
+                            let _permit = permit;
+                            if let Err(error) = gate.specialize(pid, uid, started, &package) {
+                                eprintln!("deferred process verification rejected: {error}");
+                            }
+                        });
+                    }
+                    continue;
+                }
                 let mut state = self.lock()?;
                 if state
                     .connection
@@ -512,6 +585,7 @@ impl LaunchGate {
                             state.claimed.remove(&ticket);
                         }
                     }
+                    SystemEvent::Verify { .. } => unreachable!(),
                 }
                 drop(state);
                 self.changed.notify_all();
@@ -536,7 +610,7 @@ impl LaunchGate {
     fn specialize(&self, pid: u32, uid: u32, started: u64, package: &str) -> io::Result<()> {
         let support_ready = {
             let state = self.lock()?;
-            state.policies_valid && state.connection.is_some()
+            state.policies_valid && state.connection.is_some() && !state.blocked.contains(package)
         };
         if !self.native_ready() || !support_ready {
             return Err(refused("launch support is not ready"));
@@ -555,6 +629,19 @@ impl LaunchGate {
             return Err(refused("process changed"));
         }
         let inherited = validate_process_family(&self.root, &aggregate, &process)?;
+        let mut record = ProcessRecord {
+            pid,
+            uid,
+            started,
+            package: package.as_str().to_owned(),
+            package_uid: aggregate.identity().uid(),
+            slot: slot.to_owned(),
+            namespace: process.namespace.clone(),
+            verified: false,
+        };
+        // Includes an isolated UID in stop confirmation while its Root mount worker
+        // is in progress; it cannot authorize any parent/child view yet.
+        save_process_record(&self.root, &record)?;
         let uid_text = uid.to_string();
         let pid_text = pid.to_string();
         let started_text = started.to_string();
@@ -570,6 +657,9 @@ impl LaunchGate {
         if inherited {
             command.arg("--verify-inherited");
         }
+        if uid != aggregate.identity().uid() {
+            command.arg("--isolated");
+        }
         let output = command.output()?;
         if !output.status.success() {
             return Err(refused("process CE/DE view was not installed"));
@@ -583,18 +673,11 @@ impl LaunchGate {
         if current != aggregate
             || !account_ready_to_execute(&store, &current)?
             || ProcessIdentity::read(pid)? != process
+            || self.lock()?.blocked.contains(package.as_str())
         {
             return Err(refused("account or process changed during specialization"));
         }
-        let record = ProcessRecord {
-            pid,
-            uid,
-            started,
-            package: package.as_str().to_owned(),
-            package_uid: aggregate.identity().uid(),
-            slot: slot.to_owned(),
-            namespace: process.namespace,
-        };
+        record.verified = true;
         save_process_record(&self.root, &record)?;
         self.refresh()?;
         let (connection, revision) = {
@@ -650,10 +733,25 @@ enum Control {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum SystemEvent {
-    Ack { revision: u64 },
-    Begin { ticket: String, package: String },
-    Cancel { ticket: String },
-    Consumed { token: String },
+    Ack {
+        revision: u64,
+    },
+    Begin {
+        ticket: String,
+        package: String,
+    },
+    Cancel {
+        ticket: String,
+    },
+    Consumed {
+        token: String,
+    },
+    Verify {
+        pid: u32,
+        uid: u32,
+        started: u64,
+        package: String,
+    },
 }
 
 fn load_policies(root: &Path) -> io::Result<Vec<Policy>> {
@@ -794,6 +892,7 @@ struct ProcessRecord {
     package_uid: u32,
     slot: String,
     namespace: String,
+    verified: bool,
 }
 
 fn validate_process_family(
@@ -820,12 +919,27 @@ fn validate_process_family(
     if process.uid != aggregate.identity().uid() && !(90000..=99999).contains(&process.uid) {
         return Err(refused("unexpected process UID"));
     }
+    if !inherited && parent.uid == 0 && (90000..=99999).contains(&process.uid) {
+        let proc = PathBuf::from(format!("/proc/{}", parent.pid));
+        let domain = fs::read_to_string(proc.join("attr/current"))?;
+        let command = fs::read(proc.join("cmdline"))?;
+        if domain.trim_end_matches(['\0', '\n']) == "u:r:zygote:s0"
+            && command
+                .split(|byte| *byte == 0)
+                .next()
+                .is_some_and(|name| name == b"zygote" || name == b"zygote64")
+        {
+            return Ok(false);
+        }
+    }
     let record: ProcessRecord = serde_json::from_str(&fs::read_to_string(
         root.join("processes")
             .join(format!("{}-{}.json", process.parent, parent.started)),
     )?)
     .map_err(invalid)?;
-    if record.started != parent.started
+    if !record.verified
+        || record.started != parent.started
+        || record.uid != parent.uid
         || record.package != aggregate.package().as_str()
         || record.package_uid != aggregate.identity().uid()
         || record.slot != aggregate.active_slot().as_str()
@@ -858,6 +972,31 @@ fn save_process_record(root: &Path, record: &ProcessRecord) -> io::Result<()> {
     result
 }
 
+fn reset_process_registry(root: &Path, boot: &str) -> io::Result<()> {
+    let marker = root.join("processes-boot");
+    match fs::read_to_string(&marker) {
+        Ok(previous) if previous == boot => return Ok(()),
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    match fs::remove_dir_all(root.join("processes")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let temporary = root.join("processes-boot.pending");
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(boot.as_bytes())?;
+    file.sync_all()?;
+    fs::rename(temporary, marker)
+}
+
 /// Adds verified isolated descendants to the ordinary UID scan. PID reuse never
 /// makes a saved record authorize or keep alive an unrelated process.
 pub(crate) fn tracked_processes(root: &Path, uid: u32) -> io::Result<Vec<PathBuf>> {
@@ -877,8 +1016,12 @@ pub(crate) fn tracked_processes(root: &Path, uid: u32) -> io::Result<Vec<PathBuf
         {
             continue;
         }
-        let record: ProcessRecord =
-            serde_json::from_str(&fs::read_to_string(entry.path())?).map_err(invalid)?;
+        let contents = match fs::read_to_string(entry.path()) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        let record: ProcessRecord = serde_json::from_str(&contents).map_err(invalid)?;
         match ProcessIdentity::read(record.pid) {
             Ok(actual)
                 if actual.started == record.started
@@ -890,15 +1033,23 @@ pub(crate) fn tracked_processes(root: &Path, uid: u32) -> io::Result<Vec<PathBuf
                 }
             }
             Ok(_) => {
-                fs::remove_file(entry.path())?;
+                remove_process_record(&entry.path())?;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                fs::remove_file(entry.path())?;
+                remove_process_record(&entry.path())?;
             }
             Err(error) => return Err(error),
         }
     }
     Ok(processes)
+}
+
+fn remove_process_record(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
