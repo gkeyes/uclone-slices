@@ -219,6 +219,8 @@ fn system_with_runner(
             runner: Box::new(runner),
             package_rows: None,
             launchers: BTreeMap::new(),
+            launch_gate: None,
+            runtime_root: PathBuf::new(),
         },
         commands,
     )
@@ -251,6 +253,8 @@ fn system_with_fast_restart_runner(
             runner: Box::new(runner),
             package_rows: None,
             launchers: BTreeMap::new(),
+            launch_gate: None,
+            runtime_root: PathBuf::new(),
         },
         commands,
     )
@@ -904,6 +908,8 @@ fn launch_verification_failures_are_contained_and_leave_no_uid_processes() {
             runner: Box::new(runner),
             package_rows: None,
             launchers: BTreeMap::new(),
+            launch_gate: None,
+            runtime_root: PathBuf::new(),
         };
 
         let error = android.launch_verified(&package, &slot).unwrap_err();
@@ -961,6 +967,8 @@ fn apply_view_mounts_and_unmounts_the_ce_de_pair_in_order() {
         runner: Box::new(runner),
         package_rows: None,
         launchers: BTreeMap::new(),
+        launch_gate: None,
+        runtime_root: PathBuf::new(),
     };
 
     android.apply_view(&package, &slot).unwrap();
@@ -1051,6 +1059,8 @@ fn maintenance_view_mounts_the_private_empty_pair_and_is_observable() {
         runner: Box::new(runner),
         package_rows: None,
         launchers: BTreeMap::new(),
+        launch_gate: None,
+        runtime_root: PathBuf::new(),
     };
 
     android.apply_maintenance_view(&package, &token).unwrap();
@@ -1133,6 +1143,8 @@ fn either_domain_mount_failure_cleans_every_published_mount() {
             runner: Box::new(runner),
             package_rows: None,
             launchers: BTreeMap::new(),
+            launch_gate: None,
+            runtime_root: PathBuf::new(),
         };
 
         assert!(android.apply_view(&package, &slot).is_err());
@@ -1177,6 +1189,8 @@ fn an_unmount_that_makes_no_progress_fails_without_a_retry_limit() {
         runner: Box::new(runner),
         package_rows: None,
         launchers: BTreeMap::new(),
+        launch_gate: None,
+        runtime_root: PathBuf::new(),
     };
 
     assert!(android.apply_view(&package, &SlotId::base()).is_err());
@@ -1223,6 +1237,8 @@ fn busy_managed_mount_uses_lazy_detach_and_still_verifies_progress() {
         runner: Box::new(runner),
         package_rows: None,
         launchers: BTreeMap::new(),
+        launch_gate: None,
+        runtime_root: PathBuf::new(),
     };
 
     android.apply_view(&package, &SlotId::base()).unwrap();
@@ -1294,6 +1310,8 @@ fn non_exact_busy_error_does_not_use_lazy_detach() {
         runner: Box::new(runner),
         package_rows: None,
         launchers: BTreeMap::new(),
+        launch_gate: None,
+        runtime_root: PathBuf::new(),
     };
 
     let error = android
@@ -1348,6 +1366,8 @@ fn lazy_detach_that_makes_no_progress_still_fails() {
         runner: Box::new(runner),
         package_rows: None,
         launchers: BTreeMap::new(),
+        launch_gate: None,
+        runtime_root: PathBuf::new(),
     };
 
     let error = android

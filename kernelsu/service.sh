@@ -79,9 +79,18 @@ rm -f "$PID_FILE" "$SOCKET"
 LOG_FILE=$RUNTIME_ROOT/ucloned.log
 [ ! -f "$LOG_FILE" ] || mv -f "$LOG_FILE" "$LOG_FILE.1"
 printf 'ucloned start %s build=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$BUILD_ID" >"$LOG_FILE"
+ANCHOR_PID=$("$MODDIR/bin/uclone-namespace-anchor" --check 2>/dev/null) || ANCHOR_PID=
+if [ -n "$ANCHOR_PID" ]; then
+    UCLONE_RUNTIME_ROOT="$RUNTIME_ROOT" \
+    UCLONE_RUNTIME_SOCKET="$SOCKET" \
+    UCLONE_BUILD_ID="$BUILD_ID" \
+    /system/bin/nsenter -t "$ANCHOR_PID" -m -- \
+    "$MODDIR/bin/ucloned" >>"$LOG_FILE" 2>&1 &
+else
 UCLONE_RUNTIME_ROOT="$RUNTIME_ROOT" \
 UCLONE_RUNTIME_SOCKET="$SOCKET" \
 UCLONE_BUILD_ID="$BUILD_ID" \
 /system/bin/nsenter -t 1 -m -- \
-"$MODDIR/bin/ucloned" >>"$LOG_FILE" 2>&1 &
+/system/bin/unshare -m -- /system/bin/sh "$MODDIR/runtime-entry.sh" "$MODDIR" >>"$LOG_FILE" 2>&1 &
+fi
 echo "$!" >"$PID_FILE"

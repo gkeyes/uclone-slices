@@ -1,6 +1,6 @@
 [package]
 name = "uclone-slices-runtime"
-version = "0.2.7"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ age = { version = "0.12.1", default-features = false }
 filetime = "0.2.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "net"] }
 sha2 = "0.10.9"
 tar = "0.4.46"
 thiserror = "2"

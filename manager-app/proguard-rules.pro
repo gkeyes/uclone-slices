@@ -6,3 +6,7 @@
     *** Companion;
     kotlinx.serialization.KSerializer serializer(...);
 }
+
+# Vector loads this entry point by name from assets/xposed_init inside system_server.
+-keep class com.uclone.slices.v2.gate.** { *; }
+-dontwarn de.robv.android.xposed.**

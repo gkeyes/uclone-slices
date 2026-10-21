@@ -4,13 +4,15 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
+use uclone_slices_runtime::launch::connect_control;
 use uclone_slices_runtime::layout::RUNTIME_SOCKET;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args();
     let _binary = arguments.next();
-    if arguments.next().as_deref() != Some("rpc") || arguments.next().is_some() {
-        return Err("usage: slotctl rpc".into());
+    let operation = arguments.next();
+    if !matches!(operation.as_deref(), Some("rpc" | "gate")) || arguments.next().is_some() {
+        return Err("usage: slotctl rpc|gate".into());
     }
     let socket = env::var("UCLONE_RUNTIME_SOCKET")
         .map(PathBuf::from)
@@ -20,13 +22,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !request.ends_with('\n') {
         request.push('\n');
     }
-    let response = rpc(&socket, &request)?;
+    let response = if operation.as_deref() == Some("gate") {
+        let stream = connect_control()?;
+        exchange(stream, &request)?
+    } else {
+        rpc(&socket, &request)?
+    };
     std::io::stdout().write_all(response.as_bytes())?;
     Ok(())
 }
 
 fn rpc(socket: &std::path::Path, request: &str) -> Result<String, std::io::Error> {
-    let mut stream = UnixStream::connect(socket)?;
+    let stream = UnixStream::connect(socket)?;
+    exchange(stream, request)
+}
+
+fn exchange(mut stream: UnixStream, request: &str) -> Result<String, std::io::Error> {
     stream.write_all(request.as_bytes())?;
     stream.shutdown(Shutdown::Write)?;
     let mut response = String::new();

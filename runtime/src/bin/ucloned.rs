@@ -17,15 +17,24 @@ use rpc::{
     ConnectionLimit, MAX_CONCURRENT_CONNECTIONS, OPERATION_FAILED_RESPONSE, RequestHandler,
     serialize_transaction, spawn_connection,
 };
+use uclone_slices_runtime::launch::{LaunchGate, export_enrollment, validate_runtime_namespace};
 use uclone_slices_runtime::layout::RUNTIME_ROOT;
-use uclone_slices_runtime::{BINARY_BUILD_ID, handle_line, production};
+use uclone_slices_runtime::{BINARY_BUILD_ID, handle_line, production_with_launch_gate};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if env::args().nth(1).as_deref() == Some("--observe-foreground") {
-        return foreground::observe_once();
-    }
     let root =
         PathBuf::from(env::var("UCLONE_RUNTIME_ROOT").unwrap_or_else(|_| RUNTIME_ROOT.to_owned()));
+    match env::args().nth(1).as_deref() {
+        Some("--observe-foreground") => return foreground::observe_once(),
+        Some("--export-enrollment") => {
+            prepare_runtime_root(&root)?;
+            export_enrollment(&root)?;
+            return Ok(());
+        }
+        Some(_) => return Err("unknown daemon operation".into()),
+        None => {}
+    }
+    validate_runtime_namespace()?;
     let socket = env::var("UCLONE_RUNTIME_SOCKET")
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("runtime.sock"));
@@ -37,10 +46,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     prepare_runtime_root(&root)?;
     wait_for_user0_ready();
     let boot_id = fs::read_to_string(BOOT_ID_PATH)?;
+    let transaction_lock = Arc::new(Mutex::new(()));
+    let gate = LaunchGate::new(&root);
+    let prepare_gate = Arc::clone(&gate);
+    let prepare_root = root.clone();
+    let prepare_lock = Arc::clone(&transaction_lock);
+    let prepare_build = build_id.clone();
+    gate.start(Arc::new(move |package, ticket| {
+        let _transaction = prepare_lock
+            .lock()
+            .map_err(|_| "transaction lock failed".to_owned())?;
+        if !prepare_gate.ticket_live(ticket) {
+            return Err("launch was cancelled".to_owned());
+        }
+        let mut runtime = production_with_launch_gate(
+            &prepare_root,
+            prepare_build.clone(),
+            Arc::clone(&prepare_gate),
+        )
+        .map_err(|error| error.to_string())?;
+        runtime
+            .prepare_default_account(package, || prepare_gate.ticket_live(ticket))
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }))?;
     // A failed boot convergence is logged and retried on the next start in this boot (its
     // marker is not written). The socket still opens: every request re-validates its own
     // package, and a package whose state cannot be read keeps failing closed on its own.
-    let boot_result = production(&root, build_id.clone())
+    let boot_result = production_with_launch_gate(&root, build_id.clone(), Arc::clone(&gate))
         .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
         .and_then(|mut boot_runtime| {
             reconcile_once_per_boot(&root, boot_id.trim(), || boot_runtime.reconcile_boot())
@@ -51,23 +84,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     remove_stale_socket(&socket)?;
     let listener = UnixListener::bind(&socket)?;
     fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
-    let transaction_lock = Arc::new(Mutex::new(()));
-    let sessions = Arc::new(Mutex::new(foreground::Sessions::default()));
-    foreground::spawn(
-        root.clone(),
-        build_id.clone(),
-        Arc::clone(&transaction_lock),
-        Arc::clone(&sessions),
-    );
     let handler_root = root;
     let handler_build_id = build_id;
     let handler: Arc<RequestHandler> = Arc::new(move |line| {
         serialize_transaction(&transaction_lock, || {
-            match production(&handler_root, handler_build_id.clone()) {
+            match production_with_launch_gate(
+                &handler_root,
+                handler_build_id.clone(),
+                Arc::clone(&gate),
+            ) {
                 Ok(mut runtime) => {
                     let response = handle_line(&mut runtime, &handler_build_id, line);
-                    if let Ok(mut sessions) = sessions.lock() {
-                        sessions.completed_request(line, &response);
+                    if let Err(error) = gate.refresh() {
+                        eprintln!("launch policy refresh failed: {error}");
                     }
                     response
                 }

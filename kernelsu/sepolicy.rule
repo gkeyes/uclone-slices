@@ -1,0 +1,4 @@
+# The launch socket is abstract and authenticates kernel peer UID plus system_server's
+# SELinux domain. Ordinary Apps, including other processes sharing UID 1000, are rejected.
+allow system_server ksu unix_stream_socket { connectto read write getattr getopt setopt shutdown }
+allow ksu system_server unix_stream_socket { read write getattr getopt setopt shutdown }

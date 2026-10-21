@@ -1028,17 +1028,17 @@ where
         aggregate.snapshot().map_err(model_error)
     }
 
-    /// An observation never enrolls an app or starts one already using its default account.
-    /// `activate_slot` performs the identity, account-I/O and paired-view checks before mutation.
-    pub fn activate_default_account(
+    /// Prepares the selected default without starting any App. The authenticated launch
+    /// ticket owns the later foreground start; cancellation and rollback never relaunch it.
+    pub fn prepare_default_account(
         &mut self,
         package: &PackageName,
-        still_foreground: impl FnMut() -> bool,
+        launch_permitted: impl FnMut() -> bool,
     ) -> Result<bool, RuntimeError> {
         let Some(aggregate) = self
             .packages
             .load(package)
-            .map_err(|error| logged_adapter("activate_default_account", package, "load", error))?
+            .map_err(|error| logged_adapter("prepare_default_account", package, "load", error))?
         else {
             return Ok(false);
         };
@@ -1049,7 +1049,7 @@ where
         if aggregate.active_slot() == &target {
             return Ok(false);
         }
-        let result = self.activate_slot_when(package, &target, still_foreground)?;
+        let result = self.activate_slot_when(package, &target, launch_permitted, false)?;
         Ok(result.active_slot == target)
     }
 
@@ -1058,7 +1058,7 @@ where
         package: &PackageName,
         target: &SlotId,
     ) -> Result<PackageSnapshot, RuntimeError> {
-        self.activate_slot_when(package, target, || true)
+        self.activate_slot_when(package, target, || true, true)
     }
 
     fn activate_slot_when(
@@ -1066,6 +1066,7 @@ where
         package: &PackageName,
         target: &SlotId,
         mut permitted: impl FnMut() -> bool,
+        launch: bool,
     ) -> Result<PackageSnapshot, RuntimeError> {
         let (mut aggregate, inspection) = self.load_ready(package)?;
         if !aggregate.has_slot(target) {
@@ -1090,9 +1091,13 @@ where
             return aggregate.snapshot().map_err(model_error);
         }
         if &previous == target {
-            self.android
-                .launch_verified(package, target)
-                .map_err(|error| logged_adapter("activate_slot", package, "retry_launch", error))?;
+            if launch {
+                self.android
+                    .launch_verified(package, target)
+                    .map_err(|error| {
+                        logged_adapter("activate_slot", package, "retry_launch", error)
+                    })?;
+            }
             return aggregate.snapshot().map_err(model_error);
         }
 
@@ -1114,7 +1119,7 @@ where
             self.restore_after_failed_stop(
                 &mut aggregate,
                 &previous,
-                inspection.was_running && permitted(),
+                inspection.was_running && launch && permitted(),
             )?;
             return Err(RuntimeError::OperationFailed);
         }
@@ -1123,7 +1128,7 @@ where
             self.rollback_activation(
                 &mut aggregate,
                 &previous,
-                inspection.was_running && permitted(),
+                inspection.was_running && launch && permitted(),
             )?;
             return Err(RuntimeError::OperationFailed);
         }
@@ -1135,7 +1140,7 @@ where
             self.rollback_activation(
                 &mut aggregate,
                 &previous,
-                inspection.was_running && permitted(),
+                inspection.was_running && launch && permitted(),
             )?;
             return Err(RuntimeError::OperationFailed);
         }
@@ -1144,9 +1149,13 @@ where
         self.packages
             .save(&aggregate)
             .map_err(|error| logged_adapter("activate_slot", package, "save_commit", error))?;
-        self.android
-            .launch_verified(package, target)
-            .map_err(|error| logged_adapter("activate_slot", package, "launch_target", error))?;
+        if launch {
+            self.android
+                .launch_verified(package, target)
+                .map_err(|error| {
+                    logged_adapter("activate_slot", package, "launch_target", error)
+                })?;
+        }
         aggregate.snapshot().map_err(model_error)
     }
 

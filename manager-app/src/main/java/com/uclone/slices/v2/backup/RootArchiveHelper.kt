@@ -142,6 +142,10 @@ internal class RootArchiveHelper(
         const val HELPER_ROOT = "/data/adb/uclone-slices-v2/manager-helper"
         const val HELPER_DIRECTORY = "$HELPER_ROOT/${BuildConfig.VERSION_NAME}"
         const val HELPER_PATH = "$HELPER_DIRECTORY/uclone_archive"
-        const val HELPER_COMMAND = "exec /system/bin/nsenter -t 1 -m -- $HELPER_PATH"
+        // The anchor pins Runtime's private view across daemon reconnects; it verifies
+        // PID/start-time/image/boot identity and enters a pinned namespace FD.
+        const val HELPER_COMMAND =
+            "exec /data/adb/modules/uclone-slices-v2/bin/uclone-namespace-anchor " +
+                "--exec-helper $HELPER_PATH"
     }
 }
