@@ -96,7 +96,9 @@ final class LaunchPolicyCache {
         sessions.end();
     }
 
-    synchronized boolean managed(String packageName) { return enrollments.containsKey(packageName); }
+    synchronized boolean managed(String packageName) {
+        return !MANAGER.equals(packageName) && enrollments.containsKey(packageName);
+    }
 
     synchronized boolean managedUid(int uid) { return enrollments.containsValue(uid); }
 
@@ -126,10 +128,13 @@ final class LaunchPolicyCache {
 
     private boolean consumePermit(String target, int callerUid, String token) {
         if (!connected || !valid) return false;
+        JSONObject policy = packages.get(target);
+        if (policy == null || !policy.optBoolean("ready")) return false;
         String selected = null;
         for (Map.Entry<String, JSONObject> entry : permits.entrySet()) {
             JSONObject permit = entry.getValue();
             if (!target.equals(permit.optString("package"))) continue;
+            if (!policy.optString("active").equals(permit.optString("slot"))) continue;
             boolean root = callerUid == 0 && "root".equals(permit.optString("caller"));
             boolean manager = callerUid == managerUid && managerUid >= 10000 &&
                 "manager".equals(permit.optString("caller")) && entry.getKey().equals(token);

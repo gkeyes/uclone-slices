@@ -2989,7 +2989,7 @@ fn process_gate_requires_failed_backup_setup_to_release_lease_before_relaunch() 
     let mut runtime = guarded_file_runtime(root.path());
     runtime.enroll(package.clone(), None).unwrap();
     let (packages, slots, mut android) = runtime.into_parts();
-    android.fail_next(AndroidFailure::Maintenance);
+    android.fail_next(AndroidFailure::Apply);
     let mut runtime = Runtime::new(packages, slots, android);
     assert!(
         runtime

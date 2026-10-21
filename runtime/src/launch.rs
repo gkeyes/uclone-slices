@@ -6,12 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead as _, BufReader, Read as _, Write as _};
 use std::net::Shutdown;
-#[cfg(target_os = "android")]
 use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -48,7 +48,15 @@ pub fn validate_runtime_namespace() -> io::Result<()> {
     Ok(())
 }
 
-type Prepare = dyn Fn(&str, &str) -> Result<(), String> + Send + Sync + 'static;
+type Prepare = dyn Fn(&str, &str) -> Result<String, String> + Send + Sync + 'static;
+
+struct ControlPermit(Arc<AtomicUsize>);
+
+impl Drop for ControlPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct Policy {
@@ -69,6 +77,7 @@ struct Connection {
 #[derive(Debug, Clone, Serialize)]
 struct Permit {
     package: String,
+    slot: String,
     token: String,
     caller: &'static str,
     #[serde(skip_serializing)]
@@ -110,14 +119,35 @@ impl LaunchGate {
     pub fn start(self: &Arc<Self>, prepare: Arc<Prepare>) -> io::Result<()> {
         let listener = listen_control()?;
         let gate = Arc::clone(self);
+        let connections = Arc::new(AtomicUsize::new(0));
         thread::spawn(move || {
             for incoming in listener.incoming() {
                 match incoming {
                     Ok(stream) => {
+                        // Reject ordinary UIDs before allocating a thread or reading a frame.
+                        // Keep the system subscription independent of bounded Root workers.
+                        let peer = match authenticate(&stream) {
+                            Ok(peer) => peer,
+                            Err(_) => continue,
+                        };
+                        let permit = if peer == Peer::Root {
+                            if connections
+                                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                                    (count < 32).then_some(count + 1)
+                                })
+                                .is_err()
+                            {
+                                continue;
+                            }
+                            Some(ControlPermit(Arc::clone(&connections)))
+                        } else {
+                            None
+                        };
                         let gate = Arc::clone(&gate);
                         let prepare = Arc::clone(&prepare);
                         thread::spawn(move || {
-                            if let Err(error) = gate.serve(stream, &prepare) {
+                            let _permit = permit;
+                            if let Err(error) = gate.serve(stream, peer, &prepare) {
                                 eprintln!("launch control rejected: {error}");
                             }
                         });
@@ -130,16 +160,45 @@ impl LaunchGate {
     }
 
     pub fn refresh(&self) -> io::Result<()> {
-        let policies = load_policies(&self.root);
+        let policies = load_policies(&self.root).and_then(|policies| {
+            export_policy_discovery(&policies)?;
+            Ok(policies)
+        });
         let mut state = self.lock()?;
+        let old_process_count = state.processes.len();
+        state.processes.retain(|_, record| {
+            ProcessIdentity::read(record.pid).is_ok_and(|actual| {
+                actual.uid == record.uid
+                    && actual.started == record.started
+                    && actual.namespace == record.namespace
+            })
+        });
+        let processes_changed = old_process_count != state.processes.len();
         match policies {
             Ok(policies) => {
-                export_policy_discovery(&policies)?;
+                if state.policies_valid
+                    && state.policies == policies
+                    && !processes_changed
+                    && state
+                        .connection
+                        .as_ref()
+                        .is_none_or(|connection| connection.ack != 0)
+                {
+                    return Ok(());
+                }
+                state.permits.retain(|_, permit| {
+                    policies.iter().any(|policy| {
+                        policy.package == permit.package
+                            && policy.ready
+                            && policy.active == permit.slot
+                    })
+                });
                 state.policies = policies;
                 state.policies_valid = true;
             }
             Err(error) => {
                 state.policies_valid = false;
+                state.permits.clear();
                 drop(state);
                 self.publish()?;
                 return Err(error);
@@ -151,8 +210,14 @@ impl LaunchGate {
 
     /// Root's explicit switch/retry/boot launch must obtain a single-use permit before
     /// calling ActivityManager. The Hook acknowledges it outside WindowManager's lock.
-    pub(crate) fn permit_explicit(&self, package: &str) -> io::Result<String> {
-        self.issue_permit(package, None)
+    pub(crate) fn permit_explicit(&self, package: &str, expected_slot: &str) -> io::Result<String> {
+        self.issue_permit(package, None, Some(expected_slot))
+    }
+
+    /// Called before releasing the account transaction lock, so an intervening switch
+    /// cannot turn a completed default preparation into a permit for another account.
+    pub fn permit_prepared(&self, package: &str, ticket: &str) -> io::Result<String> {
+        self.issue_permit(package, Some(ticket), None)
     }
 
     pub fn ticket_live(&self, ticket: &str) -> bool {
@@ -168,6 +233,22 @@ impl LaunchGate {
             fs::read_to_string(self.root.join("zygisk-ready"))
                 .is_ok_and(|actual| actual == expected)
         })
+    }
+
+    pub(crate) fn readiness(&self) -> (bool, bool) {
+        let system = self.state.lock().is_ok_and(|state| {
+            state.policies_valid
+                && state
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| connection.ack >= state.revision)
+        });
+        let process = self.native_ready()
+            && Command::new("/data/adb/modules/uclone-slices-v2/bin/uclone-namespace-anchor")
+                .arg("--check")
+                .output()
+                .is_ok_and(|result| result.status.success());
+        (system, process)
     }
 
     fn lock(&self) -> io::Result<std::sync::MutexGuard<'_, State>> {
@@ -186,13 +267,7 @@ impl LaunchGate {
             let Some(connection) = &state.connection else {
                 return Ok(());
             };
-            let frame = json!({
-                "type": "state", "build_id": BINARY_BUILD_ID,
-                "revision": state.revision, "valid": state.policies_valid,
-                "packages": state.policies,
-                "permits": state.permits.values().collect::<Vec<_>>(),
-                "processes": state.processes.values().collect::<Vec<_>>(),
-            });
+            let frame = state_frame(&state);
             (Arc::clone(&connection.writer), frame)
         };
         let mut writer = writer
@@ -201,7 +276,12 @@ impl LaunchGate {
         write_frame(&mut writer, &frame)
     }
 
-    fn issue_permit(&self, package: &str, ticket: Option<&str>) -> io::Result<String> {
+    fn issue_permit(
+        &self,
+        package: &str,
+        ticket: Option<&str>,
+        expected_slot: Option<&str>,
+    ) -> io::Result<String> {
         self.refresh()?;
         if !self.native_ready() {
             return Err(refused("process support is not active"));
@@ -217,6 +297,16 @@ impl LaunchGate {
             {
                 return Err(refused("account is not ready"));
             }
+            let slot = state
+                .policies
+                .iter()
+                .find(|policy| policy.package == package)
+                .ok_or_else(|| refused("account was removed"))?
+                .active
+                .clone();
+            if expected_slot.is_some_and(|expected| expected != slot) {
+                return Err(refused("launch does not match committed account"));
+            }
             let connection_id = state
                 .connection
                 .as_ref()
@@ -227,12 +317,17 @@ impl LaunchGate {
                     return Err(refused("launch was cancelled"));
                 }
             }
+            let caller = if ticket.is_some() { "manager" } else { "root" };
+            state
+                .permits
+                .retain(|_, permit| permit.package != package || permit.caller != caller);
             state.permits.insert(
                 token.clone(),
                 Permit {
                     package: package.to_owned(),
+                    slot,
                     token: token.clone(),
-                    caller: if ticket.is_some() { "manager" } else { "root" },
+                    caller,
                     ticket: ticket.map(str::to_owned),
                 },
             );
@@ -290,8 +385,7 @@ impl LaunchGate {
         self.publish()
     }
 
-    fn serve(&self, mut stream: UnixStream, prepare: &Arc<Prepare>) -> io::Result<()> {
-        let peer = authenticate(&stream)?;
+    fn serve(&self, mut stream: UnixStream, peer: Peer, prepare: &Arc<Prepare>) -> io::Result<()> {
         let mut reader = BufReader::new(stream.try_clone()?);
         let first = read_frame(&mut reader)?;
         let command: Control = serde_json::from_str(&first).map_err(invalid)?;
@@ -315,16 +409,13 @@ impl LaunchGate {
             Control::Prepare { ticket } => {
                 let package = {
                     let mut state = self.lock()?;
-                    if !state.claimed.insert(ticket.clone()) {
-                        None
-                    } else {
-                        state.tickets.get(&ticket).cloned()
-                    }
+                    let package = state.tickets.get(&ticket).cloned();
+                    package.filter(|_| state.claimed.insert(ticket.clone()))
                 };
                 match package {
-                    Some(package) => prepare(&package, &ticket).map_err(refused)
-                        .and_then(|()| self.issue_permit(&package, Some(&ticket)))
-                        .map(|permit| json!({"ok": {"package": package, "permit": permit, "permit_extra": PERMIT_EXTRA}})),
+                    Some(package) => prepare(&package, &ticket)
+                        .map_err(refused)
+                        .map(|permit| prepared_response(&package, &permit)),
                     None => Err(refused("launch ticket is not live")),
                 }
             }
@@ -453,6 +544,11 @@ impl LaunchGate {
         let package = PackageName::new(package).map_err(invalid)?;
         let store = FilePackageStore::open(&self.root).map_err(invalid)?;
         let aggregate = validate_account_for_start(&self.root, &package)?;
+        let (apk_path, apk_device, apk_inode) = aggregate.identity().apk_stamp();
+        let apk = fs::metadata(apk_path)?;
+        if apk.dev() != apk_device || apk.ino() != apk_inode {
+            return Err(refused("installed APK identity changed"));
+        }
         let slot = aggregate.active_slot().as_str();
         let process = ProcessIdentity::read(pid)?;
         if process.started != started || process.uid != uid {
@@ -500,6 +596,7 @@ impl LaunchGate {
             namespace: process.namespace,
         };
         save_process_record(&self.root, &record)?;
+        self.refresh()?;
         let (connection, revision) = {
             let mut state = self.lock()?;
             let connection = state
@@ -513,6 +610,20 @@ impl LaunchGate {
         self.publish()?;
         self.await_ack(connection, revision)
     }
+}
+
+fn state_frame(state: &State) -> Value {
+    json!({
+        "type": "state", "build_id": BINARY_BUILD_ID,
+        "revision": state.revision, "valid": state.policies_valid,
+        "packages": state.policies,
+        "permits": state.permits.values().collect::<Vec<_>>(),
+        "processes": state.processes.values().collect::<Vec<_>>(),
+    })
+}
+
+fn prepared_response(package: &str, permit: &str) -> Value {
+    json!({"ok": {"package": package, "permit": permit, "permit_extra": PERMIT_EXTRA}})
 }
 
 #[derive(Debug, Deserialize)]
@@ -711,7 +822,7 @@ fn validate_process_family(
     }
     let record: ProcessRecord = serde_json::from_str(&fs::read_to_string(
         root.join("processes")
-            .join(format!("{}.json", process.parent)),
+            .join(format!("{}-{}.json", process.parent, parent.started)),
     )?)
     .map_err(invalid)?;
     if record.started != parent.started
@@ -729,8 +840,8 @@ fn save_process_record(root: &Path, record: &ProcessRecord) -> io::Result<()> {
     let directory = root.join("processes");
     fs::create_dir_all(&directory)?;
     fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
-    let target = directory.join(format!("{}.json", record.pid));
-    let temporary = directory.join(format!("{}.pending", record.pid));
+    let target = directory.join(format!("{}-{}.json", record.pid, record.started));
+    let temporary = directory.join(format!("{}-{}.pending", record.pid, record.started));
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -801,6 +912,9 @@ fn authenticate(stream: &UnixStream) -> io::Result<Peer> {
     let credentials = rustix::net::sockopt::socket_peercred(stream)?;
     if credentials.uid.as_raw() == 0 {
         return Ok(Peer::Root);
+    }
+    if credentials.uid.as_raw() != 1000 {
+        return Err(refused("unauthorized launch peer"));
     }
     let pid = credentials.pid.as_raw_nonzero().get();
     let domain = fs::read_to_string(format!("/proc/{pid}/attr/current"))?;

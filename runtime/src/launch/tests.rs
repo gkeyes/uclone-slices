@@ -53,6 +53,7 @@ fn guessed_or_cancelled_tickets_cannot_authorize_account_preparation() {
             token.clone(),
             Permit {
                 package: "com.example.app".to_owned(),
+                slot: "base".to_owned(),
                 token,
                 caller: "manager",
                 ticket: Some(ticket.clone()),
@@ -71,7 +72,7 @@ fn a_disconnected_system_cannot_issue_an_explicit_launch_permit() {
     let root = tempfile::tempdir().unwrap();
     stored_package(root.path());
     let gate = LaunchGate::new(root.path());
-    assert!(gate.permit_explicit("com.example.app").is_err());
+    assert!(gate.permit_explicit("com.example.app", "base").is_err());
     assert!(gate.lock().unwrap().permits.is_empty());
 }
 
@@ -121,7 +122,7 @@ fn pid_reuse_discards_an_old_isolated_process_record() {
         !root
             .path()
             .join("processes")
-            .join(format!("{}.json", record.pid))
+            .join(format!("{}-{}.json", record.pid, record.started))
             .exists()
     );
 }
@@ -130,4 +131,65 @@ fn pid_reuse_discards_an_old_isolated_process_record() {
 fn native_requests_have_no_client_supplied_mount_sources() {
     let request = r#"{"op":"specialize","pid":42,"uid":10123,"started":123,"package":"com.example.app","source":"/data/other"}"#;
     assert!(serde_json::from_str::<Control>(request).is_err());
+}
+
+#[test]
+fn shared_system_snapshot_is_produced_by_the_root_encoder() {
+    let token = "a".repeat(64);
+    let mut state = State {
+        revision: 7,
+        policies_valid: true,
+        ..State::default()
+    };
+    state.policies.push(Policy {
+        package: "com.example.app".to_owned(),
+        uid: 10123,
+        active: "slot-1".to_owned(),
+        default: Some("base".to_owned()),
+        ready: true,
+    });
+    state.permits.insert(
+        token.clone(),
+        Permit {
+            package: "com.example.app".to_owned(),
+            slot: "slot-1".to_owned(),
+            token,
+            caller: "manager",
+            ticket: Some("b".repeat(64)),
+        },
+    );
+    state.processes.insert(
+        42,
+        ProcessRecord {
+            pid: 42,
+            uid: 10123,
+            started: 123,
+            package: "com.example.app".to_owned(),
+            package_uid: 10123,
+            slot: "slot-1".to_owned(),
+            namespace: "mnt:[7]".to_owned(),
+        },
+    );
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../protocol/gate-fixtures/system-state.json"
+    ))
+    .unwrap();
+    assert_eq!(state_frame(&state), expected);
+}
+
+#[test]
+fn shared_prepared_response_and_request_use_the_live_private_contract() {
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../protocol/gate-fixtures/prepare.response.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        prepared_response("com.example.app", &"a".repeat(64)),
+        expected
+    );
+    let request: Control = serde_json::from_str(include_str!(
+        "../../../protocol/gate-fixtures/prepare.request.json"
+    ))
+    .unwrap();
+    assert!(matches!(request, Control::Prepare { ticket } if validate_token(&ticket).is_ok()));
 }

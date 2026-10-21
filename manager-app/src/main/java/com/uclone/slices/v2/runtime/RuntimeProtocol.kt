@@ -247,7 +247,12 @@ enum class ErrorCode(val wire: String) {
 }
 
 sealed interface RuntimeReply {
-    data class Capabilities(val buildId: String, val binaryBuildId: String? = null) : RuntimeReply
+    data class Capabilities(
+        val buildId: String,
+        val binaryBuildId: String? = null,
+        val launchGateReady: Boolean = false,
+        val processViewReady: Boolean = false,
+    ) : RuntimeReply
     data class Packages(val packages: List<PackageSnapshot>) : RuntimeReply
     data class Package(val packageSnapshot: PackageSnapshot) : RuntimeReply
     data class AccountIoLeaseReply(val lease: AccountIoLease) : RuntimeReply
@@ -394,6 +399,8 @@ object RuntimeProtocol {
             return RuntimeReply.Capabilities(
                 buildId = ok.getString("build_id"),
                 binaryBuildId = if (ok.isNull("binary_build_id")) null else ok.getString("binary_build_id"),
+                launchGateReady = ok.optBoolean("launch_gate_ready", false),
+                processViewReady = ok.optBoolean("process_view_ready", false),
             )
         }
         if (ok.has("packages")) {

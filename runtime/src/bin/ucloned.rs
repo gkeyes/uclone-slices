@@ -68,16 +68,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         runtime
             .prepare_default_account(package, || prepare_gate.ticket_live(ticket))
             .map_err(|error| error.to_string())?;
-        Ok(())
+        prepare_gate
+            .permit_prepared(package, ticket)
+            .map_err(|error| error.to_string())
     }))?;
     // A failed boot convergence is logged and retried on the next start in this boot (its
     // marker is not written). The socket still opens: every request re-validates its own
     // package, and a package whose state cannot be read keeps failing closed on its own.
-    let boot_result = production_with_launch_gate(&root, build_id.clone(), Arc::clone(&gate))
-        .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
-        .and_then(|mut boot_runtime| {
-            reconcile_once_per_boot(&root, boot_id.trim(), || boot_runtime.reconcile_boot())
-        });
+    let boot_result = (|| {
+        let _transaction = transaction_lock
+            .lock()
+            .map_err(|_| "transaction lock failed")?;
+        production_with_launch_gate(&root, build_id.clone(), Arc::clone(&gate))
+            .map_err(|error| Box::new(error) as Box<dyn std::error::Error>)
+            .and_then(|mut boot_runtime| {
+                reconcile_once_per_boot(&root, boot_id.trim(), || boot_runtime.reconcile_boot())
+            })
+    })();
     if let Err(error) = boot_result {
         eprintln!("ucloned boot reconcile failed; serving requests anyway: {error}");
     }

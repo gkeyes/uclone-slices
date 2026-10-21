@@ -94,7 +94,11 @@ class RuntimeProtocolTest {
             assertEquals(fixture.toString(), encoded.toString(), name)
             val response = RuntimeProtocol.decode(resource("$name.response.json"))
             when (name) {
-                "probe" -> assertTrue(response is RuntimeReply.Capabilities)
+                "probe" -> {
+                    assertTrue(response is RuntimeReply.Capabilities)
+                    assertTrue(response.launchGateReady)
+                    assertTrue(response.processViewReady)
+                }
                 "list_packages" -> assertEquals(
                     emptyList(),
                     (response as RuntimeReply.Packages).packages,
@@ -134,6 +138,8 @@ class RuntimeProtocolTest {
 
         assertEquals(BuildConfig.RUNTIME_PROTOCOL_BUILD_ID, reply.buildId)
         assertEquals(null, reply.binaryBuildId)
+        assertEquals(false, reply.launchGateReady)
+        assertEquals(false, reply.processViewReady)
     }
 
     @Test

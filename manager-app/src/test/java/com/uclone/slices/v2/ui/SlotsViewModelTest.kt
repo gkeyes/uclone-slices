@@ -584,6 +584,23 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun matchingVersionsCannotEnableWritesWithoutBothLaunchComponents() {
+        for ((system, process) in listOf(false to false, true to false, false to true)) {
+            val client = GatedProbeRuntimeClient(RuntimeReply.Capabilities(
+                TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION,
+                launchGateReady = system, processViewReady = process,
+            ))
+            client.gate.complete(Unit)
+            val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+            assertTrue(viewModel.state.value.runtimeCompatible)
+            assertFalse(viewModel.state.value.operationsAllowed)
+            val before = client.commands.toList()
+            viewModel.onIntent(UiIntent.CreateSlot("Work"))
+            assertEquals(before, client.commands)
+        }
+    }
+
+    @Test
     fun transportFailureClearsRuntimeReadyAndPreservesTypedNotice() {
         val client = FakeRuntimeClient()
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
@@ -1408,7 +1425,7 @@ private open class FakeRuntimeClient(
             return it
         }
         return when (command) {
-            RuntimeCommand.Probe -> RuntimeReply.Capabilities(buildId, buildId)
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities(buildId, buildId, launchGateReady = true, processViewReady = true)
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(
                 if (enrolled) listOf(snapshot) else emptyList(),
             )
@@ -1496,7 +1513,7 @@ private class BlockingRuntimeClient : RuntimeClient {
 
     override suspend fun execute(command: RuntimeCommand): RuntimeReply =
         when (command) {
-            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION)
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION, launchGateReady = true, processViewReady = true)
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(emptyList())
             is RuntimeCommand.Enroll,
             is RuntimeCommand.GetPackage,
@@ -1546,7 +1563,7 @@ private class BlockingRebindRuntimeClient : RuntimeClient {
 
     override suspend fun execute(command: RuntimeCommand): RuntimeReply =
         when (command) {
-            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION)
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION, launchGateReady = true, processViewReady = true)
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(listOf(snapshot))
             is RuntimeCommand.Enroll,
             is RuntimeCommand.GetPackage,
@@ -1583,7 +1600,7 @@ private class BlockingQuickRuntimeClient : RuntimeClient {
 
     override suspend fun execute(command: RuntimeCommand): RuntimeReply =
         when (command) {
-            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION)
+            RuntimeCommand.Probe -> RuntimeReply.Capabilities(TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION, launchGateReady = true, processViewReady = true)
             RuntimeCommand.ListPackages -> RuntimeReply.Packages(listOf(snapshot))
             is RuntimeCommand.ActivateSlot -> {
                 activationCommands += command

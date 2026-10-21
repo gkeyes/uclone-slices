@@ -882,6 +882,7 @@ internal class SlotsViewModel(
                     it.copy(
                         runtimeReady = true,
                         runtimeCompatible = compatible,
+                        launchReady = compatible && probe.launchGateReady && probe.processViewReady,
                         buildId = probe.binaryBuildId.orEmpty(),
                         packages = if (compatible) it.packages else emptyList(),
                         selected = if (compatible) it.selected else null,
@@ -1177,6 +1178,7 @@ internal class SlotsViewModel(
             it.copy(
                 runtimeReady = false,
                 runtimeCompatible = false,
+                launchReady = false,
                 posted = post(UiNotice.RuntimeUnavailable),
                 pendingRename = null,
                 pendingDelete = null,

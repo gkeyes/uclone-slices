@@ -744,6 +744,8 @@ impl AndroidOps for MemoryAndroidOps {
         Ok(Capabilities {
             build_id: self.build_id.clone(),
             binary_build_id: crate::BINARY_BUILD_ID.to_owned(),
+            launch_gate_ready: true,
+            process_view_ready: true,
         })
     }
 

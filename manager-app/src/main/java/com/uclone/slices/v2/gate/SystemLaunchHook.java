@@ -227,7 +227,7 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
     private void beforeApplication(XC_MethodHook.MethodHookParam call) throws Exception {
         int pid = (Integer) call.args[1];
         int uid = (Integer) call.args[2];
-        if (uid < 10000 || uid >= 100000) return;
+        if (uid < 10000 || uid >= 100000 || (uid >= 20000 && uid < 30000)) return;
         Object pids = field(call.thisObject, "mPidsSelfLocked");
         Object process;
         synchronized (pids) { process = XposedHelpers.callMethod(pids, "get", pid); }

@@ -7,6 +7,8 @@ CUSTOMIZE="$ROOT/kernelsu/customize.sh"
 
 bash -n "$SERVICE"
 bash -n "$CUSTOMIZE"
+bash -n "$ROOT/kernelsu/runtime-entry.sh"
+bash -n "$ROOT/kernelsu/post-fs-data.sh"
 grep -F -x 'umask 077' "$SERVICE" >/dev/null
 grep -F -x 'RUNTIME_ROOT=/data/adb/uclone-slices-v2' "$SERVICE" >/dev/null
 grep -F 'CE_STORAGE_ROOT=/data/misc_ce/0/uclone-slices-v2' "$SERVICE" >/dev/null
@@ -18,10 +20,7 @@ grep -F 'chmod 0700 "$DIRECTORY"' "$SERVICE" >/dev/null
 grep -F '0:0:700' "$SERVICE" >/dev/null
 grep -F 'readlink "/proc/$PID/exe"' "$SERVICE" >/dev/null
 grep -F '[ -S "$SOCKET" ]' "$SERVICE" >/dev/null
-grep -F 'printf '\''{"op":"probe"}\n'\''' "$SERVICE" >/dev/null
-grep -F '"$MODDIR/bin/slotctl" rpc' "$SERVICE" >/dev/null
-grep -F 'EXPECTED_PROBE_RESPONSE=$(printf '\''{"ok":{"build_id":"%s","binary_build_id":"%s"}}'\'' "$BUILD_ID" "$BUILD_ID")' "$SERVICE" >/dev/null
-grep -F '[ "$PROBE_RESPONSE" = "$EXPECTED_PROBE_RESPONSE" ]' "$SERVICE" >/dev/null
+grep -F 'UCLONE_EXPECTED_BUILD_ID="$BUILD_ID" "$MODDIR/bin/slotctl" check-runtime' "$SERVICE" >/dev/null
 grep -F 'chmod 0600 "$SOCKET"' "$SERVICE" >/dev/null
 grep -F 'kill -9 "$PID"' "$SERVICE" >/dev/null
 grep -F '/system/bin/nsenter -t 1 -m --' "$SERVICE" >/dev/null

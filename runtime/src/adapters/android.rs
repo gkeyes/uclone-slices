@@ -529,9 +529,15 @@ impl AndroidOps for SystemAndroidOps {
         if unlocked.stdout.trim() != "RUNNING_UNLOCKED" {
             return Err(AdapterError::new("user0 is not unlocked"));
         }
+        let (launch_gate_ready, process_view_ready) = self
+            .launch_gate
+            .as_ref()
+            .map_or((false, false), |gate| gate.readiness());
         Ok(Capabilities {
             build_id: self.build_id.clone(),
             binary_build_id: crate::BINARY_BUILD_ID.to_owned(),
+            launch_gate_ready,
+            process_view_ready,
         })
     }
 
@@ -720,7 +726,7 @@ impl AndroidOps for SystemAndroidOps {
     ) -> Result<(), AdapterError> {
         let component = self.launcher_component(package)?;
         if let Some(gate) = self.launch_gate.as_ref() {
-            gate.permit_explicit(package.as_str())
+            gate.permit_explicit(package.as_str(), expected.as_str())
                 .map_err(|error| AdapterError::new(error.to_string()))?;
         }
         if let Err(error) = self.required(

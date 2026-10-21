@@ -59,7 +59,7 @@ std::optional<Record> read_record() {
   return record;
 }
 
-int open_anchor() {
+int open_anchor(int* root_fd = nullptr) {
   if (!safe_root()) return -1;
   auto record = read_record();
   if (!record || record->build != UCLONE_BUILD_ID || record->boot != boot_id() || record->pid <= 1 ||
@@ -71,7 +71,11 @@ int open_anchor() {
       record->ns == link_text("/proc/1/ns/mnt")) return -1;
   int fd = open((proc + "/ns/mnt").c_str(), O_RDONLY | O_CLOEXEC);
   if (fd < 0) return -1;
-  if (slice::start_time(record->pid) != record->started) { close(fd); return -1; }
+  int root = open((proc + "/root").c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (root < 0 || slice::start_time(record->pid) != record->started) {
+    close(fd); if (root >= 0) close(root); return -1;
+  }
+  if (root_fd != nullptr) *root_fd = root; else close(root);
   return fd;
 }
 
@@ -148,8 +152,11 @@ bool execute_helper(const char* image) {
   struct stat file{};
   if (!image_fd || fstat(image_fd.get(), &file) != 0 || !S_ISREG(file.st_mode) ||
       file.st_uid != 0 || (file.st_mode & 0777) != 0700) return false;
-  slice::Fd ns(open_anchor());
-  if (!ns || setns(ns.get(), CLONE_NEWNS) != 0) return false;
+  int root = -1;
+  slice::Fd ns(open_anchor(&root));
+  slice::Fd target_root(root);
+  if (!ns || !target_root || setns(ns.get(), CLONE_NEWNS) != 0 ||
+      fchdir(target_root.get()) != 0 || chroot(".") != 0 || chdir("/") != 0) return false;
   char* args[]{const_cast<char*>(image), nullptr};
   (void)fexecve(image_fd.get(), args, environ);
   return false;

@@ -112,6 +112,7 @@ android {
         }
         getByName("test") {
             resources.directories.add("../protocol/fixtures")
+            resources.directories.add("../protocol/gate-fixtures")
             resources.directories.add("src/main/assets")
         }
     }

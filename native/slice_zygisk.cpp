@@ -111,9 +111,10 @@ class SliceModule : public zygisk::ModuleBase {
 
   void preAppSpecialize(zygisk::AppSpecializeArgs* args) override {
     api_->setOption(zygisk::Option::DLCLOSE_MODULE_LIBRARY);
-    if (args->uid < 10000 || args->uid >= 100000) return;
+    // SDK sandboxes have their own OS-managed storage and must not receive App data.
+    if (args->uid < 10000 || args->uid >= 100000 || (args->uid >= 20000 && args->uid < 30000)) return;
     package_ = package_for(env_, args);
-    if (package_.empty()) return;
+    if (package_.empty() || package_ == "com.uclone.slices.v2") return;
     auto configured = module_discovery(api_, package_);
     if (configured == false) return;
     companion_ = api_->connectCompanion();

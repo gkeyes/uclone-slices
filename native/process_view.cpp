@@ -60,10 +60,11 @@ bool install(const Request& request) {
   if (getuid() != 0 || request.pid <= 1 || !identity_matches(request)) return false;
   std::string proc = "/proc/" + std::to_string(request.pid);
   slice::Fd target(open((proc + "/ns/mnt").c_str(), O_RDONLY | O_CLOEXEC));
+  slice::Fd target_root(open((proc + "/root").c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC));
   slice::Fd init(open("/proc/1/ns/mnt", O_RDONLY | O_CLOEXEC));
   slice::Fd current(open("/proc/self/ns/mnt", O_RDONLY | O_CLOEXEC));
   struct stat target_stat{}, init_stat{}, current_stat{};
-  if (!target || !init || !current || fstat(target.get(), &target_stat) != 0 ||
+  if (!target || !target_root || !init || !current || fstat(target.get(), &target_stat) != 0 ||
       fstat(init.get(), &init_stat) != 0 || fstat(current.get(), &current_stat) != 0 ||
       slice::same_object(target_stat, init_stat) ||
       slice::same_object(target_stat, current_stat)) return false;
@@ -80,7 +81,8 @@ bool install(const Request& request) {
   slice::Fd de(open(de_path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
   struct stat ce_stat{}, de_stat{};
   if (!ce || !de || fstat(ce.get(), &ce_stat) != 0 || fstat(de.get(), &de_stat) != 0) return false;
-  if (!identity_matches(request) || setns(target.get(), CLONE_NEWNS) != 0) return false;
+  if (!identity_matches(request) || setns(target.get(), CLONE_NEWNS) != 0 ||
+      fchdir(target_root.get()) != 0 || chroot(".") != 0 || chdir("/") != 0) return false;
   auto ce_aliases = aliases(request.package, true);
   auto de_aliases = aliases(request.package, false);
   if (ce_aliases.empty() || de_aliases.empty()) return false;
