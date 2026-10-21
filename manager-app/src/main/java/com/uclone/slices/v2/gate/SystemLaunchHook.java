@@ -7,6 +7,7 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ResolveInfo;
+import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Binder;
 import android.os.Looper;
@@ -135,7 +136,10 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
             globalLock = field(service, "mGlobalLock");
             rootWindow = field(service, "mRootWindowContainer");
             Intent gate = gateIntent("0");
-            preparation = context.getPackageManager().resolveActivity(gate, 0);
+            // systemReady precedes CE unlock. Resolve metadata for both boot states;
+            // OS launch checks and Runtime's unlock gate still govern actual execution.
+            preparation = context.getPackageManager().resolveActivity(gate,
+                PackageManager.MATCH_DIRECT_BOOT_AWARE | PackageManager.MATCH_DIRECT_BOOT_UNAWARE);
             if (preparation == null || preparation.activityInfo == null || !preparation.activityInfo.exported) {
                 throw new IllegalStateException("preparation Activity is unavailable");
             }
