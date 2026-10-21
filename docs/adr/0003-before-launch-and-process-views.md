@@ -20,7 +20,7 @@
 4. 手动账号操作在启动前发布一次性许可并等待系统端确认。Intent 中自称来自 Slice 的字段不构成授权；许可只能使用一次，包名和本次连接必须匹配，连接中断撤销全部许可。
 5. Runtime 从 init namespace 派生独立 mount namespace，将传播设为 slave。它继续在自己的视图中使用现有 CE/DE 事务和维护视图，避免重写已验证的恢复模型；这些挂载不能传播回 init、Zygote 或其他 App。
 6. Zygisk 在 App specialization 前建立私有 companion 通道，在 specialization 后等待 Root 安装并验证该进程的 CE/DE 视图。此时 App 业务代码尚未执行。失败终止本次进程，不能落回错误账号继续运行。配置外的 App 直接放行并卸载本模块。
-7. Root 只接受真实 PID、UID、进程开始时间和已登记包身份；从 Aggregate 选择账号，不接受客户端提供任意源路径。源目录先以目录 FD 打开，再进入目标 namespace。Base 从 init 的原始视图打开，分账号从既有槽对打开。覆盖实际存在的 canonical、legacy 和 data_mirror 别名，逐一验证 inode/device。
+7. Root 只接受真实 PID、UID、进程开始时间和已登记包身份；从 Aggregate 选择账号，不接受客户端提供任意源路径。worker 只在 init 的原始视图读取 Base 或物理槽对，不在 init 安装挂载；先打开源目录并用 open_tree 克隆 detached mount，再进入目标 namespace，以 move_mount 安装。普通目录 FD 属于旧 namespace，不能直接作为跨 namespace 的 MS_BIND 源。早于 Linux 5.2 的内核只在目标 namespace 可直接解析到同一 inode 的路径时采用旧 bind，否则拒绝。覆盖实际存在的 canonical、legacy 和 data_mirror 别名，逐一验证 inode/device。
 8. 进程 namespace 必须与 init、Runtime 和特权父进程不同。对于继承已验证账号视图的 App Zygote 子进程，只验证现有视图，不修改共享父 namespace。短期 PID 记录带开始时间与已验证状态，在新 boot 清理，用于纳入隔离子进程的停止和验证，不成为第二套账号配置。独立隔离 UID 只接受实际系统 Zygote 或已验证账号父进程，保留 Android 原本屏蔽的数据路径，不创建私有目录扩大权限。
 9. Root namespace anchor 通过 boot ID、编译身份、PID 开始时间和 image inode 保留并验证 Runtime namespace；daemon 重启复用该视图，同一启动丢失 anchor 时拒绝从无关视图重建。备份辅助程序进入经过身份核验的 Runtime namespace，继续消费 Runtime 的受租约保护路径。不能继续固定进入 init namespace，否则当前账号和维护视图会不一致。
 10. 启动控制面与公开账号 wire 分开。公开十九项账号操作保持原有语义；内部控制协议有实际 Hook、Manager 准备 Activity、native companion 和共享 fixture 消费。它不提供任意文件、挂载、Root 命令或账号选择能力。

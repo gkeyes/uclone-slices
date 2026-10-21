@@ -111,9 +111,10 @@ bool start_anchor() {
     return record && record->ns == self;
   }
   auto previous = read_record();
-  if (previous && previous->boot == boot_id() && previous->ns != self) {
+  if (previous && previous->boot == boot_id()) {
     // The last namespace disappeared in this boot. Do not reconstruct a maintenance
-    // or account view from an unrelated namespace while a helper may still use it.
+    // or account view from an unrelated namespace. Its numeric inode can be reused,
+    // so equality with a newly created namespace does not prove continuity.
     return false;
   }
   int ready[2];
