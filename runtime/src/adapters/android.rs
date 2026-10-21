@@ -3,9 +3,11 @@ use std::fs;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::launch::{LaunchGate, tracked_processes};
 use crate::layout;
 use crate::model::{
     AccountIoToken, Capabilities, ObservedView, PackageEnabledState, PackageIdentity,
@@ -95,6 +97,8 @@ pub(crate) struct SystemAndroidOps {
     // repeated full package listings and a repeated Launcher resolution.
     package_rows: Option<Vec<(String, u32)>>,
     launchers: BTreeMap<PackageName, String>,
+    launch_gate: Option<Arc<LaunchGate>>,
+    runtime_root: PathBuf,
 }
 
 impl SystemAndroidOps {
@@ -116,7 +120,14 @@ impl SystemAndroidOps {
             runner: Box::<ProcessRunner>::default(),
             package_rows: None,
             launchers: BTreeMap::new(),
+            launch_gate: None,
+            runtime_root: PathBuf::from(layout::RUNTIME_ROOT),
         }
+    }
+
+    pub(crate) fn set_launch_gate(&mut self, root: &Path, gate: Option<Arc<LaunchGate>>) {
+        self.runtime_root = root.to_path_buf();
+        self.launch_gate = gate;
     }
 
     fn canonical_paths(&self, package: &PackageName) -> (PathBuf, PathBuf) {
@@ -291,7 +302,14 @@ impl SystemAndroidOps {
             .filter(|(_process, owner)| *owner == uid)
             .map(|(process, _owner)| process)
             .collect::<Vec<_>>();
+        if self.launch_gate.is_some() {
+            processes.extend(
+                tracked_processes(&self.runtime_root, uid)
+                    .map_err(|error| AdapterError::new(error.to_string()))?,
+            );
+        }
         processes.sort();
+        processes.dedup();
         Ok(processes)
     }
 
@@ -326,7 +344,18 @@ impl SystemAndroidOps {
             PROCESS_EXIT_CONFIRMATION_WINDOW,
             PROCESS_EXIT_POLL_INTERVAL,
             || self.package_processes(uid),
-            |known| surviving_processes(known, uid),
+            |known| {
+                let mut survivors = surviving_processes(known, uid)?;
+                if self.launch_gate.is_some() {
+                    survivors.extend(
+                        tracked_processes(&self.runtime_root, uid)
+                            .map_err(|error| AdapterError::new(error.to_string()))?,
+                    );
+                    survivors.sort();
+                    survivors.dedup();
+                }
+                Ok(survivors)
+            },
         )
     }
 
@@ -511,9 +540,15 @@ impl AndroidOps for SystemAndroidOps {
         if unlocked.stdout.trim() != "RUNNING_UNLOCKED" {
             return Err(AdapterError::new("user0 is not unlocked"));
         }
+        let (launch_gate_ready, process_view_ready) = self
+            .launch_gate
+            .as_ref()
+            .map_or((false, false), |gate| gate.readiness());
         Ok(Capabilities {
             build_id: self.build_id.clone(),
             binary_build_id: crate::BINARY_BUILD_ID.to_owned(),
+            launch_gate_ready,
+            process_view_ready,
         })
     }
 
@@ -566,6 +601,10 @@ impl AndroidOps for SystemAndroidOps {
     }
 
     fn force_stop(&mut self, package: &PackageName) -> Result<(), AdapterError> {
+        if let Some(gate) = self.launch_gate.as_ref() {
+            gate.block_new_processes(package.as_str())
+                .map_err(|error| AdapterError::new(error.to_string()))?;
+        }
         if let Some(policy) = force_stop_policy(package) {
             let uid = self.package_uid(package)?;
             return self.force_stop_with_policy(package, uid, policy);
@@ -701,6 +740,10 @@ impl AndroidOps for SystemAndroidOps {
         expected: &SlotId,
     ) -> Result<(), AdapterError> {
         let component = self.launcher_component(package)?;
+        if let Some(gate) = self.launch_gate.as_ref() {
+            gate.permit_explicit(package.as_str(), expected.as_str())
+                .map_err(|error| AdapterError::new(error.to_string()))?;
+        }
         if let Err(error) = self.required(
             "/system/bin/am",
             &["start", "-W", "--user", "0", "-n", &component],

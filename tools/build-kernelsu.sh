@@ -39,14 +39,21 @@ CC_aarch64_linux_android="$LINKER" \
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/bin" "$ROOT/outputs"
+"$ROOT/tools/build-native.sh"
+mkdir -p "$STAGE/bin" "$STAGE/zygisk" "$ROOT/outputs"
 cp "$ROOT/kernelsu/module.prop" "$STAGE/module.prop"
 cp "$ROOT/kernelsu/customize.sh" "$STAGE/customize.sh"
 cp "$ROOT/kernelsu/service.sh" "$STAGE/service.sh"
+cp "$ROOT/kernelsu/runtime-entry.sh" "$STAGE/runtime-entry.sh"
+cp "$ROOT/kernelsu/post-fs-data.sh" "$STAGE/post-fs-data.sh"
+cp "$ROOT/kernelsu/sepolicy.rule" "$STAGE/sepolicy.rule"
+cp "$ROOT/outputs/native/arm64-v8a.so" "$STAGE/zygisk/arm64-v8a.so"
+cp "$ROOT/outputs/native/uclone-process-view" "$STAGE/bin/uclone-process-view"
+cp "$ROOT/outputs/native/uclone-namespace-anchor" "$STAGE/bin/uclone-namespace-anchor"
 cp "$ROOT/target/$TARGET/release/ucloned" "$STAGE/bin/ucloned"
 cp "$ROOT/target/$TARGET/release/slotctl" "$STAGE/bin/slotctl"
 "$STRIP" --strip-all "$STAGE/bin/ucloned" "$STAGE/bin/slotctl"
-chmod 0755 "$STAGE/customize.sh" "$STAGE/service.sh" "$STAGE/bin/ucloned" "$STAGE/bin/slotctl"
+chmod 0755 "$STAGE/"*.sh "$STAGE/bin/"*
 
 (
     cd "$STAGE"

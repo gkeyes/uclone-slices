@@ -58,6 +58,7 @@ enum Relaunch {
 enum ReadyLoadContext {
     Interactive,
     Boot,
+    Preparation,
 }
 
 impl ReadyLoadContext {
@@ -65,6 +66,7 @@ impl ReadyLoadContext {
         match self {
             Self::Interactive => "load",
             Self::Boot => "reconcile_boot",
+            Self::Preparation => "prepare_default_account",
         }
     }
 }
@@ -699,6 +701,9 @@ where
         package: PackageName,
         signing: Option<SigningIdentity>,
     ) -> Result<PackageSnapshot, RuntimeError> {
+        if package.as_str() == crate::layout::MANAGER_PACKAGE {
+            return Err(RuntimeError::StateConflict);
+        }
         self.ensure_no_account_io(&package)?;
         if let Some(signing) = &signing {
             signing.validate().map_err(model_error)?;
@@ -1028,17 +1033,17 @@ where
         aggregate.snapshot().map_err(model_error)
     }
 
-    /// An observation never enrolls an app or starts one already using its default account.
-    /// `activate_slot` performs the identity, account-I/O and paired-view checks before mutation.
-    pub fn activate_default_account(
+    /// Prepares the selected default without starting any App. The authenticated launch
+    /// ticket owns the later foreground start; cancellation and rollback never relaunch it.
+    pub fn prepare_default_account(
         &mut self,
         package: &PackageName,
-        still_foreground: impl FnMut() -> bool,
+        launch_permitted: impl FnMut() -> bool,
     ) -> Result<bool, RuntimeError> {
         let Some(aggregate) = self
             .packages
             .load(package)
-            .map_err(|error| logged_adapter("activate_default_account", package, "load", error))?
+            .map_err(|error| logged_adapter("prepare_default_account", package, "load", error))?
         else {
             return Ok(false);
         };
@@ -1049,7 +1054,7 @@ where
         if aggregate.active_slot() == &target {
             return Ok(false);
         }
-        let result = self.activate_slot_when(package, &target, still_foreground)?;
+        let result = self.activate_slot_when(package, &target, launch_permitted, false)?;
         Ok(result.active_slot == target)
     }
 
@@ -1058,7 +1063,7 @@ where
         package: &PackageName,
         target: &SlotId,
     ) -> Result<PackageSnapshot, RuntimeError> {
-        self.activate_slot_when(package, target, || true)
+        self.activate_slot_when(package, target, || true, true)
     }
 
     fn activate_slot_when(
@@ -1066,8 +1071,14 @@ where
         package: &PackageName,
         target: &SlotId,
         mut permitted: impl FnMut() -> bool,
+        launch: bool,
     ) -> Result<PackageSnapshot, RuntimeError> {
-        let (mut aggregate, inspection) = self.load_ready(package)?;
+        let context = if launch {
+            ReadyLoadContext::Interactive
+        } else {
+            ReadyLoadContext::Preparation
+        };
+        let (mut aggregate, inspection) = self.load_ready_with_context(package, context)?;
         if !aggregate.has_slot(target) {
             return Err(RuntimeError::NotFound);
         }
@@ -1090,9 +1101,13 @@ where
             return aggregate.snapshot().map_err(model_error);
         }
         if &previous == target {
-            self.android
-                .launch_verified(package, target)
-                .map_err(|error| logged_adapter("activate_slot", package, "retry_launch", error))?;
+            if launch {
+                self.android
+                    .launch_verified(package, target)
+                    .map_err(|error| {
+                        logged_adapter("activate_slot", package, "retry_launch", error)
+                    })?;
+            }
             return aggregate.snapshot().map_err(model_error);
         }
 
@@ -1114,7 +1129,7 @@ where
             self.restore_after_failed_stop(
                 &mut aggregate,
                 &previous,
-                inspection.was_running && permitted(),
+                inspection.was_running && launch && permitted(),
             )?;
             return Err(RuntimeError::OperationFailed);
         }
@@ -1123,7 +1138,7 @@ where
             self.rollback_activation(
                 &mut aggregate,
                 &previous,
-                inspection.was_running && permitted(),
+                inspection.was_running && launch && permitted(),
             )?;
             return Err(RuntimeError::OperationFailed);
         }
@@ -1135,7 +1150,7 @@ where
             self.rollback_activation(
                 &mut aggregate,
                 &previous,
-                inspection.was_running && permitted(),
+                inspection.was_running && launch && permitted(),
             )?;
             return Err(RuntimeError::OperationFailed);
         }
@@ -1144,9 +1159,13 @@ where
         self.packages
             .save(&aggregate)
             .map_err(|error| logged_adapter("activate_slot", package, "save_commit", error))?;
-        self.android
-            .launch_verified(package, target)
-            .map_err(|error| logged_adapter("activate_slot", package, "launch_target", error))?;
+        if launch {
+            self.android
+                .launch_verified(package, target)
+                .map_err(|error| {
+                    logged_adapter("activate_slot", package, "launch_target", error)
+                })?;
+        }
         aggregate.snapshot().map_err(model_error)
     }
 
@@ -1220,10 +1239,10 @@ where
         }
     }
 
-    /// Releases a backup lease: restores the previous view and enabled state, optionally
-    /// relaunches the app, then removes staging and the intent. The intent is removed last,
-    /// so any `Err` leaves it in place for abort or boot recovery to retry. A relaunch failure
-    /// is logged and reported separately because the lease itself is gone by then.
+    /// Releases a backup lease: restores the previous view and enabled state, removes
+    /// staging and intent, then optionally launches. Launching requires a committed,
+    /// lease-free account. Cleanup failures keep the intent and the App stopped; a later
+    /// launch failure is reported separately after the lease has already been released.
     fn release_backup_lease(
         &mut self,
         intent: &AccountIoIntent,
@@ -1244,18 +1263,6 @@ where
                         logged_conflict(operation, package, "restore_enabled_state", error)
                     })?;
             }
-            if relaunch
-                && intent.previous_was_running
-                && intent
-                    .previous_enabled_state
-                    .is_none_or(PackageEnabledState::allows_launch)
-                && let Err(error) = self
-                    .android
-                    .launch_verified(package, &intent.previous_active_slot)
-            {
-                log_adapter(operation, package, "restore_launch", &error);
-                relaunched = Relaunch::Failed;
-            }
         }
         self.slots
             .cleanup_account_io(package, &intent.io_token)
@@ -1263,6 +1270,19 @@ where
         self.packages
             .clear_account_io_intent(package)
             .map_err(|error| logged_conflict(operation, package, "clear_intent", error))?;
+        if intent.maintenance_active
+            && relaunch
+            && intent.previous_was_running
+            && intent
+                .previous_enabled_state
+                .is_none_or(PackageEnabledState::allows_launch)
+            && let Err(error) = self
+                .android
+                .launch_verified(package, &intent.previous_active_slot)
+        {
+            log_adapter(operation, package, "restore_launch", &error);
+            relaunched = Relaunch::Failed;
+        }
         Ok(relaunched)
     }
 
@@ -1533,30 +1553,12 @@ where
                     logged_conflict("abort_account_io", &package, "restore_enabled_state", error)
                 })?;
         }
-        let mut app_started = false;
-        if relaunch
-            && intent.maintenance_active
-            && intent.previous_was_running
-            && intent
-                .previous_enabled_state
-                .is_none_or(PackageEnabledState::allows_launch)
-        {
-            match self
-                .android
-                .launch_verified(&package, &intent.previous_active_slot)
-            {
-                Ok(()) => app_started = true,
-                Err(error) => {
-                    log_adapter("abort_account_io", &package, "restore_launch", &error);
-                }
-            }
-        }
-        let result = RestoreBatchResult {
+        let mut result = RestoreBatchResult {
             package: package.clone(),
             items: intent.completed.clone(),
             active_slot: intent.previous_active_slot.clone(),
             launch_after_reboot: intent.previous_launch_after_reboot,
-            app_started,
+            app_started: false,
         };
         self.packages
             .save_account_io_result(&package, &result)
@@ -1569,6 +1571,30 @@ where
             .map_err(|error| {
                 logged_conflict("abort_account_io", &package, "clear_intent", error)
             })?;
+        if relaunch
+            && intent.maintenance_active
+            && intent.previous_was_running
+            && intent
+                .previous_enabled_state
+                .is_none_or(PackageEnabledState::allows_launch)
+        {
+            match self
+                .android
+                .launch_verified(&package, &intent.previous_active_slot)
+            {
+                Ok(()) => result.app_started = true,
+                Err(error) => {
+                    log_adapter("abort_account_io", &package, "restore_launch", &error);
+                }
+            }
+        }
+        if result.app_started {
+            self.packages
+                .save_account_io_result(&package, &result)
+                .map_err(|error| {
+                    logged_adapter("abort_account_io", &package, "save_launch_result", error)
+                })?;
+        }
         Ok(result)
     }
 
@@ -1600,9 +1626,17 @@ where
         &mut self,
         package: &PackageName,
     ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
+        self.load_ready_with_context(package, ReadyLoadContext::Interactive)
+    }
+
+    fn load_ready_with_context(
+        &mut self,
+        package: &PackageName,
+        context: ReadyLoadContext,
+    ) -> Result<(PackageAggregate, PackageInspection), RuntimeError> {
         self.ensure_no_account_io(package)?;
         let (aggregate, inspection) = self.load_validated(package)?;
-        self.finish_ready_load(aggregate, inspection, ReadyLoadContext::Interactive)
+        self.finish_ready_load(aggregate, inspection, context)
     }
 
     fn finish_ready_load(
@@ -1887,6 +1921,10 @@ where
             if !observed.matches(aggregate.active_slot()) {
                 return Err(RuntimeError::StateConflict);
             }
+            aggregate.abort_creation(&target).map_err(model_error)?;
+            self.packages
+                .save(aggregate)
+                .map_err(|error| logged_conflict("recover", &package, "save_creating", error))?;
             if restore_running && context == ReadyLoadContext::Interactive {
                 self.android
                     .launch_verified(&package, aggregate.active_slot())
@@ -1894,10 +1932,6 @@ where
                         logged_conflict("recover", &package, "restore_creating", error)
                     })?;
             }
-            aggregate.abort_creation(&target).map_err(model_error)?;
-            self.packages
-                .save(aggregate)
-                .map_err(|error| logged_conflict("recover", &package, "save_creating", error))?;
         }
 
         if let Some((previous, target)) = aggregate
@@ -1909,13 +1943,6 @@ where
                 logged_conflict("recover", &package, "observe_activating", error)
             })?;
             if observed.matches(&target) {
-                if context == ReadyLoadContext::Interactive {
-                    self.android
-                        .launch_verified(&package, &target)
-                        .map_err(|error| {
-                            logged_conflict("recover", &package, "launch_target", error)
-                        })?;
-                }
                 aggregate.finish_activation(&target).map_err(model_error)?;
             } else {
                 if !observed.matches(&previous) {
@@ -1934,18 +1961,18 @@ where
                         return Err(RuntimeError::StateConflict);
                     }
                 }
-                if context == ReadyLoadContext::Interactive {
-                    self.android
-                        .launch_verified(&package, &previous)
-                        .map_err(|error| {
-                            logged_conflict("recover", &package, "launch_previous", error)
-                        })?;
-                }
                 aggregate.abort_activation(&previous).map_err(model_error)?;
             }
             self.packages
                 .save(aggregate)
                 .map_err(|error| logged_conflict("recover", &package, "save_activating", error))?;
+            if context == ReadyLoadContext::Interactive {
+                self.android
+                    .launch_verified(&package, aggregate.active_slot())
+                    .map_err(|error| {
+                        logged_conflict("recover", &package, "launch_committed", error)
+                    })?;
+            }
         }
 
         Ok(())
@@ -2074,6 +2101,10 @@ where
         if !observed.matches(previous) {
             return Err(RuntimeError::OperationFailed);
         }
+        aggregate.abort_activation(previous).map_err(model_error)?;
+        self.packages.save(aggregate).map_err(|error| {
+            logged_adapter("activate_slot", &package, "failed_stop_save", error)
+        })?;
         if restore_running {
             self.android
                 .launch_verified(&package, previous)
@@ -2081,10 +2112,7 @@ where
                     logged_adapter("activate_slot", &package, "failed_stop_launch", error)
                 })?;
         }
-        aggregate.abort_activation(previous).map_err(model_error)?;
-        self.packages
-            .save(aggregate)
-            .map_err(|error| logged_adapter("activate_slot", &package, "failed_stop_save", error))
+        Ok(())
     }
 }
 

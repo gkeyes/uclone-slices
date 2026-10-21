@@ -11,10 +11,8 @@ PID_FILE=$RUNTIME_ROOT/ucloned.pid
 BUILD_ID=$(sed -n 's/^runtimeBuildId=//p' "$MODDIR/module.prop")
 PID=
 PID_EXE=
-EXPECTED_PROBE_RESPONSE=
 
 [ -n "$BUILD_ID" ] || exit 1
-EXPECTED_PROBE_RESPONSE=$(printf '{"ok":{"build_id":"%s","binary_build_id":"%s"}}' "$BUILD_ID" "$BUILD_ID")
 
 secure_directory() {
     DIRECTORY=$1
@@ -53,11 +51,7 @@ runtime_transport_ready() {
     PID_EXE=$(readlink "/proc/$PID/exe" 2>/dev/null)
     [ "$PID_EXE" = "$MODDIR/bin/ucloned" ] || return 1
     [ -S "$SOCKET" ] || return 1
-    PROBE_RESPONSE=$(
-        printf '{"op":"probe"}\n' |
-            "$MODDIR/bin/slotctl" rpc 2>/dev/null
-    ) || return 1
-    [ "$PROBE_RESPONSE" = "$EXPECTED_PROBE_RESPONSE" ] || return 1
+    UCLONE_EXPECTED_BUILD_ID="$BUILD_ID" "$MODDIR/bin/slotctl" check-runtime >/dev/null 2>&1 || return 1
     [ ! -L "$SOCKET" ] || return 1
     chown 0:0 "$SOCKET" || return 1
     chmod 0600 "$SOCKET" || return 1
@@ -79,9 +73,18 @@ rm -f "$PID_FILE" "$SOCKET"
 LOG_FILE=$RUNTIME_ROOT/ucloned.log
 [ ! -f "$LOG_FILE" ] || mv -f "$LOG_FILE" "$LOG_FILE.1"
 printf 'ucloned start %s build=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$BUILD_ID" >"$LOG_FILE"
+ANCHOR_PID=$("$MODDIR/bin/uclone-namespace-anchor" --check 2>/dev/null) || ANCHOR_PID=
+if [ -n "$ANCHOR_PID" ]; then
+    UCLONE_RUNTIME_ROOT="$RUNTIME_ROOT" \
+    UCLONE_RUNTIME_SOCKET="$SOCKET" \
+    UCLONE_BUILD_ID="$BUILD_ID" \
+    /system/bin/nsenter -t "$ANCHOR_PID" -m -- \
+    "$MODDIR/bin/ucloned" >>"$LOG_FILE" 2>&1 &
+else
 UCLONE_RUNTIME_ROOT="$RUNTIME_ROOT" \
 UCLONE_RUNTIME_SOCKET="$SOCKET" \
 UCLONE_BUILD_ID="$BUILD_ID" \
 /system/bin/nsenter -t 1 -m -- \
-"$MODDIR/bin/ucloned" >>"$LOG_FILE" 2>&1 &
+/system/bin/unshare -m -- /system/bin/sh "$MODDIR/runtime-entry.sh" "$MODDIR" >>"$LOG_FILE" 2>&1 &
+fi
 echo "$!" >"$PID_FILE"

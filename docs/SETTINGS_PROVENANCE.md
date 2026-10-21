@@ -104,3 +104,12 @@
 | 离开时不切换、不拉回；目标 App 的新进入事件必须与实时前台一致 | 用户确认只有下次主动打开才回默认；桌面事件与滞后快照不能构成重新进入。忽略乱序旧事件，预检及意图落盘后再次确认前台；已离开的自动失败回滚不重新打开 | Home 滞后快照与乱序事件红绿回归，取消 Home 手势、快速真正返回、事务取消与回滚保留视图测试 |
 | probe 的 `binary_build_id` 来自编译版本，Manager 同时校验启动声明与编译身份 | 目标机 0.2.6 在模块待生效时，旧后台从更新后的模块属性伪装成新版，默认账号请求返回 `invalid_request` | 捕获旧 probe 的 ViewModel 回归、编译身份与声明版本不一致测试、Linux 进程启动零写入测试 |
 | Manager / KernelSU / crate `0.2.7`，versionCode 18，wire `0.2.7` | 本次握手要求可执行程序身份；缺少该字段的旧后台只能显示状态，不能执行空间操作 | 版本对齐脚本、共享 fixture、固定签名交付检查 |
+
+## v0.3.0 启动前门禁
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager/Runtime/native `0.3.0`，versionCode 19，Zygisk API 4，Xposed API 82 | 用户确认改用现有 Vector/Zygisk；API 4 为所用接口的最小兼容集合，官方头文件的固定提交和许可见 native/THIRD_PARTY.md | 版本对齐、NDK 构建、Manager 单元测试/lint/Release assembly |
+| 内部控制帧 64 KiB、传输/延迟绑定 5 秒、并发 Root 请求 32 | 复用现有 Runtime RPC 的帧/连接/传输边界；只用于通信和进程启动失败收敛，不判断离开/返回 | Rust 控制帧测试、共享启动 fixture、失联和 PID 复用测试 |
+| boot-local PID/start/namespace 关联及待验证/已验证状态 | Linux PID 复用和不可热换旧 FD 的约束；不新增账号配置 | 独立 Linux PID/mount namespace 测试、停止确认回归、真机矩阵 |
+| Root Runtime 使用 slave namespace、anchor 固定视图；原始 Base 从 init root 取得 | 防止挂载向 init/无关 App 传播，保留 Android 存储传播和现有维护事务 | 生产 native 程序的合成 chroot 集成测试与真机验收 |

@@ -1,8 +1,10 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use thiserror::Error;
 
 use crate::adapters::{FilePackageStore, FileSlotStorage, SystemAndroidOps};
+use crate::launch::LaunchGate;
 use crate::layout;
 use crate::ports::AdapterError;
 use crate::usecases::{Runtime, RuntimeError};
@@ -33,7 +35,7 @@ impl ProductionRuntime {
         self.inner.reconcile_boot()
     }
 
-    pub fn activate_default_account(
+    pub fn prepare_default_account(
         &mut self,
         package: &str,
         still_foreground: impl FnMut() -> bool,
@@ -41,7 +43,7 @@ impl ProductionRuntime {
         let package = crate::model::PackageName::new(package)
             .map_err(|_error| RuntimeError::InvalidRequest)?;
         self.inner
-            .activate_default_account(&package, still_foreground)
+            .prepare_default_account(&package, still_foreground)
     }
 
     pub(crate) fn inner_mut(&mut self) -> &mut InnerRuntime {
@@ -53,6 +55,22 @@ pub fn production(
     runtime_root: &Path,
     build_id: impl Into<String>,
 ) -> Result<ProductionRuntime, CompositionError> {
+    compose(runtime_root, build_id, None)
+}
+
+pub fn production_with_launch_gate(
+    runtime_root: &Path,
+    build_id: impl Into<String>,
+    gate: Arc<LaunchGate>,
+) -> Result<ProductionRuntime, CompositionError> {
+    compose(runtime_root, build_id, Some(gate))
+}
+
+fn compose(
+    runtime_root: &Path,
+    build_id: impl Into<String>,
+    gate: Option<Arc<LaunchGate>>,
+) -> Result<ProductionRuntime, CompositionError> {
     let packages = FilePackageStore::open(runtime_root)?;
     let slots = FileSlotStorage::open(
         layout::CE_SLOTS_ROOT,
@@ -60,13 +78,14 @@ pub fn production(
         layout::USER_CE_ROOT,
         layout::USER_DE_ROOT,
     )?;
-    let android = SystemAndroidOps::new(
+    let mut android = SystemAndroidOps::new(
         build_id,
         layout::CE_SLOTS_ROOT,
         layout::DE_SLOTS_ROOT,
         layout::USER_CE_ROOT,
         layout::USER_DE_ROOT,
     );
+    android.set_launch_gate(runtime_root, gate);
     Ok(ProductionRuntime {
         inner: Runtime::new(packages, slots, android),
     })

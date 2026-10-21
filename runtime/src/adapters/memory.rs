@@ -626,6 +626,7 @@ pub(crate) struct MemoryAndroidOps {
     enabled: BTreeMap<PackageName, PackageEnabledState>,
     failures: VecDeque<AndroidFailure>,
     calls: Vec<AndroidCall>,
+    process_start_store: Option<std::path::PathBuf>,
 }
 
 impl Default for MemoryAndroidOps {
@@ -638,11 +639,17 @@ impl Default for MemoryAndroidOps {
             enabled: BTreeMap::new(),
             failures: VecDeque::new(),
             calls: Vec::new(),
+            process_start_store: None,
         }
     }
 }
 
 impl MemoryAndroidOps {
+    /// Exercises the real specialization policy against a real FilePackageStore in
+    /// cross-adapter tests, rather than inferring readiness from final call counts.
+    pub(crate) fn guard_process_start_from(&mut self, root: &std::path::Path) {
+        self.process_start_store = Some(root.to_path_buf());
+    }
     pub(crate) fn install(&mut self, package: PackageName) {
         let Ok(identity) =
             PackageIdentity::new(10_000, format!("/data/app/{package}/base.apk"), 1, 2)
@@ -737,6 +744,8 @@ impl AndroidOps for MemoryAndroidOps {
         Ok(Capabilities {
             build_id: self.build_id.clone(),
             binary_build_id: crate::BINARY_BUILD_ID.to_owned(),
+            launch_gate_ready: true,
+            process_view_ready: true,
         })
     }
 
@@ -855,6 +864,15 @@ impl AndroidOps for MemoryAndroidOps {
         self.calls
             .push(AndroidCall::Launch(package.clone(), expected.clone()));
         self.require_installed(package)?;
+        if let Some(root) = self.process_start_store.as_ref() {
+            let aggregate = crate::launch::validate_account_for_start(root, package)
+                .map_err(|error| AdapterError::new(error.to_string()))?;
+            if aggregate.active_slot() != expected {
+                return Err(AdapterError::new(
+                    "process start does not match committed account",
+                ));
+            }
+        }
         if self.take_failure(AndroidFailure::Launch) {
             return Err(AdapterError::new("injected launch failure"));
         }

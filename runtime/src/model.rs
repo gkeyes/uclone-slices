@@ -195,6 +195,10 @@ impl PackageIdentity {
     pub fn uid(&self) -> u32 {
         self.uid
     }
+
+    pub(crate) fn apk_stamp(&self) -> (&str, u64, u64) {
+        (&self.apk_path, self.apk_device, self.apk_inode)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1235,6 +1239,8 @@ pub struct PackageSnapshot {
 pub struct Capabilities {
     pub build_id: String,
     pub binary_build_id: String,
+    pub launch_gate_ready: bool,
+    pub process_view_ready: bool,
 }
 
 #[cfg(test)]

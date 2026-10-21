@@ -39,6 +39,7 @@ internal fun RuntimeStatusScreen(
             RuntimeOverviewCard(
                 runtimeReady = state.runtimeReady,
                 runtimeCompatible = state.runtimeCompatible,
+                launchReady = state.launchReady,
                 modifier = Modifier.staggerIn(0, play),
             )
         }
@@ -68,6 +69,11 @@ internal fun RuntimeStatusScreen(
                     value = state.buildId.takeIf(String::isNotBlank)
                         ?: stringResource(R.string.runtime_version_unverified),
                     valueColor = TextPrimary,
+                )
+                ListRow(
+                    title = stringResource(R.string.launch_support_title),
+                    value = stringResource(if (state.launchReady) R.string.launch_support_ready else R.string.launch_support_pending),
+                    valueColor = if (state.launchReady) Tone.Success.onContainer() else Tone.Warning.onContainer(),
                 )
             }
         }
@@ -103,6 +109,11 @@ internal fun RuntimeStatusScreen(
         }
         item(key = "restart_hint") {
             Footnote(stringResource(R.string.restart_runtime_hint))
+        }
+        if (state.runtimeReady && state.runtimeCompatible && !state.launchReady) {
+            item(key = "launch_support_hint") {
+                Footnote(stringResource(R.string.launch_support_hint))
+            }
         }
         item(key = "log_header") {
             SectionHeader(
@@ -140,12 +151,14 @@ internal fun RuntimeStatusScreen(
 private fun RuntimeOverviewCard(
     runtimeReady: Boolean,
     runtimeCompatible: Boolean,
+    launchReady: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val ready = runtimeReady && runtimeCompatible
+    val ready = runtimeReady && runtimeCompatible && launchReady
     val tone = if (ready) Tone.Success else Tone.Warning
     val title = when {
         runtimeReady && !runtimeCompatible -> stringResource(R.string.environment_version_mismatch)
+        runtimeReady && runtimeCompatible && !launchReady -> stringResource(R.string.launch_support_pending)
         runtimeReady -> stringResource(R.string.environment_ready)
         else -> stringResource(R.string.environment_unavailable)
     }

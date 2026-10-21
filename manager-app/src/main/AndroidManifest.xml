@@ -19,6 +19,18 @@
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.UCloneSlicesV2">
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposedminversion" android:value="82" />
+        <meta-data android:name="xposeddescription" android:value="@string/launch_support_description" />
+        <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
+        <activity
+            android:name=".gate.LaunchPreparationActivity"
+            android:launchMode="singleTask"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="com.uclone.slices.v2.preparation"
+            android:theme="@style/Theme.UCloneSlicesV2.Preparation" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="launch_support_description">在 App 打开前选择账号，离开时不自动拉起</string>
+    <string name="launch_preparation_unavailable">暂时无法准备账号，请在 Slice 检查运行环境后重试</string>
+    <string name="launch_support_title">启动前切换</string>
+    <string name="launch_support_ready">已就绪</string>
+    <string name="launch_support_pending">等待就绪</string>
+    <string name="launch_support_hint">请成对更新 Slice 与模块，在框架中为 Slice 启用“系统框架”作用域，然后重启手机。</string>
+    <string-array name="xposed_scope">
+        <item>android</item>
+    </string-array>
+    <style name="Theme.UCloneSlicesV2.Preparation" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

@@ -69,9 +69,9 @@ android {
         applicationId = "com.uclone.slices.v2"
         minSdk = 29
         targetSdk = 36
-        versionCode = 18
-        versionName = "0.2.7"
-        buildConfigField("String", "RUNTIME_PROTOCOL_BUILD_ID", "\"0.2.7\"")
+        versionCode = 19
+        versionName = "0.3.0"
+        buildConfigField("String", "RUNTIME_PROTOCOL_BUILD_ID", "\"0.3.0\"")
         buildConfigField("String", "ARCHIVE_HELPER_SHA256", "\"$archiveHelperChecksum\"")
     }
 
@@ -112,6 +112,7 @@ android {
         }
         getByName("test") {
             resources.directories.add("../protocol/fixtures")
+            resources.directories.add("../protocol/gate-fixtures")
             resources.directories.add("src/main/assets")
         }
     }
@@ -138,6 +139,7 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
 }
 
 dependencies {
+    compileOnly("de.robv.android.xposed:api:82")
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)

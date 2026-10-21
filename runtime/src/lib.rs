@@ -1,6 +1,7 @@
 mod adapters;
 pub mod archive;
 mod composition;
+pub mod launch;
 pub mod layout;
 mod links;
 mod model;
@@ -9,7 +10,9 @@ mod protocol;
 mod usecases;
 pub mod validation;
 
-pub use composition::{CompositionError, ProductionRuntime, production};
+pub use composition::{
+    CompositionError, ProductionRuntime, production, production_with_launch_gate,
+};
 pub use usecases::RuntimeError;
 
 /// Identity compiled into the executable, independent of module metadata or launch environment.

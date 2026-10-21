@@ -154,6 +154,7 @@ data class PostedNotice(val id: Long, val notice: UiNotice)
 data class SlotsUiState(
     val runtimeReady: Boolean = false,
     val runtimeCompatible: Boolean = false,
+    val launchReady: Boolean = false,
     val buildId: String = "",
     val initialLoadComplete: Boolean = false,
     val configuredAccountsExpanded: Boolean = true,
@@ -183,7 +184,7 @@ data class SlotsUiState(
     val busy: Boolean
         get() = operation !is OperationUiState.Idle
     val operationsAllowed: Boolean
-        get() = runtimeReady && runtimeCompatible
+        get() = runtimeReady && runtimeCompatible && launchReady
 }
 
 sealed interface UiIntent {

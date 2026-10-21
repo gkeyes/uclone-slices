@@ -13,6 +13,7 @@ MODULE_VERSION_CODE=$(sed -n 's/^versionCode=//p' "$ROOT/kernelsu/module.prop")
 MANAGER_MIN_SDK=$(sed -n 's/^[[:space:]]*minSdk = \([0-9][0-9]*\)/\1/p' "$ROOT/manager-app/build.gradle.kts")
 RUNTIME_ANDROID_API=$(sed -n 's/^API=\([0-9][0-9]*\)/\1/p' "$ROOT/tools/build-kernelsu.sh")
 HELPER_ANDROID_API=$(sed -n 's/^API=\([0-9][0-9]*\)/\1/p' "$ROOT/tools/build-manager-helper.sh")
+NATIVE_ANDROID_API=$(sed -n 's/^API=\([0-9][0-9]*\)/\1/p' "$ROOT/tools/build-native.sh")
 
 FAILED=0
 require_equal() {
@@ -28,4 +29,5 @@ require_equal "Manager/module protocol id" "$MANAGER_PROTOCOL_BUILD_ID" "$MODULE
 require_equal "Manager/module versionCode" "$MANAGER_VERSION_CODE" "$MODULE_VERSION_CODE"
 require_equal "Manager minSdk/runtime API" "$MANAGER_MIN_SDK" "$RUNTIME_ANDROID_API"
 require_equal "Manager minSdk/helper API" "$MANAGER_MIN_SDK" "$HELPER_ANDROID_API"
+require_equal "Manager minSdk/native API" "$MANAGER_MIN_SDK" "$NATIVE_ANDROID_API"
 exit "$FAILED"
