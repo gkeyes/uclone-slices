@@ -122,13 +122,14 @@ bool start_anchor() {
   if (child < 0) { close(ready[0]); close(ready[1]); return false; }
   if (child == 0) {
     close(ready[0]);
+    slice::Fd null(open("/dev/null", O_RDWR | O_CLOEXEC));
+    if (!null) _exit(1);
     if (setsid() < 0 || !write_record()) _exit(1);
     (void)prctl(PR_SET_NAME, "uclone-ns", 0, 0, 0);
     char byte = 'R';
     if (write(ready[1], &byte, 1) != 1) _exit(1);
     close(ready[1]);
-    slice::Fd null(open("/dev/null", O_RDWR | O_CLOEXEC));
-    if (null) for (int fd = 0; fd <= 2; ++fd) (void)dup2(null.get(), fd);
+    for (int fd = 0; fd <= 2; ++fd) if (dup2(null.get(), fd) < 0) _exit(1);
     for (;;) pause();
   }
   close(ready[1]);

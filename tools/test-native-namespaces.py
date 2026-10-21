@@ -4,6 +4,8 @@
 import ctypes
 import os
 import signal
+import select
+import time
 import sys
 
 sys.excepthook = sys.__excepthook__
@@ -76,7 +78,13 @@ def execute(arguments, runtime_slot=None):
             os._exit(125)
     os.close(writer)
     chunks = []
-    while chunk := os.read(output, 4096):
+    deadline = time.monotonic() + 5  # Same whole-frame bound as native control.
+    while True:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0 and select.select([output], [], [], remaining)[0], "native helper kept its output pipe open"
+        chunk = os.read(output, 4096)
+        if not chunk:
+            break
         chunks.append(chunk)
     os.close(output)
     _, status = os.waitpid(pid, 0)
@@ -162,6 +170,10 @@ def main():
         os.chmod(root + destination, 0o700)
     os.chmod(root + RUNTIME, 0o700)
     os.makedirs(root + "/proc")
+    os.makedirs(root + "/dev")
+    with open(root + "/dev/null", "wb"):
+        pass
+    mount("/dev/null", root + "/dev/null")
     # Propagation flags operate on mountpoints, not ordinary chroot directories.
     mount(root, root)
     os.chroot(root)
