@@ -4,6 +4,8 @@
 import struct
 import sys
 import zipfile
+import json
+from pathlib import Path
 
 
 def dex_classes(data):
@@ -56,6 +58,15 @@ def dex_classes(data):
 
 
 def verify(path):
+    path = Path(path)
+    if path.is_dir():
+        # AGP names unsigned PR artifacts differently from fixed-signed deliveries.
+        # Read its output manifest so both builds check their actual Release APK.
+        outputs = json.loads((path / "output-metadata.json").read_text())["elements"]
+        assert len(outputs) == 1, "expected one universal Manager APK"
+        candidate = path / outputs[0]["outputFile"]
+        assert candidate.resolve().parent == path.resolve(), "APK path escapes output directory"
+        path = candidate
     with zipfile.ZipFile(path) as apk:
         assert "assets/xposed_init" not in apk.namelist(), "legacy entry is still packaged"
         properties = dict(
@@ -85,5 +96,5 @@ def verify(path):
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        raise SystemExit("usage: verify-xposed-module.py /path/to/manager.apk")
+        raise SystemExit("usage: verify-xposed-module.py /path/to/manager.apk-or-output-directory")
     verify(sys.argv[1])
