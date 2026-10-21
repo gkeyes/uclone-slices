@@ -10,26 +10,24 @@ import android.content.pm.ResolveInfo;
 import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Binder;
+import android.os.IBinder;
+import android.util.Log;
 import android.os.Looper;
 import android.os.Process;
 
 import java.io.File;
 import java.lang.reflect.Method;
+import java.lang.reflect.Constructor;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import de.robv.android.xposed.IXposedHookLoadPackage;
-import de.robv.android.xposed.XC_MethodHook;
-import de.robv.android.xposed.XposedBridge;
-import de.robv.android.xposed.XposedHelpers;
-import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import io.github.libxposed.api.XposedModule;
 
 /** Only system_server is in scope. App code and public SDK methods are not spoofed. */
-public final class SystemLaunchHook implements IXposedHookLoadPackage {
+public final class SystemLaunchHook extends XposedModule {
     private final AtomicBoolean started = new AtomicBoolean();
-    private final ThreadLocal<Boolean> resultToOwner = new ThreadLocal<>();
+    private final LaunchRequestContext resultToOwner = new LaunchRequestContext();
     private SystemBridge bridge;
     private Context context;
     private ResolveInfo preparation;
@@ -39,61 +37,60 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
     private Class<?> activityRecordClass;
     private boolean hooksInstalled;
 
-    @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam loaded) {
-        if (!"android".equals(loaded.packageName)) return;
+    @Override public void onModuleLoaded(ModuleLoadedParam loaded) {
+        if (!loaded.isSystemServer()) detach();
+    }
+
+    @Override public void onSystemServerStarting(SystemServerStartingParam starting) {
         try {
             bridge = new SystemBridge();
-            ClassLoader loader = loaded.classLoader;
-            Class<?> interceptor = XposedHelpers.findClass("com.android.server.wm.ActivityStartInterceptor", loader);
-            Class<?> taskFragment = XposedHelpers.findClass("com.android.server.wm.TaskFragment", loader);
-            Class<?> starter = XposedHelpers.findClass("com.android.server.wm.ActivityStarter", loader);
-            Class<?> manager = XposedHelpers.findClass("com.android.server.am.ActivityManagerService", loader);
-            Class<?> tasks = XposedHelpers.findClass("com.android.server.wm.ActivityTaskManagerService", loader);
-            activityRecordClass = XposedHelpers.findClass("com.android.server.wm.ActivityRecord", loader);
-            require(XposedBridge.hookAllMethods(interceptor, "intercept", new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam call) {
-                    if (call.hasThrowable() || !Boolean.FALSE.equals(call.getResult())) return;
-                    try { intercept(call); } catch (Throwable error) { unsupported(); }
+            ClassLoader loader = starting.getClassLoader();
+            Class<?> interceptor = Class.forName("com.android.server.wm.ActivityStartInterceptor", false, loader);
+            Class<?> taskFragment = Class.forName("com.android.server.wm.TaskFragment", false, loader);
+            Class<?> starter = Class.forName("com.android.server.wm.ActivityStarter", false, loader);
+            Class<?> manager = Class.forName("com.android.server.am.ActivityManagerService", false, loader);
+            Class<?> tasks = Class.forName("com.android.server.wm.ActivityTaskManagerService", false, loader);
+            activityRecordClass = Class.forName("com.android.server.wm.ActivityRecord", false, loader);
+            hookMethods(interceptor, "intercept", chain -> {
+                Object result = chain.proceed();
+                if (Boolean.FALSE.equals(result)) {
+                    try { if (intercept(chain.getThisObject())) return true; }
+                    catch (Throwable error) { unsupported(); }
                 }
-            }));
-            require(XposedBridge.hookAllMethods(taskFragment, "resumeTopActivity", new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam call) {
-                    try { beforeResume(call); } catch (Throwable error) {
-                        unsupported();
-                        try {
-                            ActivityInfo target = info(topActivity(call.thisObject));
-                            if (target != null && bridge.cache.managed(target.packageName)) call.setResult(false);
-                        } catch (Throwable ignored) { }
-                    }
-                }
-            }));
-            require(XposedBridge.hookAllMethods(activityRecordClass, "completeResumeLocked", new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam call) {
-                    if (call.hasThrowable()) return;
-                    try { completedResume(call.thisObject); } catch (Throwable error) { unsupported(); }
-                }
-            }));
-            require(XposedBridge.hookAllMethods(starter, "executeRequest", new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam call) {
-                    call.setObjectExtra("slice.previous.result", resultToOwner.get());
-                    boolean owned = false;
+                return result;
+            });
+            hookMethods(taskFragment, "resumeTopActivity", chain -> {
+                try { if (beforeResume(chain.getThisObject())) return false; }
+                catch (Throwable error) {
+                    unsupported();
                     try {
-                        Object request = call.args[0];
-                        Object result = field(request, "resultTo");
-                        int requestCode = (Integer) field(request, "requestCode");
-                        if (result != null && requestCode >= 0) {
-                            Object record = XposedHelpers.callStaticMethod(activityRecordClass, "forTokenLocked", result);
-                            ActivityInfo info = info(record);
-                            owned = info != null && bridge.cache.resultOwnedBy(info.applicationInfo.uid);
-                        }
+                        ActivityInfo target = info(topActivity(chain.getThisObject()));
+                        if (target != null && bridge.cache.managed(target.packageName)) return false;
                     } catch (Throwable ignored) { }
-                    resultToOwner.set(owned);
                 }
-                @Override protected void afterHookedMethod(MethodHookParam call) {
-                    Boolean previous = (Boolean) call.getObjectExtra("slice.previous.result");
-                    if (previous == null) resultToOwner.remove(); else resultToOwner.set(previous);
-                }
-            }));
+                return chain.proceed();
+            });
+            hookMethods(activityRecordClass, "completeResumeLocked", chain -> {
+                Object result = chain.proceed();
+                try { completedResume(chain.getThisObject()); }
+                catch (Throwable error) { unsupported(); }
+                return result;
+            });
+            hookMethods(starter, "executeRequest", chain -> {
+                boolean owned = false;
+                try {
+                    Object request = chain.getArg(0);
+                    Object result = field(request, "resultTo");
+                    int requestCode = (Integer) field(request, "requestCode");
+                    if (result != null && requestCode >= 0) {
+                        Object record = FrameworkAccess.callStatic(activityRecordClass, "forTokenLocked",
+                            new Class<?>[]{IBinder.class}, result);
+                        ActivityInfo target = info(record);
+                        owned = target != null && bridge.cache.resultOwnedBy(target.applicationInfo.uid);
+                    }
+                } catch (Throwable ignored) { }
+                return resultToOwner.during(owned, chain::proceed);
+            });
             boolean attachInstalled = false;
             for (Method method : manager.getDeclaredMethods()) {
                 Class<?>[] args = method.getParameterTypes();
@@ -101,31 +98,44 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
                     args[1] != int.class || args[2] != int.class || args[3] != long.class ||
                     !"android.app.IApplicationThread".equals(args[0].getName()) ||
                     (method.getReturnType() != boolean.class && method.getReturnType() != void.class)) continue;
-                XposedBridge.hookMethod(method, new XC_MethodHook() {
-                    @Override protected void beforeHookedMethod(MethodHookParam call) {
-                        try { beforeApplication(call); } catch (Throwable error) {
-                            unsupported();
-                            // The Binder identity already selected this PID. Refuse the
-                            // bind; neither Application.onCreate nor an Activity may run.
-                            if (bridge.cache.managedUid((Integer) call.args[2])) {
-                                refuseBind(call, (Integer) call.args[1]);
-                            }
+                hook(method).setId("slice.application-bind").intercept(chain -> {
+                    try { if (beforeApplication(chain)) return blockedBindResult(method); }
+                    catch (Throwable error) {
+                        unsupported();
+                        if (bridge.cache.managedUid((Integer) chain.getArg(2))) {
+                            Process.killProcess((Integer) chain.getArg(1));
+                            return blockedBindResult(method);
                         }
                     }
+                    return chain.proceed();
                 });
                 attachInstalled = true;
             }
             if (!attachInstalled) throw new IllegalStateException("unsupported Application bind surface");
-            XposedBridge.hookAllConstructors(tasks, new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam call) {
-                    service = call.thisObject;
-                }
+            for (Constructor<?> constructor : tasks.getDeclaredConstructors()) {
+                hook(constructor).setId("slice.task-service").intercept(chain -> {
+                    Object result = chain.proceed();
+                    service = chain.getThisObject();
+                    return result;
+                });
+            }
+            hookMethods(tasks, "onSystemReady", chain -> {
+                Object result = chain.proceed();
+                initialize(chain.getThisObject());
+                return result;
             });
-            require(XposedBridge.hookAllMethods(tasks, "onSystemReady", new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam call) { initialize(call.thisObject); }
-            }));
             hooksInstalled = true;
         } catch (Throwable error) { unsupported(); }
+    }
+
+    private void hookMethods(Class<?> owner, String name, Hooker hooker) {
+        boolean installed = false;
+        for (Method method : owner.getDeclaredMethods()) {
+            if (!method.getName().equals(name)) continue;
+            hook(method).setId("slice." + name).intercept(hooker);
+            installed = true;
+        }
+        if (!installed) throw new IllegalStateException("unsupported framework surface");
     }
 
     private void initialize(Object taskService) {
@@ -147,16 +157,16 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
         } catch (Throwable error) { unsupported(); }
     }
 
-    private void intercept(XC_MethodHook.MethodHookParam call) {
-        ActivityInfo target = (ActivityInfo) field(call.thisObject, "mAInfo");
-        Intent original = (Intent) field(call.thisObject, "mIntent");
-        int user = (Integer) field(call.thisObject, "mUserId");
-        if (target == null || original == null || user != 0 || target.applicationInfo.uid >= 100000) return;
-        if (LaunchPolicyCache.GATE.equals(target.name)) return;
+    private boolean intercept(Object interceptor) throws ReflectiveOperationException {
+        ActivityInfo target = (ActivityInfo) field(interceptor, "mAInfo");
+        Intent original = (Intent) field(interceptor, "mIntent");
+        int user = (Integer) field(interceptor, "mUserId");
+        if (target == null || original == null || user != 0 || target.applicationInfo.uid >= 100000) return false;
+        if (LaunchPolicyCache.GATE.equals(target.name)) return false;
         if (original.hasCategory(Intent.CATEGORY_HOME)) bridge.cache.homeRequested();
-        int caller = (Integer) field(call.thisObject, "mCallingUid");
-        int real = (Integer) field(call.thisObject, "mRealCallingUid");
-        boolean anchored = Boolean.TRUE.equals(resultToOwner.get()) && real == 1000;
+        int caller = (Integer) field(interceptor, "mCallingUid");
+        int real = (Integer) field(interceptor, "mRealCallingUid");
+        boolean anchored = resultToOwner.isOwned() && real == 1000;
         int effective = LaunchSessions.effectiveCaller(caller, real, anchored);
         bridge.cache.requested(target.packageName, target.applicationInfo.uid, effective, anchored);
         String permit = null;
@@ -166,38 +176,37 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
                 original.removeExtra(LaunchPolicyCache.PERMIT_EXTRA);
             } catch (RuntimeException invalidExtra) { permit = null; }
         }
-        if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, effective, permit, false)) return;
-        if (preparation == null) return;  // Native + Application-binding guards fail closed until ready.
+        if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, effective, permit, false)) return false;
+        if (preparation == null) return false;  // Native + Application-binding guards fail closed until ready.
         String ticket = bridge.cache.begin(target.packageName, true);
         Intent gate = gateIntent(ticket);
-        XposedHelpers.setObjectField(call.thisObject, "mIntent", gate);
-        XposedHelpers.setObjectField(call.thisObject, "mRInfo", new ResolveInfo(preparation));
-        XposedHelpers.setObjectField(call.thisObject, "mAInfo", new ActivityInfo(preparation.activityInfo));
-        XposedHelpers.setObjectField(call.thisObject, "mResolvedType", null);
-        XposedHelpers.setObjectField(call.thisObject, "mInTask", null);
-        XposedHelpers.setObjectField(call.thisObject, "mInTaskFragment", null);
-        XposedHelpers.setObjectField(call.thisObject, "mActivityOptions", ActivityOptions.makeBasic());
-        XposedHelpers.setIntField(call.thisObject, "mCallingPid", (Integer) field(call.thisObject, "mRealCallingPid"));
-        XposedHelpers.setIntField(call.thisObject, "mCallingUid", real);
-        call.setResult(true);
+        FrameworkAccess.set(interceptor, "mIntent", gate);
+        FrameworkAccess.set(interceptor, "mRInfo", new ResolveInfo(preparation));
+        FrameworkAccess.set(interceptor, "mAInfo", new ActivityInfo(preparation.activityInfo));
+        FrameworkAccess.set(interceptor, "mResolvedType", null);
+        FrameworkAccess.set(interceptor, "mInTask", null);
+        FrameworkAccess.set(interceptor, "mInTaskFragment", null);
+        FrameworkAccess.set(interceptor, "mActivityOptions", ActivityOptions.makeBasic());
+        FrameworkAccess.set(interceptor, "mCallingPid", (Integer) field(interceptor, "mRealCallingPid"));
+        FrameworkAccess.set(interceptor, "mCallingUid", real);
+        return true;
     }
 
-    private void beforeResume(XC_MethodHook.MethodHookParam call) {
-        Object record = topActivity(call.thisObject);
+    private boolean beforeResume(Object fragment) throws ReflectiveOperationException {
+        Object record = topActivity(fragment);
         ActivityInfo target = info(record);
-        if (target == null || !user0Display0(record) || LaunchPolicyCache.GATE.equals(target.name)) return;
-        if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, -1, null, true)) return;
-        call.setResult(false);
-        if (context == null || globalLock == null || preparation == null) return;
+        if (target == null || !user0Display0(record) || LaunchPolicyCache.GATE.equals(target.name)) return false;
+        if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, -1, null, true)) return false;
+        if (context == null || globalLock == null || preparation == null) return true;
         String ticket = bridge.cache.begin(target.packageName, false);
-        if (!bridge.cache.queueGate(ticket)) return;
+        if (!bridge.cache.queueGate(ticket)) return true;
         int expectedTask = taskId(record);
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
                 synchronized (globalLock) {
                     if (!bridge.cache.ticketPending(ticket)) return;
                     if (bridge.cache.ticketShown(ticket)) return;
-                    Object focused = XposedHelpers.callMethod(rootWindow, "getTopDisplayFocusedRootTask");
+                    Object focused = FrameworkAccess.call(rootWindow, "getTopDisplayFocusedRootTask");
                     Object top = topActivity(focused);
                     ActivityInfo topInfo = info(top);
                     if (topInfo != null && LaunchPolicyCache.GATE.equals(topInfo.name)) return;
@@ -210,9 +219,10 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
                 context.startActivity(gateIntent(ticket));
             } catch (Throwable error) { bridge.cache.cancel(ticket); unsupported(); }
         });
+        return true;
     }
 
-    private void completedResume(Object record) {
+    private void completedResume(Object record) throws ReflectiveOperationException {
         ActivityInfo target = info(record);
         if (target == null || !user0Display0(record)) return;
         Intent intent = (Intent) field(record, "intent");
@@ -220,34 +230,34 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
             bridge.cache.gateShown(intent == null ? null : intent.getStringExtra(LaunchPolicyCache.TICKET_EXTRA));
             return;
         }
-        boolean home = Boolean.TRUE.equals(XposedHelpers.callMethod(record, "isActivityTypeHome"));
+        boolean home = Boolean.TRUE.equals(FrameworkAccess.call(record, "isActivityTypeHome"));
         boolean locked = false;
         try {
             Object supervisor = field(service, "mTaskSupervisor");
             Object keyguard = field(supervisor, "mKeyguardController");
-            locked = Boolean.TRUE.equals(XposedHelpers.callMethod(keyguard, "isKeyguardLocked", 0));
+            locked = Boolean.TRUE.equals(FrameworkAccess.call(keyguard, "isKeyguardLocked", new Class<?>[]{int.class}, 0));
         } catch (Throwable ignored) { }
         bridge.cache.resumed(target.packageName, target.name, target.applicationInfo.uid, home, locked);
     }
 
-    private void beforeApplication(XC_MethodHook.MethodHookParam call) throws Exception {
-        int pid = (Integer) call.args[1];
-        int uid = (Integer) call.args[2];
-        if (uid < 10000 || uid >= 100000 || (uid >= 20000 && uid < 30000)) return;
-        Object pids = field(call.thisObject, "mPidsSelfLocked");
+    private boolean beforeApplication(Chain chain) throws Exception {
+        int pid = (Integer) chain.getArg(1);
+        int uid = (Integer) chain.getArg(2);
+        if (uid < 10000 || uid >= 100000 || (uid >= 20000 && uid < 30000)) return false;
+        Object pids = field(chain.getThisObject(), "mPidsSelfLocked");
         Object process;
-        synchronized (pids) { process = XposedHelpers.callMethod(pids, "get", pid); }
-        if (process == null) return;
+        synchronized (pids) { process = FrameworkAccess.call(pids, "get", new Class<?>[]{int.class}, pid); }
+        if (process == null) return false;
         ApplicationInfo app = (ApplicationInfo) field(process, "info");
-        if (app == null || !bridge.cache.managed(app.packageName)) return;
+        if (app == null || !bridge.cache.managed(app.packageName)) return false;
         long started;
         try { started = processStarted(pid); }
-        catch (java.io.IOException vanished) { call.setResult(((Method) call.method).getReturnType() == void.class ? null : false); return; }
-        if (bridge.cache.approvedProcess(app.packageName, pid, uid, started)) return;
-        Object ams = call.thisObject;
-        Method method = (Method) call.method;
-        Object[] arguments = call.args.clone();
-        call.setResult(method.getReturnType() == void.class ? null : false);
+        catch (java.io.IOException vanished) { return true; }
+        if (bridge.cache.approvedProcess(app.packageName, pid, uid, started)) return false;
+        Object ams = chain.getThisObject();
+        Method method = (Method) chain.getExecutable();
+        Object[] arguments = chain.getArgs().toArray();
+        Invoker<?, Method> original = getInvoker(method).setType(Invoker.Type.ORIGIN);
         // App-Zygote children can skip the ordinary Zygisk specialization callback.
         // Delay Application binding, verify through Root outside the AMS lock, then
         // resume the same checked OS operation. system_server need not read App ns FDs.
@@ -259,11 +269,12 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
                     return;
                 }
                 long identity = Binder.clearCallingIdentity();
-                try { XposedBridge.invokeOriginalMethod(method, ams, arguments); }
+                try { original.invoke(ams, arguments); }
                 catch (Throwable failure) { if (sameProcess(pid, started)) Process.killProcess(pid); }
                 finally { Binder.restoreCallingIdentity(identity); }
             }
         }, () -> { if (sameProcess(pid, started)) Process.killProcess(pid); });
+        return true;
     }
 
     private static boolean sameProcess(int pid, long started) {
@@ -271,9 +282,8 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
         catch (Exception vanished) { return false; }
     }
 
-    private static void refuseBind(XC_MethodHook.MethodHookParam call, int pid) {
-        Process.killProcess(pid);
-        call.setResult(((Method) call.method).getReturnType() == void.class ? null : false);
+    private static Object blockedBindResult(Method method) {
+        return method.getReturnType() == void.class ? null : false;
     }
 
     private static long processStarted(int pid) throws Exception {
@@ -284,26 +294,26 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
         return Long.parseLong(stat.substring(end + 1).trim().split("\\s+")[19]);
     }
 
-    private static ActivityInfo info(Object record) {
+    private static ActivityInfo info(Object record) throws ReflectiveOperationException {
         return record == null ? null : (ActivityInfo) field(record, "info");
     }
 
-    private static Object topActivity(Object container) {
+    private static Object topActivity(Object container) throws ReflectiveOperationException {
         if (container == null) return null;
-        try { return XposedHelpers.callMethod(container, "topRunningActivity"); }
-        catch (NoSuchMethodError absent) { return XposedHelpers.callMethod(container, "topRunningActivity", false); }
+        try { return FrameworkAccess.call(container, "topRunningActivity"); }
+        catch (NoSuchMethodException absent) { return FrameworkAccess.call(container, "topRunningActivity", new Class<?>[]{boolean.class}, false); }
     }
 
-    private static boolean user0Display0(Object record) {
+    private static boolean user0Display0(Object record) throws ReflectiveOperationException {
         return (Integer) field(record, "mUserId") == 0 &&
-            ((Integer) XposedHelpers.callMethod(record, "getDisplayId")) == 0;
+            ((Integer) FrameworkAccess.call(record, "getDisplayId")) == 0;
     }
 
-    private static int taskId(Object record) {
-        return (Integer) field(XposedHelpers.callMethod(record, "getTask"), "mTaskId");
+    private static int taskId(Object record) throws ReflectiveOperationException {
+        return (Integer) field(FrameworkAccess.call(record, "getTask"), "mTaskId");
     }
 
-    private static Object field(Object object, String name) { return XposedHelpers.getObjectField(object, name); }
+    private static Object field(Object object, String name) throws ReflectiveOperationException { return FrameworkAccess.get(object, name); }
 
     private static Intent gateIntent(String ticket) {
         return new Intent().setComponent(new ComponentName(LaunchPolicyCache.MANAGER, LaunchPolicyCache.GATE))
@@ -311,12 +321,8 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS | Intent.FLAG_ACTIVITY_NO_ANIMATION);
     }
 
-    private static void require(Set<XC_MethodHook.Unhook> hooks) {
-        if (hooks.isEmpty()) throw new IllegalStateException("unsupported framework surface");
-    }
-
     private void unsupported() {
         if (bridge != null) bridge.disable();
-        XposedBridge.log("Slice launch support unavailable; configured process starts remain guarded");
+        log(Log.ERROR, "Slice", "Launch support unavailable; configured process starts remain guarded");
     }
 }

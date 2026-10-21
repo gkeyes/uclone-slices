@@ -122,6 +122,9 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Verify modern Xposed module packaging
+        run: python3 tools/verify-xposed-module.py manager-app/build/outputs/apk/release
+
       - name: Build KernelSU module
         run: ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION" ./tools/build-kernelsu.sh
 

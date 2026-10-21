@@ -5,7 +5,7 @@
 
 UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前开发候选版为 **v0.3.0**，Runtime 协议 ID 为 `0.3.0`。新增启动前默认账号门禁和按进程固定的 CE/DE 视图；Manager 与 KernelSU 模块需成对更新，启用 Vector 的系统框架作用域并重启。完整真机行为验收状态见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。
+当前开发候选版为 **v0.3.1**，Runtime 协议 ID 为 `0.3.1`。新增启动前默认账号门禁和按进程固定的 CE/DE 视图；Manager 与 KernelSU 模块需成对更新，启用 Vector 的系统框架作用域并重启。完整真机行为验收状态见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。
 
 ## 功能
 
@@ -28,7 +28,7 @@ UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空�
 | CPU | arm64 |
 | Root | KernelSU，能够加载模块并授予 Manager 权限 |
 | 用户 | 已解锁的 user0 |
-| 注入框架 | Vector（兼容 Xposed API 82）及 Zygisk API 4 |
+| 注入框架 | Vector（libxposed API 102）及 Zygisk API 4 |
 | App | 具有 Launcher 入口的普通第三方 App |
 
 暂不支持工作资料、第二用户、system/shared-UID App，或 UID/签名不兼容的替换安装。身份不兼容时旧空间会被保护，不能自动接管。

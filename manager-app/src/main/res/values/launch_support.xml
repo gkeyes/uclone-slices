@@ -6,9 +6,6 @@
     <string name="launch_support_ready">已就绪</string>
     <string name="launch_support_pending">等待就绪</string>
     <string name="launch_support_hint">请成对更新 Slice 与模块，在框架中为 Slice 启用“系统框架”作用域，然后重启手机。</string>
-    <string-array name="xposed_scope">
-        <item>android</item>
-    </string-array>
     <style name="Theme.UCloneSlicesV2.Preparation" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>

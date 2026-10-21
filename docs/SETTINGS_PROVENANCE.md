@@ -113,3 +113,12 @@
 | 内部控制帧 64 KiB、传输/延迟绑定 5 秒、并发 Root 请求 32 | 复用现有 Runtime RPC 的帧/连接/传输边界；只用于通信和进程启动失败收敛，不判断离开/返回 | Rust 控制帧测试、共享启动 fixture、失联和 PID 复用测试 |
 | boot-local PID/start/namespace 关联及待验证/已验证状态 | Linux PID 复用和不可热换旧 FD 的约束；不新增账号配置 | 独立 Linux PID/mount namespace 测试、停止确认回归、真机矩阵 |
 | Root Runtime 使用 slave namespace、anchor 固定视图；原始 Base 从 init root 取得 | 防止挂载向 init/无关 App 传播，保留 Android 存储传播和现有维护事务 | 生产 native 程序的合成 chroot 集成测试与真机验收 |
+
+## v0.3.1：Xposed API 102
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| `io.github.libxposed:api:102.0.0`，min/target API 102 | 用户明确指定 102；libxposed 官方 API/指南；手机 Vector CLI 实时报告 102 | API 102 编译、APK 注册及 DEX 检查 |
+| `META-INF/xposed/java_init.list` / `module.prop` / `scope.list`，固定 `system` 作用域 | libxposed 现代入口规范；`system` 专指 system_server，`android` 还包括独立 UI 进程 | 最终 APK 检查、Vector 作用域读回、重启后就绪检查 |
+| `autoHotReload=false` | 常驻启动协调器持有未完成票据、连接和回调；本次迁移保留重启交接，不扩大为热重载改造 | 打包检查与真机生命周期验收 |
+| `Invoker.Type.ORIGIN` 用于延迟 Application 绑定 | API 102 Chain 只在当前回调有效；原实现同样绕过 Hook 链恢复已核验的绑定操作 | 编译及隔离进程真机矩阵 |

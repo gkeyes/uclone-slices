@@ -47,3 +47,9 @@
 - 账号切换、Base/当前/非当前备份、恢复、中断恢复和包身份拒绝保持现有保护。
 - 旧/新 Manager、Root 模块和 Hook 混装被拒绝；进程创建失败、Root 断线、Home 取消和半个槽拒绝不得启动错误账号。
 - GitHub Actions 固定签名构建、产物身份检查和完整真机矩阵分别记录，未完成的项不写成通过。
+
+## API 102 接入（0.3.1）
+
+系统协调器继承 `XposedModule`，在 `onSystemServerStarting` 安装 Hook。`onModuleLoaded` 对非 system_server 进程执行 `detach()`。所有 Hook 使用 `hook(...).intercept(chain)`，在回调中完成 `chain.proceed()`；异步绑定只捕获普通参数副本和 `Invoker.Type.ORIGIN`，不保留 Chain。嵌套启动归属用 `try/finally` 恢复线程上下文。
+
+构建只编译依赖 API 102，APK 不携带框架 API 实现，也不含 legacy API 引用或 `assets/xposed_init`。最终 APK 的现代注册文件、固定 system 作用域、DEX 入口继承和生命周期方法由 CI 验证。官方参考：[libxposed API](https://github.com/libxposed/api)、[模块接入与生命周期](https://libxposed.github.io/api/io/github/libxposed/api/package-summary.html)。
