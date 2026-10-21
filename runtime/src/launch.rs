@@ -312,10 +312,10 @@ impl LaunchGate {
                 .as_ref()
                 .ok_or_else(|| refused("system support is not connected"))?
                 .id;
-            if let Some(ticket) = ticket {
-                if state.tickets.get(ticket).map(String::as_str) != Some(package) {
-                    return Err(refused("launch was cancelled"));
-                }
+            if let Some(ticket) = ticket
+                && state.tickets.get(ticket).map(String::as_str) != Some(package)
+            {
+                return Err(refused("launch was cancelled"));
             }
             let caller = if ticket.is_some() { "manager" } else { "root" };
             state
@@ -445,10 +445,10 @@ impl LaunchGate {
         reader.get_ref().set_read_timeout(None)?;
         let id = {
             let mut state = self.lock()?;
-            if let Some(previous) = state.connection.take() {
-                if let Ok(writer) = previous.writer.lock() {
-                    let _ = writer.shutdown(Shutdown::Both);
-                }
+            if let Some(previous) = state.connection.take()
+                && let Ok(writer) = previous.writer.lock()
+            {
+                let _ = writer.shutdown(Shutdown::Both);
             }
             state.tickets.clear();
             state.claimed.clear();
@@ -468,10 +468,10 @@ impl LaunchGate {
                 let frame = read_subscription_frame(&mut reader)?;
                 let event: SystemEvent = serde_json::from_str(&frame).map_err(invalid)?;
                 let mut state = self.lock()?;
-                if !state
+                if state
                     .connection
                     .as_ref()
-                    .is_some_and(|connection| connection.id == id)
+                    .is_none_or(|connection| connection.id != id)
                 {
                     return Err(refused("system connection was replaced"));
                 }
@@ -505,11 +505,11 @@ impl LaunchGate {
                             .retain(|_, permit| permit.ticket.as_deref() != Some(&ticket));
                     }
                     SystemEvent::Consumed { token } => {
-                        if let Some(permit) = state.permits.remove(&token) {
-                            if let Some(ticket) = permit.ticket {
-                                state.tickets.remove(&ticket);
-                                state.claimed.remove(&ticket);
-                            }
+                        if let Some(permit) = state.permits.remove(&token)
+                            && let Some(ticket) = permit.ticket
+                        {
+                            state.tickets.remove(&ticket);
+                            state.claimed.remove(&ticket);
                         }
                     }
                 }
