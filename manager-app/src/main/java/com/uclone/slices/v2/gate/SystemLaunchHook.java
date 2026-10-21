@@ -185,6 +185,7 @@ public final class SystemLaunchHook implements IXposedHookLoadPackage {
         call.setResult(false);
         if (context == null || globalLock == null || preparation == null) return;
         String ticket = bridge.cache.begin(target.packageName, false);
+        if (!bridge.cache.queueGate(ticket)) return;
         int expectedTask = taskId(record);
         new Handler(Looper.getMainLooper()).post(() -> {
             try {

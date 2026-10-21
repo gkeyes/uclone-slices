@@ -124,6 +124,17 @@ class LaunchPolicyCacheTest {
         assertTrue(cache.gateRequired(target, uid, manager, permit, false))
     }
 
+    @Test fun repeatedWarmResumeCannotEnqueueAnotherPreparationActivity() {
+        val cache = cache()
+        val ticket = cache.begin(target, false)
+        assertTrue(cache.queueGate(ticket))
+        assertFalse(cache.queueGate(ticket))
+        cache.gateShown(ticket)
+        assertFalse(cache.queueGate(ticket))
+        cache.cancel(ticket)
+        assertFalse(cache.queueGate(ticket))
+    }
+
     @Test fun recycledPidsAndOldAccountViewsCannotBindApplications() {
         val cache = cache()
         assertFalse(cache.approvedProcess(target, 42, uid, 124))

@@ -29,6 +29,7 @@ final class LaunchPolicyCache {
     private final Set<String> consumed = new HashSet<>();
     private final Map<String, String> pending = new HashMap<>();
     private final Set<String> shown = new HashSet<>();
+    private final Set<String> queued = new HashSet<>();
     private boolean connected;
     private boolean valid;
     private long revision = -1;
@@ -93,6 +94,7 @@ final class LaunchPolicyCache {
         processes.clear();
         pending.clear();
         shown.clear();
+        queued.clear();
         sessions.end();
     }
 
@@ -144,7 +146,7 @@ final class LaunchPolicyCache {
         permits.remove(selected);
         consumed.add(selected);
         String ticket = pending.remove(target);
-        if (ticket != null) shown.remove(ticket);
+        if (ticket != null) { shown.remove(ticket); queued.remove(ticket); }
         send.accept(message("consumed", "token", selected));
         return true;
     }
@@ -176,9 +178,13 @@ final class LaunchPolicyCache {
 
     synchronized boolean ticketPending(String ticket) { return pending.containsValue(ticket); }
     synchronized boolean ticketShown(String ticket) { return shown.contains(ticket); }
+    synchronized boolean queueGate(String ticket) {
+        return ticketPending(ticket) && !shown.contains(ticket) && queued.add(ticket);
+    }
     synchronized boolean isManagerCaller(int uid) { return uid == managerUid && managerUid >= 10000; }
 
     synchronized void gateShown(String ticket) {
+        queued.remove(ticket);
         if (pending.containsValue(ticket)) shown.add(ticket);
     }
 
@@ -187,6 +193,7 @@ final class LaunchPolicyCache {
     synchronized void cancel(String ticket) {
         pending.values().remove(ticket);
         shown.remove(ticket);
+        queued.remove(ticket);
         send.accept(message("cancel", "ticket", ticket));
     }
 
@@ -202,6 +209,7 @@ final class LaunchPolicyCache {
         List<String> tickets = new ArrayList<>(pending.values());
         pending.clear();
         shown.clear();
+        queued.clear();
         for (String ticket : tickets) send.accept(message("cancel", "ticket", ticket));
     }
 

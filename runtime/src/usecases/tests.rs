@@ -2946,6 +2946,12 @@ fn process_gate_requires_interrupted_activation_to_commit_before_launch() {
     android.force_stop(&package).unwrap();
     android.apply_view(&package, &slot).unwrap();
     let mut runtime = Runtime::new(packages, slots, android);
+    // Recovery commits the interrupted operation but requires the caller to retry;
+    // preserve that existing contract while exercising the real process-start guard.
+    assert_eq!(
+        runtime.get_package(&package),
+        Err(RuntimeError::StateConflict)
+    );
     assert_eq!(runtime.get_package(&package).unwrap().active_slot, slot);
     let (packages, _, android) = runtime.into_parts();
     assert!(packages.load(&package).unwrap().unwrap().is_ready());
