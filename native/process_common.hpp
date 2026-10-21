@@ -18,6 +18,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <vector>
+#include <utility>
 
 namespace slice {
 
@@ -32,6 +33,7 @@ class Fd {
   ~Fd() { if (value_ >= 0) close(value_); }
   Fd(const Fd&) = delete;
   Fd& operator=(const Fd&) = delete;
+  Fd(Fd&& other) noexcept : value_(std::exchange(other.value_, -1)) {}
   int get() const { return value_; }
   explicit operator bool() const { return value_ >= 0; }
  private:
