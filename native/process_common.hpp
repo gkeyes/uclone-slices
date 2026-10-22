@@ -126,18 +126,21 @@ inline std::optional<std::string> frame(int fd) {
     int elapsed = static_cast<int>((now.tv_sec - begin.tv_sec) * 1000 +
                                   (now.tv_nsec - begin.tv_nsec) / 1000000);
     int remaining = kFrameTimeoutMs - elapsed;
-    if (remaining <= 0) return {};
+    if (remaining <= 0) { errno = ETIMEDOUT; return {}; }
     pollfd item{fd, POLLIN, 0};
     int ready = poll(&item, 1, remaining);
     if (ready < 0 && errno == EINTR) continue;
-    if (ready <= 0) return {};
+    if (ready == 0) { errno = ETIMEDOUT; return {}; }
+    if (ready < 0) return {};
     char ch{};
     auto count = read(fd, &ch, 1);
     if (count < 0 && errno == EINTR) continue;
+    if (count == 0) { errno = ECONNRESET; return {}; }
     if (count != 1) return {};
     if (ch == '\n') return result;
     result.push_back(ch);
   }
+  errno = EMSGSIZE;
   return {};
 }
 

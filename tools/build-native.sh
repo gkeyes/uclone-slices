@@ -19,7 +19,7 @@ FLAGS=(-std=c++20 -O2 -Wall -Wextra -Werror -fno-exceptions -fno-rtti
        -fvisibility=hidden -fvisibility-inlines-hidden -static-libstdc++
        '-Wl,--exclude-libs,ALL' '-Wl,-z,relro,-z,now'
        "-DUCLONE_BUILD_ID=\"$BUILD_ID\"")
-"$CXX" "${FLAGS[@]}" -fPIC -shared "$ROOT/native/slice_zygisk.cpp" -o "$OUT/arm64-v8a.so"
+"$CXX" "${FLAGS[@]}" -fPIC -shared "$ROOT/native/slice_zygisk.cpp" -llog -o "$OUT/arm64-v8a.so"
 "$CXX" "${FLAGS[@]}" "$ROOT/native/process_view.cpp" -o "$OUT/uclone-process-view"
 "$CXX" "${FLAGS[@]}" "$ROOT/native/namespace_anchor.cpp" -o "$OUT/uclone-namespace-anchor"
 "$STRIP" --strip-all "$OUT/arm64-v8a.so" "$OUT/uclone-process-view" "$OUT/uclone-namespace-anchor"
