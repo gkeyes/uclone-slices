@@ -105,6 +105,7 @@ internal fun PackageDetailScreen(
                     packageName = packageSnapshot.packageName,
                     installedApp = installedApp,
                     activeSlot = activeSlot,
+                    stateConfirmed = packageSnapshot.runtimeReady,
                     enabled = actionsEnabled,
                     launching = activatingSlot == packageSnapshot.activeSlot,
                     onLaunch = {
@@ -246,6 +247,7 @@ private fun CurrentSpaceCard(
     packageName: String,
     installedApp: InstalledApp?,
     activeSlot: SlotSnapshot?,
+    stateConfirmed: Boolean,
     enabled: Boolean,
     launching: Boolean,
     onLaunch: () -> Unit,
@@ -287,8 +289,8 @@ private fun CurrentSpaceCard(
         }
         Spacer(Modifier.height(Space.md))
         StatusChip(
-            text = stringResource(R.string.currently_using),
-            tone = Tone.Success,
+            text = stringResource(if (stateConfirmed) R.string.currently_using else R.string.last_registered_account),
+            tone = if (stateConfirmed) Tone.Success else Tone.Warning,
             animateText = false,
         )
         AnimatedContent(
