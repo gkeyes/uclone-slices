@@ -197,7 +197,7 @@ fn enroll_create_activate_is_one_runtime_flow() {
 }
 
 #[test]
-fn listing_skips_a_failed_package_and_keeps_healthy_packages() {
+fn listing_keeps_a_failed_package_and_healthy_packages() {
     let failed = PackageName::new("com.example.failed").unwrap();
     let healthy = PackageName::new("com.example.healthy").unwrap();
     let mut android = MemoryAndroidOps::default();
@@ -221,8 +221,27 @@ fn listing_skips_a_failed_package_and_keeps_healthy_packages() {
             .iter()
             .map(|snapshot| snapshot.package.clone())
             .collect::<Vec<_>>(),
-        vec![healthy]
+        vec![failed, healthy]
     );
+}
+
+#[test]
+fn listing_after_failed_switch_preserves_all_account_records() {
+    let package = package();
+    let (runtime, target) = with_slot();
+    let (packages, slots, mut android) = runtime.into_parts();
+    let original = packages.load(&package).unwrap().unwrap();
+    android.set_view(&package, ObservedView::Inconsistent);
+    let mut runtime = Runtime::new(packages, slots, android);
+
+    let listed = runtime.list_packages().unwrap();
+
+    assert_eq!(listed.len(), 1, "a failed view must not hide the configured App");
+    assert_eq!(listed[0].slots, original.snapshot().unwrap().slots);
+    assert_eq!(runtime.activate_slot(&package, &target), Err(RuntimeError::StateConflict));
+    let (packages, slots, _) = runtime.into_parts();
+    assert_eq!(packages.load(&package).unwrap().unwrap(), original);
+    assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
 }
 
 #[test]
