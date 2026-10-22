@@ -32,7 +32,18 @@ class SpecializeChannel {
   }
 
   static std::optional<SpecializeChannel> create(int socket) {
-    Fd fd(static_cast<int>(syscall(__NR_memfd_create, "uclone.launch", MFD_CLOEXEC | MFD_ALLOW_SEALING)));
+    int flags = MFD_CLOEXEC | MFD_ALLOW_SEALING;
+#ifdef MFD_NOEXEC_SEAL
+    int descriptor = static_cast<int>(syscall(__NR_memfd_create, "uclone.launch", flags | MFD_NOEXEC_SEAL));
+    // Older supported Android kernels predate MFD_NOEXEC_SEAL. Retry only an
+    // unsupported flag, never a permission/policy denial on a modern kernel.
+    if (descriptor < 0 && errno == EINVAL) {
+      descriptor = static_cast<int>(syscall(__NR_memfd_create, "uclone.launch", flags));
+    }
+#else
+    int descriptor = static_cast<int>(syscall(__NR_memfd_create, "uclone.launch", flags));
+#endif
+    Fd fd(descriptor);
     if (!fd || ftruncate(fd.get(), sizeof(uint32_t)) != 0 ||
         fcntl(fd.get(), F_ADD_SEALS, kSeals) != 0) return {};
     auto channel = map(fd.get());
