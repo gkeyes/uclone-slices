@@ -52,7 +52,7 @@ internal fun PackageDetailScreen(
     }
     var defaultSheetVisible by rememberSaveable(packageSnapshot.packageName) { mutableStateOf(false) }
     val appLabel = installedApp?.label ?: packageSnapshot.packageName
-    val operationsEnabled = state.operationsAllowed &&
+    val operationsEnabled = state.operationsAllowed && packageSnapshot.runtimeReady &&
         packageSnapshot.bindingState == BindingState.Ready
     val activeSlot = packageSnapshot.slots.firstOrNull {
         it.id == packageSnapshot.activeSlot
@@ -87,12 +87,25 @@ internal fun PackageDetailScreen(
                 )
             },
         ) {
+            if (!packageSnapshot.runtimeReady) {
+                item(key = "unavailable") {
+                    GroupCard {
+                        ListRow(
+                            title = stringResource(R.string.package_unavailable),
+                            summary = stringResource(R.string.package_unavailable_description),
+                            value = stringResource(R.string.load_runtime_log),
+                            onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
+                        )
+                    }
+                }
+            }
             item(key = "current") {
                 CurrentSpaceCard(
                     appLabel = appLabel,
                     packageName = packageSnapshot.packageName,
                     installedApp = installedApp,
                     activeSlot = activeSlot,
+                    stateConfirmed = packageSnapshot.runtimeReady,
                     enabled = actionsEnabled,
                     launching = activatingSlot == packageSnapshot.activeSlot,
                     onLaunch = {
@@ -234,6 +247,7 @@ private fun CurrentSpaceCard(
     packageName: String,
     installedApp: InstalledApp?,
     activeSlot: SlotSnapshot?,
+    stateConfirmed: Boolean,
     enabled: Boolean,
     launching: Boolean,
     onLaunch: () -> Unit,
@@ -275,8 +289,8 @@ private fun CurrentSpaceCard(
         }
         Spacer(Modifier.height(Space.md))
         StatusChip(
-            text = stringResource(R.string.currently_using),
-            tone = Tone.Success,
+            text = stringResource(if (stateConfirmed) R.string.currently_using else R.string.last_registered_account),
+            tone = if (stateConfirmed) Tone.Success else Tone.Warning,
             animateText = false,
         )
         AnimatedContent(

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::launch::{LaunchGate, tracked_processes};
+use crate::launch::{LaunchGate, PROCESS_VIEW_WORKER, ProcessIdentity, tracked_processes};
 use crate::layout;
 use crate::model::{
     AccountIoToken, Capabilities, ObservedView, PackageEnabledState, PackageIdentity,
@@ -758,26 +758,54 @@ impl AndroidOps for SystemAndroidOps {
             }
             let mut verified = 0_usize;
             for process in processes {
-                let mountinfo = match fs::read_to_string(process.join("mountinfo")) {
-                    Ok(mountinfo) => mountinfo,
+                let identity = match ProcessIdentity::read_from(&process) {
+                    Ok(identity) => identity,
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                     Err(error) => return Err(AdapterError::new(error.to_string())),
                 };
-                verified += 1;
-                let observed = app_view_from_mountinfo(
-                    &mountinfo,
-                    package,
-                    &self.canonical_ce_root,
-                    &self.canonical_de_root,
-                );
-                if !observed.matches(expected) {
-                    let pid = process
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("unknown");
-                    return Err(AdapterError::new(format!(
-                        "App PID {pid} did not observe the requested CE/DE view"
-                    )));
+                // A UID-changing PID reuse cannot opt itself into the isolated path.
+                // Only Root-tracked descendants belong to this package's process group.
+                let isolated = identity.uid != uid;
+                if isolated
+                    && !tracked_processes(&self.runtime_root, uid)
+                        .map_err(|error| AdapterError::new(error.to_string()))?
+                        .contains(&process)
+                {
+                    return Err(AdapterError::new(
+                        "App process identity changed before verify",
+                    ));
+                }
+                let pid = identity.pid.to_string();
+                let owner = identity.uid.to_string();
+                let started = identity.started.to_string();
+                let mut arguments = vec![
+                    pid.as_str(),
+                    owner.as_str(),
+                    started.as_str(),
+                    package.as_str(),
+                    expected.as_str(),
+                    "--install",
+                    "--verify-inherited",
+                ];
+                if isolated {
+                    arguments.push("--isolated");
+                }
+                // Resolve canonical/legacy/mirror aliases inside the App's actual root.
+                // A mountinfo string at /data/user/0 misses Android's /data/data symlink.
+                self.required(PROCESS_VIEW_WORKER, &arguments)
+                    .map_err(|error| {
+                        AdapterError::new(format!(
+                            "App PID {pid} did not observe the requested CE/DE view: {error}"
+                        ))
+                    })?;
+                match ProcessIdentity::read_from(&process) {
+                    Ok(after) if after == identity => verified += 1,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    _ => {
+                        return Err(AdapterError::new(
+                            "App process identity changed during verify",
+                        ));
+                    }
                 }
             }
             (verified != 0)
@@ -912,56 +940,6 @@ fn runtime_domain_view(roots: &[String], package: &PackageName) -> Option<Runtim
             }),
         _ => None,
     }
-}
-
-fn app_view_from_mountinfo(
-    content: &str,
-    package: &PackageName,
-    canonical_ce_root: &Path,
-    canonical_de_root: &Path,
-) -> ObservedView {
-    let ce = app_domain_view(
-        &mount_roots(content, &canonical_ce_root.join(package.as_str())),
-        package,
-    );
-    let de = app_domain_view(
-        &mount_roots(content, &canonical_de_root.join(package.as_str())),
-        package,
-    );
-    paired_view(ce, de)
-}
-
-fn paired_view(ce: Option<Option<SlotId>>, de: Option<Option<SlotId>>) -> ObservedView {
-    match (ce, de) {
-        (Some(None), Some(None)) => ObservedView::Base,
-        (Some(Some(ce)), Some(Some(de))) if ce == de => ObservedView::Slot(ce),
-        (Some(None), Some(Some(_)))
-        | (Some(Some(_)), Some(None))
-        | (Some(Some(_)), Some(Some(_)))
-        | (None, _)
-        | (_, None) => ObservedView::Inconsistent,
-    }
-}
-
-fn app_domain_view(roots: &[String], package: &PackageName) -> Option<Option<SlotId>> {
-    if roots
-        .iter()
-        .any(|root| root.contains(layout::MAINTENANCE_MOUNT_MARKER))
-    {
-        return None;
-    }
-    let v2_roots: Vec<_> = roots
-        .iter()
-        .filter(|root| root.contains(layout::SLOTS_MOUNT_MARKER))
-        .collect();
-    if v2_roots.is_empty() {
-        return Some(None);
-    }
-    let first = slot_from_mount_root(v2_roots[0], package)?;
-    v2_roots
-        .iter()
-        .all(|root| slot_from_mount_root(root, package).as_ref() == Some(&first))
-        .then_some(Some(first))
 }
 
 fn mount_roots(content: &str, mount_point: &Path) -> Vec<String> {

@@ -98,6 +98,7 @@ sealed interface UiNotice {
     data object MissingEntity : UiNotice
     data object StateChanged : UiNotice
     data object OperationFailed : UiNotice
+    data object PackageUnavailable : UiNotice
     data object IdentityProtected : UiNotice
     data object SigningUnavailable : UiNotice
     data object RuntimeVersionMismatch : UiNotice

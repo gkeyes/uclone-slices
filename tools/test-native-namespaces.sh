@@ -21,7 +21,8 @@ int main() {
 }
 CPP
 g++ "${FLAGS[@]}" "$LAB/helper.cpp" -o "$LAB/helper"
-mkdir "$LAB/root"
 # PID 1 belongs to this disposable namespace. All fixed production paths resolve
 # inside the synthetic chroot; no host /data, App, or account is read or modified.
-sudo unshare --mount --pid --fork -- python3 "$ROOT/tools/test-native-namespaces.py" "$LAB"
+for layout in separate shared symlink; do
+  sudo unshare --mount --pid --fork -- python3 "$ROOT/tools/test-native-namespaces.py" "$LAB" "$layout"
+done

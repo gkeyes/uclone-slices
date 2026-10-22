@@ -17,7 +17,7 @@ class LaunchPolicyCacheTest {
     private val permit = "a".repeat(64)
 
     private fun cache(events: MutableList<JSONObject> = mutableListOf()): LaunchPolicyCache =
-        LaunchPolicyCache("0.3.2") { events += it }.apply {
+        LaunchPolicyCache("0.3.3") { events += it }.apply {
             managerUid(manager)
             update(JSONObject(resource("system-state.json")))
         }

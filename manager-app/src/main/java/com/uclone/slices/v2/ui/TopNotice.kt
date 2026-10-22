@@ -327,6 +327,7 @@ private fun noticeMessage(notice: UiNotice): String = when (notice) {
     UiNotice.MissingEntity -> stringResource(R.string.error_missing_entity)
     UiNotice.StateChanged -> stringResource(R.string.error_state_changed)
     UiNotice.OperationFailed -> stringResource(R.string.error_operation_failed)
+    UiNotice.PackageUnavailable -> stringResource(R.string.package_unavailable_description)
     UiNotice.IdentityProtected -> stringResource(R.string.error_identity_protected)
     UiNotice.SigningUnavailable -> stringResource(R.string.error_signing_unavailable)
     UiNotice.RuntimeVersionMismatch -> stringResource(R.string.error_runtime_version_mismatch)

@@ -80,6 +80,10 @@ internal class SlotsViewModel(
     }
 
     fun onIntent(intent: UiIntent) {
+        if (blocksUnavailableAccount(intent)) {
+            mutableState.update { it.copy(posted = post(UiNotice.PackageUnavailable)) }
+            return
+        }
         when (intent) {
             UiIntent.Refresh -> runOperation(OperationUiState.Refreshing) { refresh() }
             UiIntent.AppResumed -> {
@@ -384,6 +388,30 @@ internal class SlotsViewModel(
         }
     }
 
+    private fun blocksUnavailableAccount(intent: UiIntent): Boolean {
+        val current = state.value
+        val packageName = when (intent) {
+            is UiIntent.QuickActivateSlot -> intent.packageName
+            is UiIntent.SetDefaultSlot -> intent.packageName
+            is UiIntent.SetLaunchAfterReboot -> intent.packageName
+            is UiIntent.RequestUnenrollApp -> intent.packageName
+            is UiIntent.RequestConfigureApp -> intent.packageName
+            is UiIntent.OpenBackupRestore -> intent.packageName
+            is UiIntent.CreateSlot,
+            is UiIntent.ActivateSlot,
+            is UiIntent.RequestRenameSlot,
+            is UiIntent.RequestDeleteSlot,
+            -> current.selected?.packageName
+            UiIntent.ConfirmRenameSlot -> current.pendingRename?.packageName
+            UiIntent.ConfirmDeleteSlot -> current.pendingDelete?.packageName
+            UiIntent.ConfirmUnenrollApp -> current.pendingUnenroll?.packageName
+            UiIntent.ConfirmConfigureApp -> current.pendingConfigurationPackage
+            UiIntent.ConfirmRegistrationRecovery -> current.registrationRecovery?.packageName
+            else -> null
+        }
+        return current.packages.any { it.packageName == packageName && !it.runtimeReady }
+    }
+
     private fun openPackage(packageName: String) {
         val snapshot = state.value
         if (!snapshot.runtimeReady) {
@@ -408,6 +436,12 @@ internal class SlotsViewModel(
                     posted = post(UiNotice.RuntimeVersionMismatch),
                 )
             }
+            navigate(SlotsNavigation.ToPackage(packageName))
+            return
+        }
+        if (!configured.runtimeReady) {
+            if (snapshot.busy) return
+            mutableState.update { it.copy(selected = configured, seed = SeedMode.Blank) }
             navigate(SlotsNavigation.ToPackage(packageName))
             return
         }
@@ -990,6 +1024,7 @@ internal class SlotsViewModel(
     private suspend fun reconcileBindings(
         snapshots: List<PackageSnapshot>,
     ): List<PackageSnapshot> = snapshots.map { snapshot ->
+        if (!snapshot.runtimeReady) return@map snapshot
         if (
             snapshot.bindingState != BindingState.LegacyUnbound &&
             snapshot.bindingState != BindingState.RebindRequired

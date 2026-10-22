@@ -215,6 +215,10 @@
     <string name="error_missing_entity">应用或数据空间已不存在，请刷新状态</string>
     <string name="error_state_changed">应用数据状态已经变化，请刷新后确认</string>
     <string name="error_operation_failed">操作未完整完成，请刷新确认当前空间</string>
+    <string name="last_registered_account">上次登记的账号</string>
+    <string name="package_unavailable">账号暂时不可用</string>
+    <string name="configured_app_unavailable_summary">已登记 %1$d 个账号 · 状态待确认</string>
+    <string name="package_unavailable_description">无法确认账号运行状态，已保留登记列表并暂停账号操作。请查看日志，修复后刷新。</string>
     <string name="error_identity_protected">旧分空间已保护，当前应用身份不兼容，无法安全接管</string>
     <string name="error_signing_unavailable">无法读取应用签名，旧分空间保持不动</string>
     <string name="error_runtime_version_mismatch">后台程序尚未更新，请完成模块更新并重启手机后再试</string>

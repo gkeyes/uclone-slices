@@ -110,6 +110,7 @@ fn aggregate_wire_format_stays_independent_from_the_v1_binding_sidecar() {
     assert!(!fields.contains_key("binding"));
     assert!(!fields.contains_key("signing"));
     assert!(!fields.contains_key("binding_state"));
+    assert!(!fields.contains_key("runtime_ready"));
 }
 
 #[test]

@@ -685,47 +685,32 @@ fn mountinfo_requires_exactly_one_paired_v2_slot() {
     );
 }
 
-#[test]
-fn app_mountinfo_accepts_android_base_mapping_and_equivalent_slot_duplicates() {
-    let package = PackageName::new("com.example.app").unwrap();
-    let ce_root = Path::new("/data/user/0");
-    let de_root = Path::new("/data/user_de/0");
-    let base =
-        "1 0 0:1 /user_de/0/com.example.app /data/user_de/0/com.example.app rw - ext4 none rw\n";
-    let slot = "1 0 0:1 /misc_ce/0/uclone-slices-v2/slots/com.example.app/slot-2 /data/user/0/com.example.app rw - ext4 none rw\n2 0 0:1 /misc_de/0/uclone-slices-v2/slots/com.example.app/slot-2 /data/user_de/0/com.example.app rw - ext4 none rw\n3 0 0:1 /misc_de/0/uclone-slices-v2/slots/com.example.app/slot-2 /data/user_de/0/com.example.app rw - ext4 none rw\n";
-
-    assert_eq!(
-        app_view_from_mountinfo(base, &package, ce_root, de_root),
-        ObservedView::Base
-    );
-    assert_eq!(
-        app_view_from_mountinfo(slot, &package, ce_root, de_root),
-        ObservedView::Slot(SlotId::numbered(2))
-    );
+fn write_process_identity(process: &Path) {
+    fs::create_dir_all(process.join("ns")).unwrap();
+    let mut fields = ["0"; 20];
+    fields[0] = "S";
+    fields[1] = "1";
+    fields[19] = "777";
+    fs::write(
+        process.join("stat"),
+        format!("123 (app) {}", fields.join(" ")),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("mnt:[123]", process.join("ns/mnt")).unwrap();
 }
 
 #[test]
-fn launch_uses_resolved_activity_and_checks_every_pid_mountinfo() {
+fn launch_uses_resolved_activity_and_verifies_every_process_in_its_own_namespace() {
     let root = tempfile::tempdir().unwrap();
     let package = PackageName::new("com.example.app").unwrap();
     let slot = SlotId::numbered(3);
     for pid in ["123", "456"] {
         let directory = root.path().join("proc").join(pid);
         fs::create_dir_all(&directory).unwrap();
+        write_process_identity(&directory);
         fs::write(
             directory.join("status"),
             "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
-        )
-        .unwrap();
-        fs::write(
-            directory.join("mountinfo"),
-            format!(
-                "1 0 0:1 /uclone-slices-v2/slots/{package}/{slot} {}/{} rw - ext4 none rw\n2 0 0:1 /uclone-slices-v2/slots/{package}/{slot} {}/{} rw - ext4 none rw\n",
-                root.path().join("canonical-ce").display(),
-                package,
-                root.path().join("canonical-de").display(),
-                package,
-            ),
         )
         .unwrap();
     }
@@ -735,6 +720,8 @@ fn launch_uses_resolved_activity_and_checks_every_pid_mountinfo() {
             output(format!("{package}/.MainActivity\n")),
             output("Status: ok\n"),
             output(format!("package:{package} uid:10123\n")),
+            output(""),
+            output(""),
         ]),
         commands: Rc::clone(&commands),
     };
@@ -742,6 +729,27 @@ fn launch_uses_resolved_activity_and_checks_every_pid_mountinfo() {
 
     android.launch_verified(&package, &slot).unwrap();
 
+    let checks: Vec<_> = recorded
+        .borrow()
+        .iter()
+        .filter(|(program, _)| program == PROCESS_VIEW_WORKER)
+        .map(|(_, arguments)| arguments.clone())
+        .collect();
+    assert_eq!(checks.len(), 2);
+    for (arguments, pid) in checks.iter().zip(["123", "456"]) {
+        assert_eq!(
+            arguments,
+            &[
+                pid,
+                "10123",
+                "777",
+                package.as_str(),
+                slot.as_str(),
+                "--install",
+                "--verify-inherited"
+            ]
+        );
+    }
     assert_eq!(
         recorded.borrow()[1],
         (
@@ -768,12 +776,12 @@ fn one_request_lists_packages_and_resolves_the_launcher_once() {
     fs::create_dir_all(root.path().join("canonical-de").join(package.as_str())).unwrap();
     let process = root.path().join("proc").join("123");
     fs::create_dir_all(&process).unwrap();
+    write_process_identity(&process);
     fs::write(
         process.join("status"),
         "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
     )
     .unwrap();
-    fs::write(process.join("mountinfo"), b"").unwrap();
     fs::write(root.path().join("mountinfo"), b"").unwrap();
     let commands = Rc::new(RefCell::new(Vec::new()));
     let runner = RecordingRunner {
@@ -782,6 +790,7 @@ fn one_request_lists_packages_and_resolves_the_launcher_once() {
             output(format!("package:{}\n", apk.display())),
             output(format!("{package}/.MainActivity\n")),
             output("Status: ok\n"),
+            output(""),
         ]),
         commands: Rc::clone(&commands),
     };
@@ -801,7 +810,7 @@ fn one_request_lists_packages_and_resolves_the_launcher_once() {
         .filter(|(_, arguments)| arguments.get(1).map(String::as_str) == Some("resolve-activity"))
         .count();
     assert_eq!((listings, resolutions), (1, 1));
-    assert_eq!(recorded.len(), 4);
+    assert_eq!(recorded.len(), 5);
 }
 
 #[test]
@@ -809,26 +818,13 @@ fn launch_rejects_a_remote_process_with_the_wrong_view() {
     let root = tempfile::tempdir().unwrap();
     let package = PackageName::new("com.example.app").unwrap();
     let slot = SlotId::numbered(3);
-    for (pid, root_path) in [
-        ("123", format!("/uclone-slices-v2/slots/{package}/{slot}")),
-        ("456", "/wrong-view".to_owned()),
-    ] {
+    for pid in ["123", "456"] {
         let directory = root.path().join("proc").join(pid);
         fs::create_dir_all(&directory).unwrap();
+        write_process_identity(&directory);
         fs::write(
             directory.join("status"),
             "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
-        )
-        .unwrap();
-        fs::write(
-            directory.join("mountinfo"),
-            format!(
-                "1 0 0:1 {root_path} {}/{} rw - ext4 none rw\n2 0 0:1 {root_path} {}/{} rw - ext4 none rw\n",
-                root.path().join("canonical-ce").display(),
-                package,
-                root.path().join("canonical-de").display(),
-                package,
-            ),
         )
         .unwrap();
     }
@@ -838,6 +834,12 @@ fn launch_rejects_a_remote_process_with_the_wrong_view() {
             output(format!("{package}/.MainActivity\n")),
             output("Status: ok\n"),
             output(format!("package:{package} uid:10123\n")),
+            output(""),
+            CommandOutput {
+                success: false,
+                stdout: String::new(),
+                stderr: "process view refused at verification".to_owned(),
+            },
             output(""),
             output(format!("package:{package} uid:10123\n")),
         ]),
@@ -856,7 +858,7 @@ fn launch_rejects_a_remote_process_with_the_wrong_view() {
 
 #[test]
 fn launch_verification_failures_are_contained_and_leave_no_uid_processes() {
-    for failure in ["wrong_view", "pid_disappeared", "mountinfo_unreadable"] {
+    for failure in ["wrong_view", "pid_disappeared", "identity_unreadable"] {
         let root = tempfile::tempdir().unwrap();
         let package = PackageName::new("com.example.app").unwrap();
         let slot = SlotId::numbered(3);
@@ -867,33 +869,30 @@ fn launch_verification_failures_are_contained_and_leave_no_uid_processes() {
             "Name:\tapp\nUid:\t10123\t10123\t10123\t10123\n",
         )
         .unwrap();
-        match failure {
-            "wrong_view" => fs::write(
-                process.join("mountinfo"),
-                format!(
-                    "1 0 0:1 /wrong {}/{} rw - ext4 none rw\n2 0 0:1 /wrong {}/{} rw - ext4 none rw\n",
-                    root.path().join("canonical-ce").display(),
-                    package,
-                    root.path().join("canonical-de").display(),
-                    package,
-                ),
-            )
-            .unwrap(),
-            "pid_disappeared" => {}
-            "mountinfo_unreadable" => {
-                fs::create_dir(process.join("mountinfo")).unwrap();
-            }
-            _ => unreachable!(),
+        if failure != "pid_disappeared" {
+            write_process_identity(&process);
         }
+        if failure == "identity_unreadable" {
+            fs::remove_file(process.join("stat")).unwrap();
+            fs::create_dir(process.join("stat")).unwrap();
+        }
+        let mut outputs = VecDeque::from([
+            output(format!("{package}/.MainActivity\n")),
+            output("Status: ok\n"),
+            output(format!("package:{package} uid:10123\n")),
+        ]);
+        if failure == "wrong_view" {
+            outputs.push_back(CommandOutput {
+                success: false,
+                stdout: String::new(),
+                stderr: "process view refused at verification".to_owned(),
+            });
+        }
+        outputs.push_back(output(""));
+        outputs.push_back(output(format!("package:{package} uid:10123\n")));
         let commands = Rc::new(RefCell::new(Vec::new()));
         let runner = ContainmentRunner {
-            outputs: VecDeque::from([
-                output(format!("{package}/.MainActivity\n")),
-                output("Status: ok\n"),
-                output(format!("package:{package} uid:10123\n")),
-                output(""),
-                output(format!("package:{package} uid:10123\n")),
-            ]),
+            outputs,
             commands: Rc::clone(&commands),
             proc_root: root.path().join("proc"),
         };

@@ -14,7 +14,7 @@ libc = ctypes.CDLL(None, use_errno=True)
 libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p]
 libc.unshare.argtypes = [ctypes.c_int]
 CLONE_NEWNS = 0x20000
-MS_BIND, MS_REC, MS_SLAVE = 4096, 16384, 1 << 19
+MS_BIND, MS_REC, MS_SLAVE, MS_SHARED = 4096, 16384, 1 << 19, 1 << 20
 PACKAGE = "com.example.app"
 MODULE = "/data/adb/modules/uclone-slices-v2/bin"
 RUNTIME = "/data/adb/uclone-slices-v2"
@@ -57,7 +57,7 @@ def slot_source(domain, slot):
 
 def bind_account(slot):
     for domain, paths in [("ce", CE), ("de", DE)]:
-        for prefix in paths:
+        for prefix in paths[:1]:
             mount(slot_source(domain, slot), prefix + PACKAGE)
 
 
@@ -91,7 +91,7 @@ def execute(arguments, runtime_slot=None):
     return os.waitstatus_to_exitcode(status), b"".join(chunks).decode().strip()
 
 
-def application(masked=False):
+def application(masked=False, mixed=False):
     commands, sender = os.pipe()
     response, writer = os.pipe()
     pid = os.fork()
@@ -102,6 +102,8 @@ def application(masked=False):
             private_namespace()
             old_ce = os.open(CE[0] + PACKAGE + "/value", os.O_RDONLY)
             old_de = os.open(DE[0] + PACKAGE + "/value", os.O_RDONLY)
+            if mixed:
+                mount(slot_source("ce", "slot-1"), CE[0] + PACKAGE)
             if masked:
                 mount("tmpfs", "/data", 0, "tmpfs")
                 mount("tmpfs", "/data_mirror", 0, "tmpfs")
@@ -147,7 +149,8 @@ def stop(app):
 def main():
     assert os.getuid() == 0 and os.getpid() == 1
     lab = sys.argv[1]
-    root = lab + "/root"
+    layout = sys.argv[2]
+    root = lab + "/root-" + layout
     for prefix in CE + DE:
         directory = root + prefix + PACKAGE
         os.makedirs(directory)
@@ -179,7 +182,23 @@ def main():
     os.chroot(root)
     os.chdir("/")
     mount("proc", "/proc", 0, "proc")
+    if layout != "separate":
+        # Real Android /data is shared; canonical/legacy/mirror paths can name
+        # the same dentry through bind mounts (or a symlink on another ROM).
+        mount("/data", "/data")
+        mount(None, "/data", MS_SHARED)
+        if layout == "symlink":
+            os.rename("/data/user/0", "/data/user/fixture-unused")
+            os.symlink("/data/data", "/data/user/0")
+        else:
+            mount("/data/data", "/data/user/0")
+        for prefix in CE[2:]:
+            mount("/data/data", prefix.rstrip("/"))
+        for prefix in DE[1:]:
+            mount("/data/user_de/0", prefix.rstrip("/"))
     first, sibling = application(), application()
+    init_mounts = read("/proc/1/mountinfo")
+    sibling_mounts = read(f"/proc/{sibling[0]}/mountinfo")
     base = ["base-ce"] * len(CE) + ["base-de"] * len(DE) + ["base-ce", "base-de"]
     assert snapshot(first) == snapshot(sibling) == base
     assert install(first, "slot-1", started=str(int(identity(first[0])) + 1)) != 0
@@ -188,6 +207,12 @@ def main():
     assert install(first, "slot-1") == 0
     selected = ["slot-1-ce"] * len(CE) + ["slot-1-de"] * len(DE) + ["base-ce", "base-de"]
     assert snapshot(first) == selected
+    assert read("/proc/1/mountinfo") == init_mounts, "App account mounts escaped into init"
+    assert read(f"/proc/{sibling[0]}/mountinfo") == sibling_mounts, "App account mounts escaped into sibling"
+    mounts = [line.split() for line in read(f"/proc/{first[0]}/mountinfo").splitlines()]
+    for prefix in CE + DE:
+        target = os.path.realpath(prefix + PACKAGE)
+        assert sum(fields[4] == target for fields in mounts) == 1, f"alias stacked mounts at {target}"
     assert snapshot(sibling) == base
     assert read(CE[0] + PACKAGE + "/value") == "base-ce"
     assert install(first, "slot-1", inherited=True) == 0
@@ -195,6 +220,12 @@ def main():
     assert snapshot(first) == selected
     assert install(first, "base") == 0
     assert snapshot(first) == base
+    mixed = application(mixed=True)
+    mixed_mounts = read(f"/proc/{mixed[0]}/mountinfo")
+    assert install(mixed, "slot-1", inherited=True) != 0
+    assert install(mixed, "base", inherited=True) != 0
+    assert read(f"/proc/{mixed[0]}/mountinfo") == mixed_mounts, "verification modified an App view"
+    stop(mixed)
     isolated = application(masked=True)
     assert install(isolated, "slot-1") != 0
     assert install(isolated, "slot-1", isolated=True) == 0
@@ -212,9 +243,11 @@ def main():
     os.waitpid(int(anchor_pid), 0)
     assert execute([ANCHOR, "--check"])[0] != 0
     assert execute([ANCHOR, "--start"], runtime_slot="slot-2")[0] != 0
+    assert read("/proc/1/mountinfo") == init_mounts, "later verification escaped into init"
+    assert read(f"/proc/{sibling[0]}/mountinfo") == sibling_mounts
     stop(first)
     stop(sibling)
-    print("native namespace checks passed: paired views, aliases, old FDs, Base, isolation, identity, anchor recovery")
+    print(layout + ": native namespace checks passed: paired views, aliases, old FDs, Base, isolation, identity, anchor recovery")
 
 
 if __name__ == "__main__":

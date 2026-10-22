@@ -409,7 +409,7 @@ private fun ManagedAppCard(
     modifier: Modifier = Modifier,
 ) {
     val reduced = rememberReducedMotion()
-    val ready = snapshot.bindingState == BindingState.Ready
+    val ready = snapshot.runtimeReady && snapshot.bindingState == BindingState.Ready
     GroupCard(
         modifier = modifier,
         enabled = enabled,
@@ -453,11 +453,15 @@ private fun ManagedAppCard(
                         modifier = Modifier.size(15.dp),
                     )
                     AnimatedContent(
-                        targetState = stringResource(
-                            R.string.configured_app_summary,
-                            independentSpaceCount(snapshot),
-                            localizedActiveSlotName(snapshot),
-                        ),
+                        targetState = if (snapshot.runtimeReady) {
+                            stringResource(
+                                R.string.configured_app_summary,
+                                independentSpaceCount(snapshot),
+                                localizedActiveSlotName(snapshot),
+                            )
+                        } else {
+                            stringResource(R.string.configured_app_unavailable_summary, snapshot.slots.size)
+                        },
                         transitionSpec = fadeThrough(),
                         label = "app-summary",
                     ) { summary ->
@@ -474,7 +478,7 @@ private fun ManagedAppCard(
                 if (!ready) {
                     StatusChip(
                         text = stringResource(
-                            when (snapshot.bindingState) {
+                            if (!snapshot.runtimeReady) R.string.package_unavailable else when (snapshot.bindingState) {
                                 BindingState.LegacyConfirmationRequired ->
                                     R.string.binding_confirmation_required
                                 BindingState.LegacyUnbound,
@@ -509,7 +513,7 @@ private fun ManagedAppCard(
                     add(SlicesMenuItem(text = unenrollText, danger = true, onClick = onUnenroll))
                 },
                 contentDescription = stringResource(R.string.configured_app_actions),
-                enabled = operationsEnabled,
+                enabled = operationsEnabled && snapshot.runtimeReady,
                 modifier = Modifier.align(Alignment.Top),
             )
         }

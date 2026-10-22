@@ -38,7 +38,7 @@ internal fun LandingContent(
     onChooseBackup: (String) -> Unit,
     onChooseRestore: () -> Unit,
 ) {
-    val eligiblePackages = slotsState.packages.filter { it.bindingState == BindingState.Ready }
+    val eligiblePackages = slotsState.packages.filter { it.runtimeReady && it.bindingState == BindingState.Ready }
     val play = rememberStaggerPlay("backup_landing")
     ManagerScreen(
         title = stringResource(R.string.backup_restore_title),

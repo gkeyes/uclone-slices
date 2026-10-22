@@ -37,6 +37,59 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun unreadableListKeepsThePreviouslyDisplayedAccountsAndSelection() {
+        val registered = packageSnapshot()
+        val client = object : FakeRuntimeClient(initialPackages = listOf(registered)) {
+            var brokenList = false
+            override suspend fun execute(command: RuntimeCommand): RuntimeReply =
+                if (brokenList && command == RuntimeCommand.ListPackages) {
+                    RuntimeReply.Error(ErrorCode.StateConflict)
+                } else {
+                    super.execute(command)
+                }
+        }
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        viewModel.onIntent(UiIntent.OpenPackage(registered.packageName))
+        client.brokenList = true
+        viewModel.onIntent(UiIntent.Refresh)
+        assertEquals(listOf(registered), viewModel.state.value.packages)
+        assertEquals(registered, viewModel.state.value.selected)
+        assertEquals(UiNotice.StateChanged, viewModel.state.value.notice)
+    }
+
+    @Test
+    fun unavailableAccountsRemainVisibleAfterColdStartAndBlockMutations() {
+        val registered = packageSnapshot().copy(runtimeReady = false, bindingState = BindingState.LegacyUnbound)
+        val client = FakeRuntimeClient(initialPackages = listOf(registered))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        assertEquals(listOf(registered), viewModel.state.value.packages)
+        assertTrue(client.commands.none { it is RuntimeCommand.RebindPackage })
+        viewModel.onIntent(UiIntent.OpenPackage(registered.packageName))
+        assertEquals(registered, viewModel.state.value.selected)
+        val before = client.commands.toList()
+        listOf(
+            UiIntent.ActivateSlot("slot-1"),
+            UiIntent.QuickActivateSlot(registered.packageName, "slot-1"),
+            UiIntent.CreateSlot("New"),
+            UiIntent.SetDefaultSlot(registered.packageName, "base"),
+            UiIntent.SetLaunchAfterReboot(registered.packageName, true),
+            UiIntent.RequestDeleteSlot("slot-1"),
+            UiIntent.RequestRenameSlot("slot-1"),
+            UiIntent.RequestUnenrollApp(registered.packageName),
+            UiIntent.OpenBackupRestore(registered.packageName),
+        ).forEach { intent ->
+            viewModel.onIntent(intent)
+            assertEquals(before, client.commands, intent.toString())
+            assertEquals(UiNotice.PackageUnavailable, viewModel.state.value.notice)
+        }
+        client.snapshot = registered.copy(runtimeReady = true, bindingState = BindingState.Ready)
+        viewModel.onIntent(UiIntent.Refresh)
+        assertTrue(viewModel.state.value.packages.single().runtimeReady)
+        viewModel.onIntent(UiIntent.QuickActivateSlot(registered.packageName, "slot-1"))
+        assertTrue(client.commands.last() is RuntimeCommand.ActivateSlot)
+    }
+
+    @Test
     fun pendingModuleMetadataCannotMakeAnOldDaemonAcceptDefaultAccountWrites() {
         val commands = mutableListOf<RuntimeCommand>()
         val client = object : RuntimeClient {
