@@ -73,6 +73,11 @@ bool bind_paths(const std::string& source, const struct stat& expected,
                 const std::vector<slice::Fd>& trees, const std::vector<std::string>& paths) {
   if (sources_match(paths, expected)) return true;
   for (size_t index = 0; index < paths.size(); ++index) {
+    // A legacy path may be a symlink to a canonical path already installed in
+    // this loop. Do not stack a second tree on the same directory.
+    struct stat found{};
+    if (stat(paths[index].c_str(), &found) != 0) return false;
+    if (slice::same_object(found, expected)) continue;
     if (!trees.empty()) {
       if (index >= trees.size() || syscall(__NR_move_mount, trees[index].get(), "",
           AT_FDCWD, paths[index].c_str(), MOVE_MOUNT_F_EMPTY_PATH) != 0) return false;
@@ -102,12 +107,16 @@ bool install(const Request& request, const char*& stage) {
       slice::same_object(target_stat, init_stat) ||
       slice::same_object(target_stat, current_stat)) return false;
 
-  // Read sources in init's untouched view and clone detached mount trees there.
-  // Passing an ordinary directory FD across setns is insufficient: MS_BIND rejects
-  // source mounts belonging to another namespace. No bind is installed in init.
+  // Adopt init's original sources, then detach their propagation in a throwaway
+  // namespace BEFORE cloning. open_tree retains the source's shared peer group:
+  // moving such a tree into a slave target would reintroduce outgoing propagation.
+  // Never alter init's own propagation or install an account mount there.
   stage = "source-namespace";
   if (setns(init.get(), CLONE_NEWNS) != 0 || fchdir(init_root.get()) != 0 ||
       chroot(".") != 0 || chdir("/") != 0) return false;
+  stage = "source-isolation";
+  if (unshare(CLONE_NEWNS) != 0 ||
+      mount(nullptr, "/", nullptr, MS_PRIVATE | MS_REC, nullptr) != 0) return false;
   std::string ce_path = request.slot == "base"
       ? "/data/user/0/" + request.package
       : "/data/misc_ce/0/uclone-slices-v2/slots/" + request.package + "/" + request.slot;
