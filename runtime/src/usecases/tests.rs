@@ -236,9 +236,16 @@ fn listing_after_failed_switch_preserves_all_account_records() {
 
     let listed = runtime.list_packages().unwrap();
 
-    assert_eq!(listed.len(), 1, "a failed view must not hide the configured App");
+    assert_eq!(
+        listed.len(),
+        1,
+        "a failed view must not hide the configured App"
+    );
     assert_eq!(listed[0].slots, original.snapshot().unwrap().slots);
-    assert_eq!(runtime.activate_slot(&package, &target), Err(RuntimeError::StateConflict));
+    assert_eq!(
+        runtime.activate_slot(&package, &target),
+        Err(RuntimeError::StateConflict)
+    );
     let (packages, slots, _) = runtime.into_parts();
     assert_eq!(packages.load(&package).unwrap().unwrap(), original);
     assert_eq!(slots.domain_state(&package, &target), Some((true, true)));
