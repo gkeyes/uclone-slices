@@ -135,6 +135,7 @@ int runtime_listener() {
       request->find(kPackage) == std::string::npos) _exit(97);
   slice::Fd seen(open("/rpc-seen", O_WRONLY | O_CREAT | O_EXCL, 0600));
   if (!seen) _exit(98);
+  if (scenario == "timeout") for (;;) pause();
   if (scenario != "disconnect") {
     auto reply = scenario == "reject" ? "{\"error\":{\"code\":\"launch_unavailable\"}}\n" : "{\"ok\":{}}\n";
     if (!slice::write_all(client.get(), reply)) _exit(99);
@@ -148,7 +149,7 @@ int main(int argc, char** argv) {
   if (argc != 3 || getuid() != 0 || getpid() != 1) return 2;
   std::string_view scenario(argv[2]);
   if (scenario != "accept" && scenario != "no_exemption" && scenario != "reject" &&
-      scenario != "wrong_uid" && scenario != "disconnect") return 2;
+      scenario != "wrong_uid" && scenario != "disconnect" && scenario != "timeout") return 2;
   if (mount(nullptr, "/", nullptr, MS_PRIVATE | MS_REC, nullptr) != 0) return 3;
   std::filesystem::create_directories(std::string(argv[1]) + "/proc");
   if (chroot(argv[1]) != 0 || chdir("/") != 0 || mount("proc", "/proc", "proc", 0, nullptr) != 0) return 4;

@@ -662,6 +662,13 @@ impl LaunchGate {
         }
         let output = command.output()?;
         if !output.status.success() {
+            // The packaged worker emits only a fixed stage and errno. Preserve that
+            // cause in the Runtime log instead of hiding it behind the public error.
+            let detail = String::from_utf8_lossy(&output.stderr)
+                .chars()
+                .take(256)
+                .collect::<String>();
+            eprintln!("process view worker rejected: {}", detail.trim());
             return Err(refused("process CE/DE view was not installed"));
         }
         // A native request is already under the App UID. A transaction either sees and

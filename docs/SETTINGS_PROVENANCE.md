@@ -122,3 +122,12 @@
 | `META-INF/xposed/java_init.list` / `module.prop` / `scope.list`，固定 `system` 作用域 | libxposed 现代入口规范；`system` 专指 system_server，`android` 还包括独立 UI 进程 | 最终 APK 检查、Vector 作用域读回、重启后就绪检查 |
 | `autoHotReload=false` | 常驻启动协调器持有未完成票据、连接和回调；本次迁移保留重启交接，不扩大为热重载改造 | 打包检查与真机生命周期验收 |
 | `Invoker.Type.ORIGIN` 用于延迟 Application 绑定 | API 102 Chain 只在当前回调有效；原实现同样绕过 Hook 链恢复已核验的绑定操作 | 编译及隔离进程真机矩阵 |
+
+## v0.3.2：原生进程启动握手
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.2`，versionCode 21 | 成对更新 native 握手，确保旧组件不会被当成候选修复已生效 | 版本对齐、共享 fixture、签名构建与手机读回 |
+| 前置回调关闭全部新增 FD，使用固定大小 memfd 映射与共享 futex | Zygisk Next 官方 FD 生命周期说明；手机 126 早退日志及生产回调主机复现 | 连接被回收、不支持 exemptFd、真实 UID 降权、拒绝和断线回归 |
+| 状态字为无锁 32 位原子值，memfd 封住增长/缩小及追加 seal | Linux 跨进程 futex 的 32 位字约定；防止对端改变映射大小；新内核额外执行封印可兼容 | NDK 编译、Linux 生产握手测试 |
+| 同步等待复用已有 5 秒控制传输边界 | 只限制失联/启动故障等待，不决定用户访问的持续时间 | Root 不响应与拒绝路径的有界测试、真机阶段日志 |

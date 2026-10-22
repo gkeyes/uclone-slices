@@ -1,14 +1,35 @@
 #include "process_common.hpp"
+#include "specialize_channel.hpp"
 #include "zygisk.hpp"
 
+#include <cstdio>
 #include <cstdlib>
 #include <sys/time.h>
+#ifdef __ANDROID__
+#include <android/log.h>
+#endif
 
 #ifndef UCLONE_BUILD_ID
 #error UCLONE_BUILD_ID is required
 #endif
 
 namespace {
+
+void rejected(const char* stage, int error, pid_t target = getpid()) {
+  // Literal stages and errno only: no account names, permits or private paths.
+#ifdef __ANDROID__
+  __android_log_print(ANDROID_LOG_ERROR, "Slice", "native build=%s pid=%d stage=%s errno=%d",
+                      UCLONE_BUILD_ID, target, stage, error);
+#else
+  std::fprintf(stderr, "native build=%s pid=%d stage=%s errno=%d\n",
+               UCLONE_BUILD_ID, target, stage, error);
+#endif
+}
+
+[[noreturn]] void abort_start(const char* stage, int error) {
+  rejected(stage, error);
+  _exit(126);
+}
 
 std::string java_string(JNIEnv* env, jstring value) {
   if (value == nullptr) return {};
@@ -117,33 +138,40 @@ class SliceModule : public zygisk::ModuleBase {
     if (package_.empty() || package_ == "com.uclone.slices.v2") return;
     auto configured = module_discovery(api_, package_);
     if (configured == false) return;
-    companion_ = api_->connectCompanion();
-    if (companion_ < 0) {
-      if (configured == true) _exit(126);
+    slice::Fd bootstrap(api_->connectCompanion());
+    if (!bootstrap) {
+      if (configured == true) abort_start("pre.connect", errno);
       // Unknown enrollment is guarded again before Application binding in system_server.
       return;
     }
     auto started = slice::start_time(getpid());
-    if (!started) _exit(126);
+    if (!started) abort_start("pre.identity", errno);
     std::string hello = "APP " + std::to_string(getpid()) + " " +
         std::to_string(args->uid) + " " + std::to_string(*started) + " " + package_ + "\n";
-    if (!slice::write_all(companion_, hello)) _exit(126);
-    auto response = slice::frame(companion_);
-    if (response == "PASS") { close(companion_); companion_ = -1; return; }
-    if (response != "MANAGED" || !api_->exemptFd(companion_)) _exit(126);
+    if (!slice::write_all(bootstrap.get(), hello)) abort_start("pre.hello", errno);
+    auto response = slice::frame(bootstrap.get());
+    if (response == "PASS") return;
+    if (response != "MANAGED") abort_start("pre.managed", response ? EPROTO : errno);
+    auto channel = slice::SpecializeChannel::create(bootstrap.get());
+    if (!channel) abort_start("pre.channel", errno);
+    response = slice::frame(bootstrap.get());
+    if (response != "ARMED") abort_start("pre.armed", response ? EPROTO : errno);
+    channel_ = std::move(*channel);
+    // No descriptors escape this callback. Zygisk Next may close retained
+    // companion sockets even when another implementation supports exemptFd.
   }
 
   void postAppSpecialize(const zygisk::AppSpecializeArgs*) override {
-    if (companion_ < 0) return;
-    if (!slice::write_all(companion_, "READY\n") || slice::frame(companion_) != "READY") _exit(126);
-    close(companion_);
-    companion_ = -1;
+    if (!channel_) return;
+    if (!channel_.request()) abort_start("post.request", errno);
+    if (!channel_.await_approval()) abort_start("post.approval", errno);
+    channel_.reset();
   }
 
  private:
   zygisk::Api* api_{};
   JNIEnv* env_{};
-  int companion_{-1};
+  slice::SpecializeChannel channel_;
   std::string package_;
 };
 
@@ -163,15 +191,31 @@ void companion(int socket) {
       operation != "APP" || pid <= 1 || uid < 10000 || uid >= 100000 ||
       !slice::package_name(package)) return;
   if (!enrolled(package)) { (void)slice::write_all(socket, "PASS\n"); return; }
-  if (!slice::write_all(socket, "MANAGED\n") || slice::frame(socket) != "READY") return;
-  if (slice::start_time(pid) != started || slice::process_uid(pid) != uid) return;
+  if (!slice::write_all(socket, "MANAGED\n")) { rejected("companion.managed", errno, pid); return; }
+  auto channel = slice::SpecializeChannel::receive(socket);
+  if (!channel) { rejected("companion.channel", errno, pid); return; }
+  if (!slice::write_all(socket, "ARMED\n")) { rejected("companion.armed", errno, pid); return; }
+  if (!channel->await_request()) { rejected("companion.request", errno, pid); return; }
+  // Every subsequent failure wakes the App with a refusal rather than leaving
+  // it waiting for the deadline. Only a confirmed Runtime result approves it.
+  struct DenyUnlessApproved {
+    slice::SpecializeChannel& channel;
+    ~DenyUnlessApproved() { channel.deny(); }
+  } refusal{*channel};
+  if (slice::start_time(pid) != started || slice::process_uid(pid) != uid) {
+    rejected("companion.identity", EACCES, pid); return;
+  }
   slice::Fd control(slice::connect_control());
-  if (!control) return;
+  if (!control) { rejected("companion.control_connect", errno, pid); return; }
   std::string frame = "{\"op\":\"specialize\",\"pid\":" + std::to_string(pid) +
       ",\"uid\":" + std::to_string(uid) + ",\"started\":" + std::to_string(started) +
       ",\"package\":\"" + package + "\"}\n";
-  if (!slice::write_all(control.get(), frame) || slice::frame(control.get()) != "{\"ok\":{}}") return;
-  (void)slice::write_all(socket, "READY\n");
+  if (!slice::write_all(control.get(), frame)) { rejected("companion.control_write", errno, pid); return; }
+  auto response = slice::frame(control.get());
+  if (response != "{\"ok\":{}}") {
+    rejected("companion.control_reply", response ? EACCES : errno, pid); return;
+  }
+  if (!channel->approve()) rejected("companion.approval", errno, pid);
 }
 
 }  // namespace
