@@ -20,7 +20,7 @@
 4. 手动账号操作在启动前发布一次性许可并等待系统端确认。Intent 中自称来自 Slice 的字段不构成授权；许可只能使用一次，包名和本次连接必须匹配，连接中断撤销全部许可。
 5. Runtime 从 init namespace 派生独立 mount namespace，将传播设为 slave。它继续在自己的视图中使用现有 CE/DE 事务和维护视图，避免重写已验证的恢复模型；这些挂载不能传播回 init、Zygote 或其他 App。
 6. Zygisk 在 App specialization 前通过 companion 连接传递固定大小、禁止改变大小的共享内存映射，双方关闭其文件描述符，App 在前置回调返回前关闭辅助连接。specialization 后只通过映射中的原子状态和跨进程 futex 发出就绪并等待 Root 安装、验证该进程的 CE/DE 视图。此时 App 业务代码尚未执行。失败终止本次进程，不能落回错误账号继续运行。配置外的 App 直接放行并卸载本模块。
-7. Root 只接受真实 PID、UID、进程开始时间和已登记包身份；从 Aggregate 选择账号，不接受客户端提供任意源路径。worker 只在 init 的原始视图读取 Base 或物理槽对，不在 init 安装挂载；先打开源目录并用 open_tree 克隆 detached mount，再进入目标 namespace，以 move_mount 安装。普通目录 FD 属于旧 namespace，不能直接作为跨 namespace 的 MS_BIND 源。早于 Linux 5.2 的内核只在目标 namespace 可直接解析到同一 inode 的路径时采用旧 bind，否则拒绝。覆盖实际存在的 canonical、legacy 和 data_mirror 别名，逐一验证 inode/device。
+7. Root 只接受真实 PID、UID、进程开始时间和已登记包身份；从 Aggregate 选择账号，不接受客户端提供任意源路径。worker 先进入 init 原始视图，再 unshare 到临时 namespace 并递归设为 private，随后读取 Base 或物理槽对并用 open_tree 克隆 detached mount，再进入目标 namespace 以 move_mount 安装。不能从 init 的共享源直接克隆，否则新挂载仍属于原共享传播组。每个别名安装前核对 inode/device，已经指向所选源的路径直接跳过，避免符号链接重复叠加。普通目录 FD 属于旧 namespace，不能直接作为跨 namespace 的 MS_BIND 源。早于 Linux 5.2 的内核只在目标 namespace 可直接解析到同一 inode 的路径时采用旧 bind，否则拒绝。覆盖实际存在的 canonical、legacy 和 data_mirror 别名，逐一验证 inode/device。
 8. 进程 namespace 必须与 init、Runtime 和特权父进程不同。对于继承已验证账号视图的 App Zygote 子进程，只验证现有视图，不修改共享父 namespace。短期 PID 记录带开始时间与已验证状态，在新 boot 清理，用于纳入隔离子进程的停止和验证，不成为第二套账号配置。独立隔离 UID 只接受实际系统 Zygote 或已验证账号父进程，保留 Android 原本屏蔽的数据路径，不创建私有目录扩大权限。
 9. Root namespace anchor 通过 boot ID、编译身份、PID 开始时间和 image inode 保留并验证 Runtime namespace；daemon 重启复用该视图，同一启动丢失 anchor 时拒绝从无关视图重建。备份辅助程序进入经过身份核验的 Runtime namespace，继续消费 Runtime 的受租约保护路径。不能继续固定进入 init namespace，否则当前账号和维护视图会不一致。
 10. 启动控制面与公开账号 wire 分开。公开十九项账号操作保持原有语义；内部控制协议有实际 Hook、Manager 准备 Activity、native companion 和共享 fixture 消费。它不提供任意文件、挂载、Root 命令或账号选择能力。
@@ -61,3 +61,15 @@
 生产 module 与 companion 回调的 Linux 测试模拟框架在前置回调之后回收连接，并执行真实 UID 降权。旧实现于[回归构建](https://github.com/gkeyes/uclone-slices/actions/runs/39704151071)返回 `exit=126 expected=0 runtime_called=0 FAIL`。修复只改变两者的本次进程同步通道；Root 控制协议、账号选择、PID/UID/开始时间校验和 CE/DE 校验仍按原规则执行。共享映射只存一个原子状态，不含账号路径或许可；拒绝、断线、超时均不能放行业务代码。测试的 Runtime 响应为受控替身，不能替代真机的 SELinux、真实挂载和完整默认账号矩阵。
 
 失败日志使用固定阶段、构建号、PID 和 errno，不记录账号名称、许可或数据内容。进程视图 worker 的固定阶段错误保留在 Runtime 日志中。
+
+## 共享传播与失败列表（0.3.3 候选）
+
+0.3.2 真机切换失败后，Runtime 的 canonical CE 路径出现重复槽挂载，init 的槽源目录出现原本不应存在的同源挂载。账号 Aggregate 和 CE/DE 目录仍存在；这只能证明记录和目录未被删除，不能替代账号完整性验收。
+
+新增 Linux 测试通过共享 `/data`、canonical/legacy/mirror 绑定和符号链接复现了源挂载传播到 init 的错误：[修复前失败](https://github.com/gkeyes/uclone-slices/actions/runs/39813564261)。源 namespace 隔离和逐别名去重修复后，同一测试通过。原有独立目录测试没有模拟这一传播关系。
+
+`list_packages` 加载失败时原本省略整个已登记 App。现在从有效 Aggregate 返回 `runtime_ready:false` 的展示快照，保留账号名和登记信息；Manager 禁止切换、设置、创建、删除、取消配置、重绑及该 App 的备份恢复，并提供日志入口。损坏到无法安全读取的 Aggregate 返回列表错误，Manager 保留上一次列表，不能伪装为空配置。真正完成取消配置的记录仍从列表移除。此字段不持久化，不放宽实际视图或账号操作的校验。
+
+同一手机的 App namespace 中还确认 `/data/user/0` 是指向 `/data/data` 的符号链接。启动后仅按 canonical 字符串匹配 mountinfo 会误判正确视图。现在 Runtime 对整个 UID 及已跟踪子进程组调用 worker 的只读校验模式，进入目标 namespace 和 root 后核对每个已存在别名的 inode/device；调用前后验证 PID、UID、开始时间和 namespace 身份，真正的 CE/DE 混合、不可读身份和退出仍失败关闭。Runtime 自身的重复挂载检测保持严格。
+
+账号列表的修复前回归构建：[失败后账号不得消失](https://github.com/gkeyes/uclone-slices/actions/runs/39814438319)。

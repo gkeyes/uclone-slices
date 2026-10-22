@@ -52,7 +52,7 @@ internal fun PackageDetailScreen(
     }
     var defaultSheetVisible by rememberSaveable(packageSnapshot.packageName) { mutableStateOf(false) }
     val appLabel = installedApp?.label ?: packageSnapshot.packageName
-    val operationsEnabled = state.operationsAllowed &&
+    val operationsEnabled = state.operationsAllowed && packageSnapshot.runtimeReady &&
         packageSnapshot.bindingState == BindingState.Ready
     val activeSlot = packageSnapshot.slots.firstOrNull {
         it.id == packageSnapshot.activeSlot
@@ -87,6 +87,18 @@ internal fun PackageDetailScreen(
                 )
             },
         ) {
+            if (!packageSnapshot.runtimeReady) {
+                item(key = "unavailable") {
+                    GroupCard {
+                        ListRow(
+                            title = stringResource(R.string.package_unavailable),
+                            summary = stringResource(R.string.package_unavailable_description),
+                            value = stringResource(R.string.load_runtime_log),
+                            onClick = { onIntent(UiIntent.OpenRuntimeStatus) },
+                        )
+                    }
+                }
+            }
             item(key = "current") {
                 CurrentSpaceCard(
                     appLabel = appLabel,

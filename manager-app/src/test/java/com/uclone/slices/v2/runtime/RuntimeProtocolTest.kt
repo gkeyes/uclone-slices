@@ -171,6 +171,15 @@ class RuntimeProtocolTest {
     }
 
     @Test
+    fun unavailableListKeepsAccountsAndDisablesTheirOperations() {
+        val reply = RuntimeProtocol.decode(resource("list_packages_unavailable.response.json")) as RuntimeReply.Packages
+        val snapshot = reply.packages.single()
+        assertEquals("com.example.app", snapshot.packageName)
+        assertEquals(listOf("base", "slot-1"), snapshot.slots.map { it.id })
+        assertEquals(false, snapshot.runtimeReady)
+    }
+
+    @Test
     fun unknownBindingStateIsKeptButNeverOperable() {
         val response = RuntimeProtocol.decode(
             """{"ok":{"package":{"package":"com.example.app","active_slot":"base","slots":[],"binding_state":"future_state"}}}""",

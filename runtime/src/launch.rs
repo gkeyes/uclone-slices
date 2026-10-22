@@ -30,7 +30,8 @@ const FRAME_LIMIT: u64 = 64 * 1024;
 // Transport deadlines, shared with the existing Runtime frame receiver. They do not
 // decide when an Android visit ends or when an account should change.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
-const WORKER: &str = "/data/adb/modules/uclone-slices-v2/bin/uclone-process-view";
+pub(crate) const PROCESS_VIEW_WORKER: &str =
+    "/data/adb/modules/uclone-slices-v2/bin/uclone-process-view";
 
 /// The private Runtime view cannot inherit already-installed global account mounts.
 /// Rebooting applies the paired module update and provides an untouched init view.
@@ -645,7 +646,7 @@ impl LaunchGate {
         let uid_text = uid.to_string();
         let pid_text = pid.to_string();
         let started_text = started.to_string();
-        let mut command = Command::new(WORKER);
+        let mut command = Command::new(PROCESS_VIEW_WORKER);
         command.args([
             &pid_text,
             &uid_text,
@@ -833,20 +834,29 @@ fn account_ready_to_execute(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ProcessIdentity {
-    pid: u32,
-    uid: u32,
-    started: u64,
+pub(crate) struct ProcessIdentity {
+    pub(crate) pid: u32,
+    pub(crate) uid: u32,
+    pub(crate) started: u64,
     parent: u32,
     namespace: String,
 }
 
 impl ProcessIdentity {
     fn read(pid: u32) -> io::Result<Self> {
+        Self::read_from(&PathBuf::from(format!("/proc/{pid}")))
+    }
+
+    pub(crate) fn read_from(root: &Path) -> io::Result<Self> {
+        let pid = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| refused("invalid process"))?
+            .parse::<u32>()
+            .map_err(invalid)?;
         if pid <= 1 {
             return Err(refused("invalid process"));
         }
-        let root = PathBuf::from(format!("/proc/{pid}"));
         let stat = fs::read_to_string(root.join("stat"))?;
         let fields = stat
             .rsplit_once(')')

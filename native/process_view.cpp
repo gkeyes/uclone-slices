@@ -143,6 +143,7 @@ bool install(const Request& request, const char*& stage) {
   auto de_aliases = aliases(request.package, false, request.isolated);
   if (!ce_aliases || !de_aliases) return false;
   if (request.inherited) {
+    stage = "verification";
     // A fork sharing a verified App Zygote namespace may only verify it. It must not
     // replace a mount still used by its parent or siblings.
     return sources_match(*ce_aliases, ce_stat) && sources_match(*de_aliases, de_stat) &&

@@ -293,6 +293,11 @@ internal class BackupRestoreViewModel(
                 return false
             }
         }
+        if (!snapshot.runtimeReady) {
+            password?.fill('\u0000')
+            fail("state_conflict")
+            return false
+        }
         if (!backupBindingAllows(snapshot.bindingState)) {
             password?.fill('\u0000')
             fail("identity_mismatch")
@@ -455,13 +460,14 @@ internal class BackupRestoreViewModel(
                 return
             }
         }
-        if (configured != null && configured.bindingState != BindingState.Ready) {
+        if (configured != null && (!configured.runtimeReady || configured.bindingState != BindingState.Ready)) {
+            val code = if (!configured.runtimeReady) "state_conflict" else "identity_mismatch"
             BackupRestoreJobRegistry.discardSession(preview.sessionId)
             mutableState.update {
                 it.copy(
                     page = BackupRestorePage.Result,
-                    jobState = BackupJobState.Failure("identity_mismatch"),
-                    errorCode = "identity_mismatch",
+                    jobState = BackupJobState.Failure(code),
+                    errorCode = code,
                 )
             }
             return

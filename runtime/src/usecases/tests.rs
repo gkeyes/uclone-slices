@@ -223,6 +223,8 @@ fn listing_keeps_a_failed_package_and_healthy_packages() {
             .collect::<Vec<_>>(),
         vec![failed, healthy]
     );
+    assert!(!snapshots[0].runtime_ready);
+    assert!(snapshots[1].runtime_ready);
 }
 
 #[test]
@@ -241,6 +243,7 @@ fn listing_after_failed_switch_preserves_all_account_records() {
         1,
         "a failed view must not hide the configured App"
     );
+    assert!(!listed[0].runtime_ready);
     assert_eq!(listed[0].slots, original.snapshot().unwrap().slots);
     assert_eq!(
         runtime.activate_slot(&package, &target),
@@ -1043,6 +1046,11 @@ fn invalid_persisted_aggregate_is_a_state_conflict() {
     assert_eq!(
         runtime.get_package(&package),
         Err(RuntimeError::StateConflict)
+    );
+    assert_eq!(runtime.list_packages(), Err(RuntimeError::StateConflict));
+    assert_eq!(
+        std::fs::read(package_root.join("aggregate.json")).unwrap(),
+        b"{not-json"
     );
 }
 

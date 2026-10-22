@@ -58,6 +58,7 @@ data class PackageSnapshot(
     val launchAfterReboot: Boolean = false,
     val bindingState: BindingState = BindingState.LegacyUnbound,
     val defaultSlot: String? = null,
+    val runtimeReady: Boolean = true,
 )
 
 sealed interface AccountIoScope {
@@ -435,6 +436,7 @@ object RuntimeProtocol {
             activeSlot = json.getString("active_slot"),
             slots = parseSlots(json.getJSONArray("slots")),
             launchAfterReboot = json.optBoolean("launch_after_reboot", false),
+            runtimeReady = json.optBoolean("runtime_ready", false),
             defaultSlot = if (json.isNull("default_slot")) null else json.getString("default_slot"),
             bindingState = json.optString("binding_state")
                 .takeIf { it.isNotEmpty() }

@@ -91,7 +91,7 @@ def execute(arguments, runtime_slot=None):
     return os.waitstatus_to_exitcode(status), b"".join(chunks).decode().strip()
 
 
-def application(masked=False):
+def application(masked=False, mixed=False):
     commands, sender = os.pipe()
     response, writer = os.pipe()
     pid = os.fork()
@@ -102,6 +102,8 @@ def application(masked=False):
             private_namespace()
             old_ce = os.open(CE[0] + PACKAGE + "/value", os.O_RDONLY)
             old_de = os.open(DE[0] + PACKAGE + "/value", os.O_RDONLY)
+            if mixed:
+                mount(slot_source("ce", "slot-1"), CE[0] + PACKAGE)
             if masked:
                 mount("tmpfs", "/data", 0, "tmpfs")
                 mount("tmpfs", "/data_mirror", 0, "tmpfs")
@@ -218,6 +220,12 @@ def main():
     assert snapshot(first) == selected
     assert install(first, "base") == 0
     assert snapshot(first) == base
+    mixed = application(mixed=True)
+    mixed_mounts = read(f"/proc/{mixed[0]}/mountinfo")
+    assert install(mixed, "slot-1", inherited=True) != 0
+    assert install(mixed, "base", inherited=True) != 0
+    assert read(f"/proc/{mixed[0]}/mountinfo") == mixed_mounts, "verification modified an App view"
+    stop(mixed)
     isolated = application(masked=True)
     assert install(isolated, "slot-1") != 0
     assert install(isolated, "slot-1", isolated=True) == 0
@@ -235,6 +243,8 @@ def main():
     os.waitpid(int(anchor_pid), 0)
     assert execute([ANCHOR, "--check"])[0] != 0
     assert execute([ANCHOR, "--start"], runtime_slot="slot-2")[0] != 0
+    assert read("/proc/1/mountinfo") == init_mounts, "later verification escaped into init"
+    assert read(f"/proc/{sibling[0]}/mountinfo") == sibling_mounts
     stop(first)
     stop(sibling)
     print(layout + ": native namespace checks passed: paired views, aliases, old FDs, Base, isolation, identity, anchor recovery")

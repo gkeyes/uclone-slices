@@ -1183,14 +1183,29 @@ impl PackageAggregate {
         &self,
         binding_state: BindingState,
     ) -> Result<PackageSnapshot, ModelError> {
-        self.validate()?;
         self.require_ready()?;
+        self.snapshot_metadata(binding_state, true)
+    }
+
+    /// Preserve the registration for display when its live view cannot be loaded.
+    /// This snapshot grants no permission to operate on the recorded accounts.
+    pub fn unavailable_snapshot(&self) -> Result<PackageSnapshot, ModelError> {
+        self.snapshot_metadata(BindingState::Ready, false)
+    }
+
+    fn snapshot_metadata(
+        &self,
+        binding_state: BindingState,
+        runtime_ready: bool,
+    ) -> Result<PackageSnapshot, ModelError> {
+        self.validate()?;
         Ok(PackageSnapshot {
             package: self.package.clone(),
             active_slot: self.active_slot.clone(),
             launch_after_reboot: self.launch_after_reboot,
             default_slot: self.default_slot.clone(),
             binding_state,
+            runtime_ready,
             slots: self
                 .slots
                 .iter()
@@ -1232,6 +1247,8 @@ pub struct PackageSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_slot: Option<SlotId>,
     pub binding_state: BindingState,
+    #[serde(default)]
+    pub runtime_ready: bool,
     pub slots: Vec<SlotSnapshot>,
 }
 

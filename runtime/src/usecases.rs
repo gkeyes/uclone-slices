@@ -131,11 +131,16 @@ where
             });
             match snapshot {
                 Ok(snapshot) => snapshots.push(snapshot),
-                // The 0.2.x wire has no degraded list entry, so a package that fails to load is
-                // omitted here and logged; `get_package` still reports its own error code.
-                // Surfacing it in the list needs a protocol field plus a Manager consumer.
                 Err(error) => {
                     eprintln!("op=list_packages package={package} step=load_package error={error}");
+                    match self.packages.load(&package).map_err(adapter_error)? {
+                        Some(aggregate) => {
+                            snapshots.push(aggregate.unavailable_snapshot().map_err(model_error)?)
+                        }
+                        // Recovery may have completed an explicit unenrollment.
+                        None if error == RuntimeError::NotFound => {}
+                        None => return Err(error),
+                    }
                 }
             }
         }
