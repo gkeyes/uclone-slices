@@ -17,7 +17,7 @@ class LaunchPolicyCacheTest {
     private val permit = "a".repeat(64)
 
     private fun cache(events: MutableList<JSONObject> = mutableListOf()): LaunchPolicyCache =
-        LaunchPolicyCache("0.3.3") { events += it }.apply {
+        LaunchPolicyCache("0.3.4") { events += it }.apply {
             managerUid(manager)
             update(JSONObject(resource("system-state.json")))
         }
@@ -169,6 +169,46 @@ class LaunchPolicyCacheTest {
         assertEquals(permit, prepared.permit)
         assertNull(RootLaunchClient.decodePrepared(JSONObject().put("package", "../other").put("permit", permit)))
         assertFalse(RootLaunchClient.validTicket("x".repeat(64)))
+    }
+
+    @Test fun framesAreDeliveredOutsideTheCacheLockAndInOrder() {
+        // A failed delivery disconnects the bridge, which takes the binding lock; the binding
+        // thread holds that lock while asking approvedProcess. Sending under the cache lock
+        // would invert that order inside system_server.
+        var subject: LaunchPolicyCache? = null
+        val delivered = mutableListOf<String>()
+        val cache = LaunchPolicyCache("0.3.4") { frame ->
+            assertFalse(Thread.holdsLock(subject!!), "frame ${frame.optString("type")} sent under the cache lock")
+            delivered += frame.optString("type")
+        }
+        subject = cache
+        cache.managerUid(manager)
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.4"))
+        val first = cache.begin(target, false)
+        assertNotNull(first)
+        assertNotEquals(first, cache.begin(target, true))
+        manual(cache)
+        cache.begin(target, false)
+        cache.homeRequested()
+        cache.begin(target, false)
+        cache.requested("com.example.other", 10200, 10200, false)
+        val ticket = cache.begin(target, false)!!
+        cache.cancel(ticket)
+        assertEquals(
+            listOf("begin", "cancel", "begin", "consumed", "begin", "cancel", "begin", "cancel", "begin", "cancel"),
+            delivered,
+        )
+    }
+
+    @Test fun aFailedDeliveryCanDisconnectFromTheSendingThread() {
+        var subject: LaunchPolicyCache? = null
+        val cache = LaunchPolicyCache("0.3.4") { subject!!.disconnected() }
+        subject = cache
+        cache.managerUid(manager)
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.4"))
+        val ticket = cache.begin(target, false)!!
+        assertFalse(cache.ticketPending(ticket))
+        assertTrue(cache.gateRequired(target, uid, manager, permit, false))
     }
 
     private fun resource(name: String): String =

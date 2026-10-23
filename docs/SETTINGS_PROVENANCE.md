@@ -138,3 +138,10 @@
 | --- | --- | --- |
 | Manager / KernelSU / crate / wire `0.3.3`，versionCode 22 | native 挂载修复与 `runtime_ready` 必须由同一版本完整消费 | 版本对齐、共享 fixture、Linux 命名空间回归及手机读回 |
 | worker 源临时 namespace 递归 private | 共享源克隆会保留传播组，别名重复挂载可回流至 init | 共享 /data 和符号链接场景核对 init/兄弟进程挂载完全不变 |
+
+## v0.3.4：启动门禁锁顺序
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.4`，versionCode 23 | 系统框架门禁修复随 Manager 发布，Runtime 协议须与 Manager 版本一致 | 版本对齐、共享 fixture |
+| 缓存锁内只排队启动事件，释放后由单独的投递锁按序发送 | 2026-10-23 审计 M-P1-1：发送失败路径取绑定锁，绑定线程持绑定锁查询缓存 | `LaunchPolicyCacheTest` 锁外投递与顺序、发送线程内断开 |
