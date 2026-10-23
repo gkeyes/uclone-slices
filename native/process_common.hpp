@@ -26,6 +26,13 @@ constexpr std::string_view kSocket = "uclone.slices.launch.v1";
 constexpr std::string_view kRoot = "/data/adb/uclone-slices-v2";
 // The control transport uses the same whole-frame bound as the Runtime RPC.
 constexpr int kFrameTimeoutMs = 5000;
+// Nested budgets for one managed start, each longer than what it waits on: Runtime
+// spends at most 4 s on the process-view worker before system_server's (normally
+// immediate) acknowledgement, the companion waits 9 s for Runtime, and the App waits
+// 9.5 s, inside ActivityManager's 10 s process-start limit. A slow but successful
+// verification is no longer cut off by an equal 5 s timer at every layer.
+constexpr int kRuntimeReplyTimeoutMs = 9000;
+constexpr int kApprovalTimeoutMs = 9500;
 
 class Fd {
  public:
@@ -115,7 +122,7 @@ inline bool write_all(int fd, std::string_view text) {
   return true;
 }
 
-inline std::optional<std::string> frame(int fd) {
+inline std::optional<std::string> frame(int fd, int timeout_ms = kFrameTimeoutMs) {
   std::string result;
   // A deadline for the whole frame, rather than one timeout for every byte.
   timespec begin{};
@@ -125,7 +132,7 @@ inline std::optional<std::string> frame(int fd) {
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return {};
     int elapsed = static_cast<int>((now.tv_sec - begin.tv_sec) * 1000 +
                                   (now.tv_nsec - begin.tv_nsec) / 1000000);
-    int remaining = kFrameTimeoutMs - elapsed;
+    int remaining = timeout_ms - elapsed;
     if (remaining <= 0) { errno = ETIMEDOUT; return {}; }
     pollfd item{fd, POLLIN, 0};
     int ready = poll(&item, 1, remaining);

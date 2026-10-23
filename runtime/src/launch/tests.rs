@@ -296,3 +296,41 @@ fn blocking_without_a_system_subscription_does_not_fail_the_transaction() {
     assert!(gate.lock().unwrap().blocked.contains("com.example.app"));
     assert!(!gate.await_system(Duration::from_millis(50)).unwrap());
 }
+
+#[test]
+fn a_stalled_process_view_worker_is_killed_at_its_deadline() {
+    let mut command = Command::new("sleep");
+    command.arg("30");
+    let started = Instant::now();
+    let error = run_worker(command, Duration::from_millis(100)).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let mut command = Command::new("sh");
+    command.args(["-c", "echo stage >&2; exit 3"]);
+    let output = run_worker(command, Duration::from_secs(5)).unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(output.stderr, b"stage\n");
+}
+
+#[test]
+fn previous_discovery_is_read_only_from_an_owned_regular_file() {
+    let root = tempfile::tempdir().unwrap();
+    let owner = fs::metadata(root.path()).unwrap().uid();
+    let manifest = br#"{"packages":[{"package":"com.example.app","uid":10123}]}"#;
+    fs::write(root.path().join("elsewhere.json"), manifest).unwrap();
+
+    std::os::unix::fs::symlink(
+        root.path().join("elsewhere.json"),
+        root.path().join("enrollment.json"),
+    )
+    .unwrap();
+    assert!(read_enrollment_uids(root.path(), owner).is_empty());
+
+    fs::remove_file(root.path().join("enrollment.json")).unwrap();
+    fs::write(root.path().join("enrollment.json"), manifest).unwrap();
+    assert!(read_enrollment_uids(root.path(), owner.wrapping_add(1)).is_empty());
+    assert_eq!(
+        read_enrollment_uids(root.path(), owner),
+        BTreeMap::from([("com.example.app".to_owned(), 10123)])
+    );
+}

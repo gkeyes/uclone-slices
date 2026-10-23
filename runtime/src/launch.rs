@@ -30,6 +30,8 @@ const FRAME_LIMIT: u64 = 64 * 1024;
 // Transport deadlines, shared with the existing Runtime frame receiver. They do not
 // decide when an Android visit ends or when an account should change.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Inside the native companion's 9 s wait for Runtime (`native/process_common.hpp`).
+const PROCESS_VIEW_TIMEOUT: Duration = Duration::from_secs(4);
 pub(crate) const PROCESS_VIEW_WORKER: &str =
     "/data/adb/modules/uclone-slices-v2/bin/uclone-process-view";
 
@@ -700,7 +702,7 @@ impl LaunchGate {
         if uid != aggregate.identity().uid() {
             command.arg("--isolated");
         }
-        let output = command.output()?;
+        let output = run_worker(command, PROCESS_VIEW_TIMEOUT)?;
         if !output.status.success() {
             // The packaged worker emits only a fixed stage and errno. Preserve that
             // cause in the Runtime log instead of hiding it behind the public error.
@@ -739,6 +741,32 @@ impl LaunchGate {
         };
         self.publish()?;
         self.await_ack(connection, revision)
+    }
+}
+
+/// Runs the process-view worker with a deadline inside the native start budget
+/// (`kRuntimeReplyTimeoutMs`); a stalled mount is killed instead of holding the App.
+fn run_worker(mut command: Command, timeout: Duration) -> io::Result<std::process::Output> {
+    use std::process::Stdio;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output();
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "process view worker timed out",
+            ));
+        }
+        thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -1292,12 +1320,51 @@ pub fn export_enrollment(root: &Path) -> io::Result<()> {
 /// stays enrolled across a reboot instead of silently starting unmanaged.
 #[cfg(target_os = "android")]
 fn exported_enrollment_uids() -> BTreeMap<String, u32> {
-    let Ok(contents) = fs::read("/data/system/uclone-slices-v2/enrollment.json") else {
-        return BTreeMap::new();
-    };
-    let Ok(manifest) = serde_json::from_slice::<Value>(&contents) else {
-        return BTreeMap::new();
-    };
+    read_enrollment_uids(Path::new("/data/system/uclone-slices-v2"), 0)
+}
+
+/// Reads the previous manifest only when it and its directory are owned by `owner` and neither
+/// is a symbolic link, the same trust system_server applies before reading discovery.
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+fn read_enrollment_uids(directory: &Path, owner: u32) -> BTreeMap<String, u32> {
+    trusted_enrollment(directory, owner)
+        .ok()
+        .and_then(|contents| serde_json::from_slice::<Value>(&contents).ok())
+        .map(|manifest| enrollment_uids(&manifest))
+        .unwrap_or_default()
+}
+
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+fn trusted_enrollment(directory: &Path, owner: u32) -> io::Result<Vec<u8>> {
+    use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NOCTTY | OFlags::CLOEXEC;
+    let parent = rustix::fs::open(directory, flags | OFlags::DIRECTORY, Mode::empty())?;
+    let metadata = fstat(&parent)?;
+    if metadata.st_uid != owner {
+        return Err(refused("enrollment discovery directory is unsafe"));
+    }
+    let file = openat(
+        &parent,
+        "enrollment.json",
+        flags | OFlags::NONBLOCK,
+        Mode::empty(),
+    )?;
+    let metadata = fstat(&file)?;
+    if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile
+        || metadata.st_uid != owner
+        || metadata.st_size as u64 > FRAME_LIMIT
+    {
+        return Err(refused("enrollment discovery is unsafe"));
+    }
+    let mut contents = Vec::new();
+    File::from(file)
+        .take(FRAME_LIMIT + 1)
+        .read_to_end(&mut contents)?;
+    Ok(contents)
+}
+
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+fn enrollment_uids(manifest: &Value) -> BTreeMap<String, u32> {
     manifest["packages"]
         .as_array()
         .into_iter()
