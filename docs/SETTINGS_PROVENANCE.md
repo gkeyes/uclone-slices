@@ -196,3 +196,11 @@
 | Manager / KernelSU / crate / wire `0.3.10`，versionCode 29 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
 | 备份与移除管理只要求 Runtime 已连接且版本一致（`recoveryAllowed`） | 复查 0.3.9 P2-A、P2-B：Hook 永远不会就绪时 App 不能被困住；备份与移除阻止新进程时不需要系统订阅（0.3.7），备份后的重新启动失败只记日志 | `belowAndroid13UnenrollStaysAvailable`、`aHookThatNeverBecomesReadyStillAllowsUnenroll`、`anIncompatibleRuntimeKeepsUnenrollLocked` |
 | 恢复、切换、添加仍要求启动前切换就绪 | 恢复后的账号需要门禁才能按所选账号启动 | 真机验收 |
+
+## v0.3.11：已卸载 App 的移除管理
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.11`，versionCode 30 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| `force_stop` 在包已完全不在 user0 包列表（且列表含 `android`）时直接成功 | 审计 M-P2-6：卸载后无进程可停，原先卡在 `package_uid` 失败；列表异常或包仍安装但不可管理时照旧失败 | `force_stop_of_an_uninstalled_package_has_nothing_to_stop`、`force_stop_still_fails_for_an_installed_package_it_cannot_manage` |
+| 不可用登记允许取消配置；找不到 App 的不可用登记以包名列在首页 | 审计 M-P2-6：原先已卸载 App 在首页消失且无法移除 | `anUnavailableAccountCanStillBeUnenrolled`、`anUnavailableRegistrationWithoutItsAppIsListedByPackageName` |

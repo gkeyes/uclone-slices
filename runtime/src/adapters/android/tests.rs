@@ -1413,3 +1413,53 @@ fn force_stop_policy_table_keeps_the_wechat_fast_restart_parameters() {
         assert_eq!(force_stop_policy(&PackageName::new(package).unwrap()), None);
     }
 }
+
+#[test]
+fn force_stop_of_an_uninstalled_package_has_nothing_to_stop() {
+    let root = tempfile::tempdir().unwrap();
+    let package = PackageName::new("com.example.app").unwrap();
+    fs::create_dir(root.path().join("proc")).unwrap();
+    let runner = RecordingRunner {
+        outputs: VecDeque::from([
+            output(""),
+            output("package:com.other.app uid:10124\n"),
+            output("package:android\npackage:com.other.app\n"),
+        ]),
+        commands: Rc::new(RefCell::new(Vec::new())),
+    };
+    let (mut android, recorded) = system_with_runner(root.path(), runner);
+
+    android.force_stop(&package).unwrap();
+
+    assert_eq!(
+        recorded.borrow().last().unwrap().1,
+        vec!["package", "list", "packages", "--user", "0"]
+    );
+}
+
+#[test]
+fn force_stop_still_fails_for_an_installed_package_it_cannot_manage() {
+    for listing in ["package:android\npackage:com.example.app\n", ""] {
+        let root = tempfile::tempdir().unwrap();
+        let package = PackageName::new("com.example.app").unwrap();
+        fs::create_dir(root.path().join("proc")).unwrap();
+        let runner = RecordingRunner {
+            outputs: VecDeque::from([
+                output(""),
+                output("package:com.other.app uid:10124\n"),
+                output(listing),
+            ]),
+            commands: Rc::new(RefCell::new(Vec::new())),
+        };
+        let (mut android, _recorded) = system_with_runner(root.path(), runner);
+
+        let error = android.force_stop(&package).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("not an ordinary user0 third-party app"),
+            "{listing:?}"
+        );
+    }
+}

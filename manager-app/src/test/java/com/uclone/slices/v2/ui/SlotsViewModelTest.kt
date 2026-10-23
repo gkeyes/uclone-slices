@@ -75,7 +75,6 @@ class SlotsViewModelTest {
             UiIntent.SetLaunchAfterReboot(registered.packageName, true),
             UiIntent.RequestDeleteSlot("slot-1"),
             UiIntent.RequestRenameSlot("slot-1"),
-            UiIntent.RequestUnenrollApp(registered.packageName),
             UiIntent.OpenBackupRestore(registered.packageName),
         ).forEach { intent ->
             viewModel.onIntent(intent)
@@ -87,6 +86,19 @@ class SlotsViewModelTest {
         assertTrue(viewModel.state.value.packages.single().runtimeReady)
         viewModel.onIntent(UiIntent.QuickActivateSlot(registered.packageName, "slot-1"))
         assertTrue(client.commands.last() is RuntimeCommand.ActivateSlot)
+    }
+
+    @Test
+    fun anUnavailableAccountCanStillBeUnenrolled() {
+        val registered = packageSnapshot().copy(runtimeReady = false)
+        val client = FakeRuntimeClient(initialPackages = listOf(registered))
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+
+        viewModel.onIntent(UiIntent.RequestUnenrollApp(registered.packageName))
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged(true))
+        viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
+
+        assertEquals(RuntimeCommand.Unenroll(registered.packageName), client.commands.last())
     }
 
     @Test

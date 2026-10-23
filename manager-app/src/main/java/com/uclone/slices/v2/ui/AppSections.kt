@@ -24,8 +24,15 @@ internal fun buildAppSections(
         }
     }
     val managedPackages = packages.asSequence().map(PackageSnapshot::packageName).toSet()
+    // A registration whose App is gone (for example uninstalled) stays listed under its package
+    // name, so its accounts can still be moved out of management.
+    val installedPackages = installedApps.asSequence().map(InstalledApp::packageName).toSet()
+    val unlisted = packages
+        .filter { !it.runtimeReady && it.packageName !in installedPackages }
+        .filter { normalizedQuery.isEmpty() || it.packageName.contains(normalizedQuery, ignoreCase = true) }
+        .map { InstalledApp(it.packageName, it.packageName) }
     return AppSections(
-        managed = visibleApps.filter { it.packageName in managedPackages },
+        managed = visibleApps.filter { it.packageName in managedPackages } + unlisted,
         other = visibleApps.filterNot { it.packageName in managedPackages },
     )
 }
