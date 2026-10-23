@@ -133,13 +133,20 @@ where
                 Ok(snapshot) => snapshots.push(snapshot),
                 Err(error) => {
                     eprintln!("op=list_packages package={package} step=load_package error={error}");
-                    match self.packages.load(&package).map_err(adapter_error)? {
-                        Some(aggregate) => {
-                            snapshots.push(aggregate.unavailable_snapshot().map_err(model_error)?)
-                        }
+                    // One unreadable package is logged and left out, as in 0.2.7; it must not
+                    // empty the whole list. Its own requests keep failing closed.
+                    match self.packages.load(&package) {
+                        Ok(Some(aggregate)) => match aggregate.unavailable_snapshot() {
+                            Ok(snapshot) => snapshots.push(snapshot),
+                            Err(unavailable) => eprintln!(
+                                "op=list_packages package={package} step=unavailable_snapshot error={unavailable}"
+                            ),
+                        },
                         // Recovery may have completed an explicit unenrollment.
-                        None if error == RuntimeError::NotFound => {}
-                        None => return Err(error),
+                        Ok(None) => {}
+                        Err(unreadable) => eprintln!(
+                            "op=list_packages package={package} step=load_aggregate error={unreadable}"
+                        ),
                     }
                 }
             }

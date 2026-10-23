@@ -1,3 +1,10 @@
+# v0.3.5：Runtime 可用性（审计 R-P2-1、R-P2-4、R-P2-5）
+
+1. 成对覆盖安装 Manager / KernelSU 0.3.5 / 24，手动重启，运行环境页显示 `0.3.5`。
+2. 切换账号的同时从桌面点同一个 App：只有这次启动失败，其他已登记 App 照常打开，Manager 里的切换完成。
+3. 在 KernelSU 停用本模块并重启：原来登记的 App 能以系统原始空间正常打开；重新启用并重启后恢复门禁。移除模块后 `/data/system/uclone-slices-v2` 被删除，`/data/adb/uclone-slices-v2` 的账号数据保留。
+4. 主机测试覆盖损坏的 aggregate 只影响自身、切换中 Begin 不断开订阅；真机部分仍需验收。
+
 # v0.3.4：系统框架启动门禁锁顺序
 
 2026-10-23 代码审计（M-P1-1）发现：`LaunchPolicyCache` 持自身锁发送启动事件，发送失败会断开连接并取 `SystemBridge` 的进程绑定锁；绑定线程持绑定锁时又查询缓存。两者在 WindowManager 全局锁内相遇时会互相等待，Watchdog 会重启 system_server。0.3.4 改为在缓存锁内只排队事件，释放锁后按原顺序发送。

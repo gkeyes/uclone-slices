@@ -1047,7 +1047,8 @@ fn invalid_persisted_aggregate_is_a_state_conflict() {
         runtime.get_package(&package),
         Err(RuntimeError::StateConflict)
     );
-    assert_eq!(runtime.list_packages(), Err(RuntimeError::StateConflict));
+    // The broken package is left out instead of failing the whole list (0.2.7 behavior).
+    assert_eq!(runtime.list_packages(), Ok(Vec::new()));
     assert_eq!(
         std::fs::read(package_root.join("aggregate.json")).unwrap(),
         b"{not-json"

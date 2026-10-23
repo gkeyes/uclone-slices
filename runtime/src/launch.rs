@@ -168,7 +168,13 @@ impl LaunchGate {
     }
 
     pub fn refresh(&self) -> io::Result<()> {
-        let policies = load_policies(&self.root).and_then(|policies| {
+        let known = self
+            .lock()?
+            .policies
+            .iter()
+            .map(|policy| (policy.package.clone(), policy.uid))
+            .collect::<BTreeMap<_, _>>();
+        let policies = load_policies(&self.root, &known).and_then(|policies| {
             export_policy_discovery(&policies)?;
             Ok(policies)
         });
@@ -560,6 +566,10 @@ impl LaunchGate {
                     }
                     SystemEvent::Begin { ticket, package } => {
                         validate_token(&ticket)?;
+                        // A Begin can race a switch that just published ready=false, or an
+                        // unenrollment the system has not applied yet. Refusing only this
+                        // ticket keeps every other permit, ticket and pending verification.
+                        // The preparation step then finds no live ticket and fails alone.
                         if !state.policies_valid
                             || state.tickets.contains_key(&ticket)
                             || !state
@@ -567,7 +577,8 @@ impl LaunchGate {
                                 .iter()
                                 .any(|policy| policy.package == package && policy.ready)
                         {
-                            return Err(refused("invalid launch ticket"));
+                            eprintln!("op=launch_begin package={package} refused=not_ready");
+                            continue;
                         }
                         state.tickets.insert(ticket, package);
                     }
@@ -762,29 +773,47 @@ enum SystemEvent {
     },
 }
 
-fn load_policies(root: &Path) -> io::Result<Vec<Policy>> {
+/// Only an unreadable store invalidates every policy. One package whose records cannot be
+/// read stays enrolled but not ready under its last known UID, so it keeps failing closed
+/// while every other package can still launch. Without a known UID it is left out and logged.
+fn load_policies(root: &Path, known: &BTreeMap<String, u32>) -> io::Result<Vec<Policy>> {
     let store = FilePackageStore::open(root).map_err(invalid)?;
-    store
-        .list()
+    let mut policies = Vec::new();
+    for package in store.list().map_err(invalid)? {
+        match load_policy(&store, &package) {
+            Ok(policy) => policies.push(policy),
+            Err(error) => {
+                eprintln!("op=load_policies package={package} error={error}");
+                if let Some(&uid) = known.get(package.as_str()) {
+                    policies.push(Policy {
+                        package: package.as_str().to_owned(),
+                        uid,
+                        active: String::new(),
+                        default: None,
+                        ready: false,
+                    });
+                }
+            }
+        }
+    }
+    Ok(policies)
+}
+
+fn load_policy(store: &FilePackageStore, package: &PackageName) -> io::Result<Policy> {
+    let aggregate = store
+        .load(package)
         .map_err(invalid)?
-        .into_iter()
-        .map(|package| {
-            let aggregate = store
-                .load(&package)
-                .map_err(invalid)?
-                .ok_or_else(|| refused("package changed while reading policy"))?;
-            aggregate.validate().map_err(invalid)?;
-            Ok(Policy {
-                package: package.as_str().to_owned(),
-                uid: aggregate.identity().uid(),
-                active: aggregate.active_slot().as_str().to_owned(),
-                default: aggregate
-                    .default_slot()
-                    .map(|slot| slot.as_str().to_owned()),
-                ready: account_ready_to_execute(&store, &aggregate)?,
-            })
-        })
-        .collect()
+        .ok_or_else(|| refused("package changed while reading policy"))?;
+    aggregate.validate().map_err(invalid)?;
+    Ok(Policy {
+        package: package.as_str().to_owned(),
+        uid: aggregate.identity().uid(),
+        active: aggregate.active_slot().as_str().to_owned(),
+        default: aggregate
+            .default_slot()
+            .map(|slot| slot.as_str().to_owned()),
+        ready: account_ready_to_execute(store, &aggregate)?,
+    })
 }
 
 pub(crate) fn validate_account_for_start(
@@ -1223,7 +1252,34 @@ fn validate_token(token: &str) -> io::Result<()> {
 /// Early-boot discovery contains enrollment only, never an active/default account or
 /// authority to launch. A missing live connection still rejects instrumented starts.
 pub fn export_enrollment(root: &Path) -> io::Result<()> {
-    export_policy_discovery(&load_policies(root)?)
+    export_policy_discovery(&load_policies(root, &exported_enrollment_uids())?)
+}
+
+/// UIDs from the previous discovery manifest, so a package whose records became unreadable
+/// stays enrolled across a reboot instead of silently starting unmanaged.
+#[cfg(target_os = "android")]
+fn exported_enrollment_uids() -> BTreeMap<String, u32> {
+    let Ok(contents) = fs::read("/data/system/uclone-slices-v2/enrollment.json") else {
+        return BTreeMap::new();
+    };
+    let Ok(manifest) = serde_json::from_slice::<Value>(&contents) else {
+        return BTreeMap::new();
+    };
+    manifest["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let package = row["package"].as_str()?;
+            let uid = u32::try_from(row["uid"].as_u64()?).ok()?;
+            Some((package.to_owned(), uid))
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "android"))]
+fn exported_enrollment_uids() -> BTreeMap<String, u32> {
+    BTreeMap::new()
 }
 
 #[cfg(target_os = "android")]
@@ -1242,9 +1298,15 @@ fn export_policy_discovery(policies: &[Policy]) -> io::Result<()> {
         .iter()
         .map(|policy| json!({"package": policy.package, "uid": policy.uid}))
         .collect::<Vec<_>>();
-    let manifest =
-        serde_json::to_vec(&json!({"build_id": BINARY_BUILD_ID, "packages": enrollments}))
-            .map_err(invalid)?;
+    // system_server trusts discovery only from this boot, so a module that was disabled or
+    // removed (and therefore never re-exported) cannot keep blocking its former Apps.
+    let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
+    let manifest = serde_json::to_vec(&json!({
+        "build_id": BINARY_BUILD_ID,
+        "boot_id": boot_id.trim(),
+        "packages": enrollments,
+    }))
+    .map_err(invalid)?;
     let path = directory.join("enrollment.json");
     if fs::read(&path).ok().as_deref() != Some(manifest.as_slice()) {
         let temporary = directory.join("enrollment.pending");

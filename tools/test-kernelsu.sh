@@ -9,6 +9,7 @@ bash -n "$SERVICE"
 bash -n "$CUSTOMIZE"
 bash -n "$ROOT/kernelsu/runtime-entry.sh"
 bash -n "$ROOT/kernelsu/post-fs-data.sh"
+bash -n "$ROOT/kernelsu/uninstall.sh"
 grep -F -x 'umask 077' "$SERVICE" >/dev/null
 grep -F -x 'RUNTIME_ROOT=/data/adb/uclone-slices-v2' "$SERVICE" >/dev/null
 grep -F 'CE_STORAGE_ROOT=/data/misc_ce/0/uclone-slices-v2' "$SERVICE" >/dev/null
