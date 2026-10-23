@@ -30,6 +30,7 @@ final class LaunchPolicyCache {
     private final SecureRandom random = new SecureRandom();
     private final Object delivery = new Object();
     private final List<JSONObject> outbox = new ArrayList<>();
+    private long generation;
     private final LaunchSessions sessions = new LaunchSessions();
     private final Map<String, Integer> enrollments = new HashMap<>();
     private Map<String, JSONObject> packages = new HashMap<>();
@@ -96,6 +97,7 @@ final class LaunchPolicyCache {
 
     synchronized void disconnected() {
         outbox.clear();
+        generation++;
         connected = false;
         valid = false;
         revision = -1;
@@ -253,16 +255,23 @@ final class LaunchPolicyCache {
     /**
      * Delivers queued frames in the order they were queued, never under this object's lock.
      * The delivery lock keeps two flushing threads from reordering a begin and its cancel.
+     * A batch belongs to the connection it was queued for: once a delivery fails and the
+     * cache disconnects, the rest of the batch is dropped so it cannot reach a reconnection.
      */
     private void flush() {
         synchronized (delivery) {
             List<JSONObject> frames;
+            long batch;
             synchronized (this) {
                 if (outbox.isEmpty()) return;
                 frames = new ArrayList<>(outbox);
                 outbox.clear();
+                batch = generation;
             }
-            for (JSONObject frame : frames) send.accept(frame);
+            for (JSONObject frame : frames) {
+                synchronized (this) { if (generation != batch) return; }
+                send.accept(frame);
+            }
         }
     }
 

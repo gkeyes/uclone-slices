@@ -211,6 +211,30 @@ class LaunchPolicyCacheTest {
         assertTrue(cache.gateRequired(target, uid, manager, permit, false))
     }
 
+    @Test fun theRestOfABatchIsDroppedOnceADeliveryDisconnects() {
+        var subject: LaunchPolicyCache? = null
+        var failNext = false
+        val delivered = mutableListOf<String>()
+        val cache = LaunchPolicyCache("0.3.4") { frame ->
+            delivered += frame.optString("type")
+            if (failNext) {
+                failNext = false
+                // The bridge disconnects and may reconnect before the next frame.
+                subject!!.disconnected()
+                subject!!.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.4").put("revision", 9))
+            }
+        }
+        subject = cache
+        cache.managerUid(manager)
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.4"))
+        cache.begin(target, false)
+        failNext = true
+        val replacement = cache.begin(target, true)!!
+        // The replacing begin was queued for the old connection and must not reach the new one.
+        assertEquals(listOf("begin", "cancel"), delivered)
+        assertFalse(cache.ticketPending(replacement))
+    }
+
     private fun resource(name: String): String =
         javaClass.classLoader!!.getResourceAsStream(name)!!.bufferedReader().use { it.readText() }
 }
