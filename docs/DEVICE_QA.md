@@ -1,3 +1,10 @@
+# v0.3.9：Android 12 及以下与 Hook 字段预检（审计 M-P2-5、P2-N1）
+
+1. 成对覆盖安装 Manager / KernelSU 0.3.9 / 28，手动重启，运行环境页显示 `0.3.9`。
+2. Android 13 及以上：启动前切换显示“已就绪”，其余行为同 0.3.8。
+3. Android 10–12（如有设备）：运行环境页显示“需要 Android 13”和对应说明；首页已管理 App 的菜单只有“移除管理”，确认后 App 回到可添加列表；切换、添加、备份保持停用。
+4. 主机测试：ViewModel 覆盖 Android 12 以下只放行移除管理、Android 13 以上未就绪时仍全部停用；FrameworkAccess 覆盖无接收者的字段/方法预检。Hook 预检需真机验收（日志中不应出现 `Launch support unavailable`）。
+
 # v0.3.8：原生启动期限（审计 N-P2-1）
 
 1. 成对覆盖安装 Manager / KernelSU 0.3.8 / 27，手动重启，运行环境页显示 `0.3.8`。

@@ -34,4 +34,11 @@ public class FrameworkAccessTest {
         assertTrue(failed.getCause() instanceof IllegalStateException);
         assertThrows(NoSuchFieldException.class, () -> FrameworkAccess.get(new Child(), "absent"));
     }
+
+    @Test public void requiredMembersAreCheckedWithoutAReceiver() throws Exception {
+        FrameworkAccess.requireFields(Child.class, "selected");
+        FrameworkAccess.requireMethod(Child.class, "lookup", long.class);
+        assertThrows(NoSuchFieldException.class, () -> FrameworkAccess.requireFields(Child.class, "selected", "absent"));
+        assertThrows(NoSuchMethodException.class, () -> FrameworkAccess.requireMethod(Child.class, "lookup"));
+    }
 }

@@ -180,3 +180,11 @@
 | Manager / KernelSU / crate / wire `0.3.8`，versionCode 27 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
 | process-view worker 4 秒、companion 等 Runtime 9 秒、App 等批准 9.5 秒 | 审计 N-P2-1：原先各层都从 0 起算 5 秒且 worker 无期限；App 端须短于 ActivityManager 10 秒进程启动上限 | `a_stalled_process_view_worker_is_killed_at_its_deadline`、原生 lifecycle |
 | companion 等不到请求时把通道设为拒绝 | 审计 N-P2-1：App 不必再空等自己的期限 | 原生 lifecycle |
+
+## v0.3.9：Android 12 及以下与 Hook 字段预检
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.9`，versionCode 28 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| API 33 以下 `launchSupported = false`，只放行移除管理 | 审计 M-P2-5：该系统永远不会安装启动 Hook；0.3.7 起阻止新进程不再要求系统订阅 | `belowAndroid13OnlyUnenrollStaysAvailable`、`aSupportedSystemKeepsUnenrollLockedUntilLaunchSupportIsReady` |
+| 安装任何 Hook 前预检 `mContext`、`mGlobalLock`、`mRootWindowContainer`、`mPidsSelfLocked`、拦截器字段与 `getTopDisplayFocusedRootTask` | 审计 P2-N1：原先 systemReady 时才发现缺失，绑定拦截已生效却没有 Root 通道 | `requiredMembersAreCheckedWithoutAReceiver`；Hook 需真机验收 |

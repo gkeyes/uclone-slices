@@ -40,6 +40,7 @@ internal fun RuntimeStatusScreen(
                 runtimeReady = state.runtimeReady,
                 runtimeCompatible = state.runtimeCompatible,
                 launchReady = state.launchReady,
+                launchSupported = state.launchSupported,
                 modifier = Modifier.staggerIn(0, play),
             )
         }
@@ -72,7 +73,13 @@ internal fun RuntimeStatusScreen(
                 )
                 ListRow(
                     title = stringResource(R.string.launch_support_title),
-                    value = stringResource(if (state.launchReady) R.string.launch_support_ready else R.string.launch_support_pending),
+                    value = stringResource(
+                        when {
+                            state.launchReady -> R.string.launch_support_ready
+                            !state.launchSupported -> R.string.launch_support_unsupported
+                            else -> R.string.launch_support_pending
+                        },
+                    ),
                     valueColor = if (state.launchReady) Tone.Success.onContainer() else Tone.Warning.onContainer(),
                 )
             }
@@ -112,7 +119,11 @@ internal fun RuntimeStatusScreen(
         }
         if (state.runtimeReady && state.runtimeCompatible && !state.launchReady) {
             item(key = "launch_support_hint") {
-                Footnote(stringResource(R.string.launch_support_hint))
+                Footnote(
+                    stringResource(
+                        if (state.launchSupported) R.string.launch_support_hint else R.string.launch_support_unsupported_hint,
+                    ),
+                )
             }
         }
         item(key = "log_header") {
@@ -152,13 +163,16 @@ private fun RuntimeOverviewCard(
     runtimeReady: Boolean,
     runtimeCompatible: Boolean,
     launchReady: Boolean,
+    launchSupported: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val ready = runtimeReady && runtimeCompatible && launchReady
     val tone = if (ready) Tone.Success else Tone.Warning
     val title = when {
         runtimeReady && !runtimeCompatible -> stringResource(R.string.environment_version_mismatch)
-        runtimeReady && runtimeCompatible && !launchReady -> stringResource(R.string.launch_support_pending)
+        runtimeReady && runtimeCompatible && !launchReady -> stringResource(
+            if (launchSupported) R.string.launch_support_pending else R.string.launch_support_unsupported,
+        )
         runtimeReady -> stringResource(R.string.environment_ready)
         else -> stringResource(R.string.environment_unavailable)
     }

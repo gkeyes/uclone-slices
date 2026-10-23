@@ -248,6 +248,7 @@ internal fun AppListScreen(
                             snapshot = snapshot,
                             enabled = enabled,
                             operationsEnabled = operationsEnabled,
+                            unenrollEnabled = !state.busy && state.unenrollAllowed,
                             accountsExpanded = state.configuredAccountsExpanded,
                             activatingSlot = activating
                                 ?.takeIf { it.packageName == app.packageName }
@@ -399,6 +400,7 @@ private fun ManagedAppCard(
     snapshot: PackageSnapshot,
     enabled: Boolean,
     operationsEnabled: Boolean,
+    unenrollEnabled: Boolean,
     accountsExpanded: Boolean,
     activatingSlot: String?,
     onOpen: () -> Unit,
@@ -499,7 +501,7 @@ private fun ManagedAppCard(
             val unenrollText = stringResource(R.string.unenroll_app_action)
             SlicesOverflowMenu(
                 items = buildList {
-                    if (ready) {
+                    if (ready && operationsEnabled) {
                         add(SlicesMenuItem(text = defaultAccountText, onClick = onOpen))
                         add(
                             SlicesMenuItem(
@@ -513,7 +515,7 @@ private fun ManagedAppCard(
                     add(SlicesMenuItem(text = unenrollText, danger = true, onClick = onUnenroll))
                 },
                 contentDescription = stringResource(R.string.configured_app_actions),
-                enabled = operationsEnabled && snapshot.runtimeReady,
+                enabled = unenrollEnabled && snapshot.runtimeReady,
                 modifier = Modifier.align(Alignment.Top),
             )
         }

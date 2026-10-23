@@ -654,6 +654,42 @@ class SlotsViewModelTest {
     }
 
     @Test
+    fun belowAndroid13OnlyUnenrollStaysAvailable() {
+        val client = GatedProbeRuntimeClient(RuntimeReply.Capabilities(
+            TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION,
+            launchGateReady = false, processViewReady = false,
+        ))
+        client.gate.complete(Unit)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined, launchSupported = false)
+        assertFalse(viewModel.state.value.operationsAllowed)
+        assertTrue(viewModel.state.value.unenrollAllowed)
+        val before = client.commands.toList()
+        viewModel.onIntent(UiIntent.CreateSlot("Work"))
+        assertEquals(before, client.commands)
+
+        viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged(true))
+        viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
+
+        assertEquals(RuntimeCommand.Unenroll("com.example.app"), client.commands.last())
+    }
+
+    @Test
+    fun aSupportedSystemKeepsUnenrollLockedUntilLaunchSupportIsReady() {
+        val client = GatedProbeRuntimeClient(RuntimeReply.Capabilities(
+            TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION,
+            launchGateReady = false, processViewReady = true,
+        ))
+        client.gate.complete(Unit)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        assertFalse(viewModel.state.value.unenrollAllowed)
+        val before = client.commands.toList()
+        viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
+        assertNull(viewModel.state.value.pendingUnenroll)
+        assertEquals(before, client.commands)
+    }
+
+    @Test
     fun transportFailureClearsRuntimeReadyAndPreservesTypedNotice() {
         val client = FakeRuntimeClient()
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
@@ -1439,7 +1475,8 @@ private fun slotsViewModel(
     dispatcher: CoroutineDispatcher,
     preferences: ManagerUiPreferences = MemoryManagerUiPreferences(),
     maintenance: RuntimeMaintenance = NoRuntimeMaintenance(),
-) = SlotsViewModel(client, apps, dispatcher, preferences, maintenance, TEST_LABELS)
+    launchSupported: Boolean = true,
+) = SlotsViewModel(client, apps, dispatcher, preferences, maintenance, TEST_LABELS, launchSupported)
 
 private fun packageSnapshot(
     active: String = "base",
