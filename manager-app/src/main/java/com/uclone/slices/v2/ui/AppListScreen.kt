@@ -515,7 +515,7 @@ private fun ManagedAppCard(
                     add(SlicesMenuItem(text = unenrollText, danger = true, onClick = onUnenroll))
                 },
                 contentDescription = stringResource(R.string.configured_app_actions),
-                enabled = recoveryEnabled && snapshot.runtimeReady,
+                enabled = recoveryEnabled,
                 modifier = Modifier.align(Alignment.Top),
             )
         }

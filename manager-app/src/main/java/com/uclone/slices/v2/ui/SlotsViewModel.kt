@@ -396,7 +396,6 @@ internal class SlotsViewModel(
             is UiIntent.QuickActivateSlot -> intent.packageName
             is UiIntent.SetDefaultSlot -> intent.packageName
             is UiIntent.SetLaunchAfterReboot -> intent.packageName
-            is UiIntent.RequestUnenrollApp -> intent.packageName
             is UiIntent.RequestConfigureApp -> intent.packageName
             is UiIntent.OpenBackupRestore -> intent.packageName
             is UiIntent.CreateSlot,
@@ -406,7 +405,6 @@ internal class SlotsViewModel(
             -> current.selected?.packageName
             UiIntent.ConfirmRenameSlot -> current.pendingRename?.packageName
             UiIntent.ConfirmDeleteSlot -> current.pendingDelete?.packageName
-            UiIntent.ConfirmUnenrollApp -> current.pendingUnenroll?.packageName
             UiIntent.ConfirmConfigureApp -> current.pendingConfigurationPackage
             UiIntent.ConfirmRegistrationRecovery -> current.registrationRecovery?.packageName
             else -> null

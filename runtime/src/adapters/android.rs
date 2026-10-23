@@ -212,6 +212,30 @@ impl SystemAndroidOps {
         package_uid_from_rows(self.package_rows()?, package)
     }
 
+    /// The package's UID, or `None` once it is no longer installed for user0 at all, so none
+    /// of its processes can run and its recorded accounts can still be moved out. A package
+    /// that is installed but not an ordinary third-party App keeps failing.
+    fn installed_uid(&mut self, package: &PackageName) -> Result<Option<u32>, AdapterError> {
+        let error = match self.package_uid(package) {
+            Ok(uid) => return Ok(Some(uid)),
+            Err(error) => error,
+        };
+        let output = self.required(
+            "/system/bin/cmd",
+            &["package", "list", "packages", "--user", "0"],
+        )?;
+        let mut names = output
+            .stdout
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("package:"));
+        let listed = names.clone().any(|name| name == package.as_str());
+        // The framework package is always installed; without it the listing is not trusted.
+        if listed || !names.any(|name| name == "android") {
+            return Err(error);
+        }
+        Ok(None)
+    }
+
     /// Every process in `/proc` with its owning uid.
     fn process_uids(&self) -> Result<Vec<(PathBuf, u32)>, AdapterError> {
         let entries =
@@ -606,11 +630,16 @@ impl AndroidOps for SystemAndroidOps {
                 .map_err(|error| AdapterError::new(error.to_string()))?;
         }
         if let Some(policy) = force_stop_policy(package) {
-            let uid = self.package_uid(package)?;
+            let Some(uid) = self.installed_uid(package)? else {
+                return Ok(());
+            };
             return self.force_stop_with_policy(package, uid, policy);
         }
-        self.request_force_stop(package)?;
-        let uid = self.package_uid(package)?;
+        let requested = self.request_force_stop(package);
+        let Some(uid) = self.installed_uid(package)? else {
+            return Ok(());
+        };
+        requested?;
         self.confirm_package_processes_stopped(uid)
     }
 

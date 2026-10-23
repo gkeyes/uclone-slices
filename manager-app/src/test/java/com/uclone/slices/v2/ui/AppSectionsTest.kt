@@ -27,6 +27,23 @@ class AppSectionsTest {
     }
 
     @Test
+    fun anUnavailableRegistrationWithoutItsAppIsListedByPackageName() {
+        val sections = buildAppSections(
+            installedApps = apps,
+            packages = listOf(
+                packageSnapshot("com.alpha"),
+                packageSnapshot("com.removed").copy(runtimeReady = false),
+                packageSnapshot("com.ready.but.hidden"),
+            ),
+            query = "",
+        )
+
+        assertEquals(listOf("com.alpha", "com.removed"), sections.managed.map { it.packageName })
+        assertEquals("com.removed", sections.managed.last().label)
+        assertTrue(buildAppSections(apps, listOf(packageSnapshot("com.removed").copy(runtimeReady = false)), "alpha").managed.isEmpty())
+    }
+
+    @Test
     fun searchMatchesLabelsAndPackageNamesIgnoringCase() {
         assertEquals(
             listOf("com.beta"),
