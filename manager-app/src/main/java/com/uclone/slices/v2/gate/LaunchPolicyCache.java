@@ -12,7 +12,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 
-/** Root-derived policy and attestations. No Root calls, disk waits, or mounts occur here. */
+/**
+ * Root-derived policy and attestations. No Root calls, disk waits, or mounts occur here.
+ *
+ * Outgoing frames are queued under this object's lock and delivered only after it is
+ * released. A failed delivery disconnects the bridge, which takes the bridge's binding
+ * lock; the binding thread holds that lock while it asks {@link #approvedProcess}, so
+ * sending while holding this lock would invert the order under the system's WM lock.
+ */
 final class LaunchPolicyCache {
     static final String MANAGER = "com.uclone.slices.v2";
     static final String GATE = MANAGER + ".gate.LaunchPreparationActivity";
@@ -21,6 +28,9 @@ final class LaunchPolicyCache {
     private final String build;
     private final Consumer<JSONObject> send;
     private final SecureRandom random = new SecureRandom();
+    private final Object delivery = new Object();
+    private final List<JSONObject> outbox = new ArrayList<>();
+    private long generation;
     private final LaunchSessions sessions = new LaunchSessions();
     private final Map<String, Integer> enrollments = new HashMap<>();
     private Map<String, JSONObject> packages = new HashMap<>();
@@ -86,6 +96,8 @@ final class LaunchPolicyCache {
     }
 
     synchronized void disconnected() {
+        outbox.clear();
+        generation++;
         connected = false;
         valid = false;
         revision = -1;
@@ -116,7 +128,14 @@ final class LaunchPolicyCache {
             policy.optString("active").equals(process.optString("slot"));
     }
 
-    synchronized boolean gateRequired(String target, int uid, int callerUid, String token, boolean taskResume) {
+    boolean gateRequired(String target, int uid, int callerUid, String token, boolean taskResume) {
+        boolean required;
+        synchronized (this) { required = gateRequiredLocked(target, uid, callerUid, token, taskResume); }
+        flush();
+        return required;
+    }
+
+    private boolean gateRequiredLocked(String target, int uid, int callerUid, String token, boolean taskResume) {
         if (!managed(target)) return false;
         if (consumePermit(target, callerUid, token)) {
             sessions.manual(target, uid);
@@ -148,23 +167,33 @@ final class LaunchPolicyCache {
         consumed.add(selected);
         String ticket = pending.remove(target);
         if (ticket != null) { shown.remove(ticket); queued.remove(ticket); }
-        send.accept(message("consumed", "token", selected));
+        outbox.add(message("consumed", "token", selected));
         return true;
     }
 
-    synchronized void requested(String target, int uid, int callerUid, boolean resultToOwner) {
-        if (!GATE.equals(target) && !pending.containsKey(target) && !sessions.relatedCaller(callerUid) && !resultToOwner) {
-            cancelPending();
+    void requested(String target, int uid, int callerUid, boolean resultToOwner) {
+        synchronized (this) {
+            if (!GATE.equals(target) && !pending.containsKey(target) && !sessions.relatedCaller(callerUid) && !resultToOwner) {
+                cancelPending();
+            }
+            sessions.requested(target, uid, callerUid, resultToOwner);
         }
-        sessions.requested(target, uid, callerUid, resultToOwner);
+        flush();
     }
 
     synchronized boolean resultOwnedBy(int uid) { return sessions.ownedBy(uid); }
 
-    synchronized String begin(String target, boolean replace) {
+    String begin(String target, boolean replace) {
+        String ticket;
+        synchronized (this) { ticket = beginLocked(target, replace); }
+        flush();
+        return ticket;
+    }
+
+    private String beginLocked(String target, boolean replace) {
         String existing = pending.get(target);
         if (existing != null && !replace) return existing;
-        if (existing != null) cancel(existing);
+        if (existing != null) cancelLocked(existing);
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         StringBuilder token = new StringBuilder(64);
@@ -173,7 +202,7 @@ final class LaunchPolicyCache {
         pending.put(target, ticket);
         JSONObject frame = message("begin", "ticket", ticket);
         try { frame.put("package", target); } catch (Exception ignored) { return null; }
-        send.accept(frame);
+        outbox.add(frame);
         return ticket;
     }
 
@@ -189,21 +218,30 @@ final class LaunchPolicyCache {
         if (pending.containsValue(ticket)) shown.add(ticket);
     }
 
-    synchronized void homeRequested() { cancelPending(); }
+    void homeRequested() {
+        synchronized (this) { cancelPending(); }
+        flush();
+    }
 
-    synchronized void cancel(String ticket) {
+    void cancel(String ticket) {
+        synchronized (this) { cancelLocked(ticket); }
+        flush();
+    }
+
+    private void cancelLocked(String ticket) {
         pending.values().remove(ticket);
         shown.remove(ticket);
         queued.remove(ticket);
-        send.accept(message("cancel", "ticket", ticket));
+        outbox.add(message("cancel", "ticket", ticket));
     }
 
-    synchronized void resumed(String target, String className, int uid, boolean home, boolean locked) {
+    void resumed(String target, String className, int uid, boolean home, boolean locked) {
         if (MANAGER.equals(target) && GATE.equals(className)) return;
-        boolean independent = sessions.resumed(target, uid, home, locked);
-        if (locked) return;
-        if (!home && !independent && shown.isEmpty()) return;
-        cancelPending();
+        synchronized (this) {
+            boolean independent = sessions.resumed(target, uid, home, locked);
+            if (!locked && (home || independent || !shown.isEmpty())) cancelPending();
+        }
+        flush();
     }
 
     private void cancelPending() {
@@ -211,7 +249,30 @@ final class LaunchPolicyCache {
         pending.clear();
         shown.clear();
         queued.clear();
-        for (String ticket : tickets) send.accept(message("cancel", "ticket", ticket));
+        for (String ticket : tickets) outbox.add(message("cancel", "ticket", ticket));
+    }
+
+    /**
+     * Delivers queued frames in the order they were queued, never under this object's lock.
+     * The delivery lock keeps two flushing threads from reordering a begin and its cancel.
+     * A batch belongs to the connection it was queued for: once a delivery fails and the
+     * cache disconnects, the rest of the batch is dropped so it cannot reach a reconnection.
+     */
+    private void flush() {
+        synchronized (delivery) {
+            List<JSONObject> frames;
+            long batch;
+            synchronized (this) {
+                if (outbox.isEmpty()) return;
+                frames = new ArrayList<>(outbox);
+                outbox.clear();
+                batch = generation;
+            }
+            for (JSONObject frame : frames) {
+                synchronized (this) { if (generation != batch) return; }
+                send.accept(frame);
+            }
+        }
     }
 
     synchronized void finishedGate(String target) { pending.remove(target); }
