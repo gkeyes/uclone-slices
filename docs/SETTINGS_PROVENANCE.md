@@ -163,3 +163,12 @@
 | 安装前先解析全部 Hook 目标，缺一个就整体不装；Android 13 / API 33 以下不装 | 审计 M-P2-4、M-P2-5：`TaskFragment`、`mInTaskFragment`、`mTaskSupervisor` 自 Android 13 起才有 | APK 检查与真机读回 |
 | 运行期单次回调异常只记录并放行该次 resume；Application 绑定异常仍对已登记 UID 失败关闭 | 审计 M-P2-3：一次异常不应停用到重启 | 真机日志 |
 | 准备页 300 ms 后显示进度与取消；Root 辅助程序 30 秒期限后强制结束 | 审计 M-P2-7；30 秒覆盖强停确认（最长约 10 秒）加账号事务排队 | `RootLaunchClientTest` |
+
+## v0.3.7：开机时序与启动通道
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.7`，versionCode 26 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| 启动通道在等待 user0 解锁前绑定；收敛前最多等系统订阅 30 秒 | 审计 R-P2-2、R-P2-3；system_server 重连退避最长 4 秒 | `ucloned.log` 真机时序 |
+| 无系统订阅时阻止新进程直接成功 | 断线时 system_server 门禁与 Application 绑定均失败关闭，specialize 也要求连接 | `blocking_without_a_system_subscription_does_not_fail_the_transaction` |
+| Rust 与原生 `connect_control` 要求对端 `SO_PEERCRED.uid == 0` | 审计 R-P2-3：抽象名称全网络命名空间共享 | 原生 lifecycle `squatted` |

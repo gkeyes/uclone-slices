@@ -9,7 +9,7 @@ g++ -std=c++20 -O2 -Wall -Wextra -Werror -static -pthread \
     -DUCLONE_BUILD_ID=\"lifecycle-test\" \
     -I"$JDK/include" -I"$JDK/include/linux" \
     "$ROOT/tools/test-native-lifecycle.cpp" -o "$LAB/lifecycle"
-for scenario in accept no_exemption reject wrong_uid disconnect timeout; do
+for scenario in accept no_exemption reject wrong_uid disconnect timeout squatted; do
     mkdir "$LAB/$scenario"
     # No host /data or Android package is accessed. PID 1 exiting also reaps the
     # fixture companion/Runtime peers; timeout bounds a broken bootstrap protocol.

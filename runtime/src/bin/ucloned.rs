@@ -11,6 +11,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use boot::{BOOT_ID_PATH, prepare_runtime_root, reconcile_once_per_boot, wait_for_user0_ready};
 use rpc::{
@@ -20,6 +21,9 @@ use rpc::{
 use uclone_slices_runtime::launch::{LaunchGate, export_enrollment, validate_runtime_namespace};
 use uclone_slices_runtime::layout::RUNTIME_ROOT;
 use uclone_slices_runtime::{BINARY_BUILD_ID, handle_line, production_with_launch_gate};
+
+/// system_server reconnects with up to 4 s backoff; this bounds the wait for a slow boot.
+const SYSTEM_SUBSCRIPTION_WAIT: Duration = Duration::from_secs(30);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root =
@@ -44,7 +48,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let build_id = BINARY_BUILD_ID.to_owned();
     prepare_runtime_root(&root)?;
-    wait_for_user0_ready();
     let boot_id = fs::read_to_string(BOOT_ID_PATH)?;
     let transaction_lock = Arc::new(Mutex::new(()));
     let gate = LaunchGate::new(&root);
@@ -78,6 +81,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|error| error.to_string())?;
         prepared
     }))?;
+    // The launch name is bound before waiting for unlock, which leaves an App no window to
+    // claim it first, and lets system_server subscribe while the user is still locked.
+    wait_for_user0_ready();
+    // Boot convergence force-stops and may relaunch Apps, which needs the system
+    // subscription. Waiting is bounded; without it convergence still runs and its marker
+    // stays unwritten on failure, so the next daemon start in this boot retries it.
+    match gate.await_system(SYSTEM_SUBSCRIPTION_WAIT) {
+        Ok(true) => {}
+        Ok(false) => eprintln!("ucloned boot reconcile: system support not subscribed yet"),
+        Err(error) => eprintln!("ucloned boot reconcile: {error}"),
+    }
     // A failed boot convergence is logged and retried on the next start in this boot (its
     // marker is not written). The socket still opens: every request re-validates its own
     // package, and a package whose state cannot be read keeps failing closed on its own.

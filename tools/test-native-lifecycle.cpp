@@ -113,7 +113,9 @@ static_assert(sizeof(LoaderArgs) == sizeof(zygisk::AppSpecializeArgs));
   _exit(0);
 }
 
-int runtime_listener() {
+int runtime_listener(bool squatted) {
+  // SO_PEERCRED reports the effective UID at listen(): a squatting App owns the name.
+  if (squatted && seteuid(kAppUid + 7) != 0) std::exit(95);
   int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   sockaddr_un address{};
   address.sun_family = AF_UNIX;
@@ -123,6 +125,7 @@ int runtime_listener() {
     std::perror("fixture listener");
     std::exit(95);
   }
+  if (squatted && seteuid(0) != 0) std::exit(95);
   return fd;
 }
 
@@ -149,7 +152,8 @@ int main(int argc, char** argv) {
   if (argc != 3 || getuid() != 0 || getpid() != 1) return 2;
   std::string_view scenario(argv[2]);
   if (scenario != "accept" && scenario != "no_exemption" && scenario != "reject" &&
-      scenario != "wrong_uid" && scenario != "disconnect" && scenario != "timeout") return 2;
+      scenario != "wrong_uid" && scenario != "disconnect" && scenario != "timeout" &&
+      scenario != "squatted") return 2;
   if (mount(nullptr, "/", nullptr, MS_PRIVATE | MS_REC, nullptr) != 0) return 3;
   std::filesystem::create_directories(std::string(argv[1]) + "/proc");
   if (chroot(argv[1]) != 0 || chdir("/") != 0 || mount("proc", "/proc", "proc", 0, nullptr) != 0) return 4;
@@ -157,7 +161,7 @@ int main(int argc, char** argv) {
   std::filesystem::create_directories(std::string(slice::kRoot) + "/packages/" + kPackage);
   std::ofstream("/module/enrollment.list") << UCLONE_BUILD_ID "\n" << kPackage << " " << kAppUid << '\n';
   std::ofstream(std::string(slice::kRoot) + "/packages/" + kPackage + "/aggregate.json") << "{}";
-  int listener = runtime_listener();
+  int listener = runtime_listener(scenario == "squatted");
   pid_t server = fork();
   if (server == 0) runtime_peer(listener, scenario);
   if (server < 0) return 5;
@@ -172,7 +176,7 @@ int main(int argc, char** argv) {
   bool called = access("/rpc-seen", F_OK) == 0;
   int expected = approved ? 0 : 126;
   int actual = WIFEXITED(status) ? WEXITSTATUS(status) : -WTERMSIG(status);
-  bool passed = actual == expected && called == (scenario != "wrong_uid");
+  bool passed = actual == expected && called == (scenario != "wrong_uid" && scenario != "squatted");
   std::printf("native lifecycle %s: exit=%d expected=%d runtime_called=%d %s\n", argv[2],
               actual, expected, called, passed ? "PASS" : "FAIL");
   return passed ? 0 : 1;
