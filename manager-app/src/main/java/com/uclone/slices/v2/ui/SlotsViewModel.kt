@@ -762,7 +762,7 @@ internal class SlotsViewModel(
 
     private fun requestUnenrollApp(packageName: String) {
         val snapshot = state.value
-        if (!snapshot.unenrollAllowed) {
+        if (!snapshot.recoveryAllowed) {
             showUnavailableOrMismatch()
             return
         }
@@ -792,7 +792,7 @@ internal class SlotsViewModel(
 
     private fun confirmUnenrollApp() {
         val snapshot = state.value
-        if (!snapshot.unenrollAllowed) {
+        if (!snapshot.recoveryAllowed) {
             showUnavailableOrMismatch()
             return
         }

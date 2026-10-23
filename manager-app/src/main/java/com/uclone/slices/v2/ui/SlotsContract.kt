@@ -190,11 +190,11 @@ data class SlotsUiState(
         get() = runtimeReady && runtimeCompatible && launchReady
 
     /**
-     * Leaving management stays open where launch support can never become ready, so Apps
-     * enrolled before an upgrade are not stranded on Android 10-12.
+     * Backup and leaving management need only the Runtime, so Apps are never stranded when
+     * launch support is missing (Android 10-12) or failed to install on this ROM.
      */
-    val unenrollAllowed: Boolean
-        get() = runtimeReady && runtimeCompatible && (launchReady || !launchSupported)
+    val recoveryAllowed: Boolean
+        get() = runtimeReady && runtimeCompatible
 }
 
 sealed interface UiIntent {

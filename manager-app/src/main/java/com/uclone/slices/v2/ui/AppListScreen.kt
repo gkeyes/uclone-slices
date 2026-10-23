@@ -248,7 +248,7 @@ internal fun AppListScreen(
                             snapshot = snapshot,
                             enabled = enabled,
                             operationsEnabled = operationsEnabled,
-                            unenrollEnabled = !state.busy && state.unenrollAllowed,
+                            recoveryEnabled = !state.busy && state.recoveryAllowed,
                             accountsExpanded = state.configuredAccountsExpanded,
                             activatingSlot = activating
                                 ?.takeIf { it.packageName == app.packageName }
@@ -311,7 +311,7 @@ private fun RowScope.HomeActions(
         painter = painterResource(R.drawable.ic_backup),
         contentDescription = stringResource(R.string.backup_restore_action),
         onClick = { onIntent(UiIntent.OpenBackupRestore()) },
-        enabled = !state.busy && state.operationsAllowed,
+        enabled = !state.busy && state.recoveryAllowed,
     )
     if (refreshing) {
         Box(Modifier.size(Space.glassButton), contentAlignment = Alignment.Center) {
@@ -400,7 +400,7 @@ private fun ManagedAppCard(
     snapshot: PackageSnapshot,
     enabled: Boolean,
     operationsEnabled: Boolean,
-    unenrollEnabled: Boolean,
+    recoveryEnabled: Boolean,
     accountsExpanded: Boolean,
     activatingSlot: String?,
     onOpen: () -> Unit,
@@ -510,12 +510,12 @@ private fun ManagedAppCard(
                                 onClick = { onSetLaunchAfterReboot(!snapshot.launchAfterReboot) },
                             ),
                         )
-                        add(SlicesMenuItem(text = backupAllText, onClick = onBackup))
                     }
+                    if (ready) add(SlicesMenuItem(text = backupAllText, onClick = onBackup))
                     add(SlicesMenuItem(text = unenrollText, danger = true, onClick = onUnenroll))
                 },
                 contentDescription = stringResource(R.string.configured_app_actions),
-                enabled = unenrollEnabled && snapshot.runtimeReady,
+                enabled = recoveryEnabled && snapshot.runtimeReady,
                 modifier = Modifier.align(Alignment.Top),
             )
         }

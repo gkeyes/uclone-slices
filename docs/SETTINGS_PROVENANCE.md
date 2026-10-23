@@ -188,3 +188,11 @@
 | Manager / KernelSU / crate / wire `0.3.9`，versionCode 28 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
 | API 33 以下 `launchSupported = false`，只放行移除管理 | 审计 M-P2-5：该系统永远不会安装启动 Hook；0.3.7 起阻止新进程不再要求系统订阅 | `belowAndroid13OnlyUnenrollStaysAvailable`、`aSupportedSystemKeepsUnenrollLockedUntilLaunchSupportIsReady` |
 | 安装任何 Hook 前预检 `mContext`、`mGlobalLock`、`mRootWindowContainer`、`mPidsSelfLocked`、拦截器字段与 `getTopDisplayFocusedRootTask` | 审计 P2-N1：原先 systemReady 时才发现缺失，绑定拦截已生效却没有 Root 通道 | `requiredMembersAreCheckedWithoutAReceiver`；Hook 需真机验收 |
+
+## v0.3.10：启动前切换未就绪时的备份与移除
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.10`，versionCode 29 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| 备份与移除管理只要求 Runtime 已连接且版本一致（`recoveryAllowed`） | 复查 0.3.9 P2-A、P2-B：Hook 永远不会就绪时 App 不能被困住；备份与移除阻止新进程时不需要系统订阅（0.3.7），备份后的重新启动失败只记日志 | `belowAndroid13UnenrollStaysAvailable`、`aHookThatNeverBecomesReadyStillAllowsUnenroll`、`anIncompatibleRuntimeKeepsUnenrollLocked` |
+| 恢复、切换、添加仍要求启动前切换就绪 | 恢复后的账号需要门禁才能按所选账号启动 | 真机验收 |
