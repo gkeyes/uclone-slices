@@ -12,6 +12,7 @@ import android.os.Handler;
 import android.os.Binder;
 import android.os.IBinder;
 import android.util.Log;
+import android.os.Build;
 import android.os.Looper;
 import android.os.Process;
 
@@ -20,11 +21,20 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Constructor;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.github.libxposed.api.XposedModule;
 
-/** Only system_server is in scope. App code and public SDK methods are not spoofed. */
+/**
+ * Only system_server is in scope. App code and public SDK methods are not spoofed.
+ *
+ * An unsupported framework found while installing disables launch support for this boot.
+ * A failure in one later callback is logged and affects only that start or resume: new
+ * process starts stay guarded by Zygisk and Application binding, so one exception must
+ * not leave every configured App and the Manager unusable until a reboot.
+ */
 public final class SystemLaunchHook extends XposedModule {
     private final AtomicBoolean started = new AtomicBoolean();
     private final LaunchRequestContext resultToOwner = new LaunchRequestContext();
@@ -44,6 +54,8 @@ public final class SystemLaunchHook extends XposedModule {
     @Override public void onSystemServerStarting(SystemServerStartingParam starting) {
         try {
             bridge = new SystemBridge();
+            // TaskFragment, mInTaskFragment and mTaskSupervisor first exist in Android 13.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) throw new IllegalStateException("Android 13 or later is required");
             ClassLoader loader = starting.getClassLoader();
             Class<?> interceptor = Class.forName("com.android.server.wm.ActivityStartInterceptor", false, loader);
             Class<?> taskFragment = Class.forName("com.android.server.wm.TaskFragment", false, loader);
@@ -51,32 +63,45 @@ public final class SystemLaunchHook extends XposedModule {
             Class<?> manager = Class.forName("com.android.server.am.ActivityManagerService", false, loader);
             Class<?> tasks = Class.forName("com.android.server.wm.ActivityTaskManagerService", false, loader);
             activityRecordClass = Class.forName("com.android.server.wm.ActivityRecord", false, loader);
-            hookMethods(interceptor, "intercept", chain -> {
+            // Resolve every surface before installing any Hook, so a ROM missing one of them
+            // never ends up with resume gating installed but no preparation path.
+            List<Method> intercepts = methods(interceptor, "intercept");
+            List<Method> resumes = methods(taskFragment, "resumeTopActivity");
+            List<Method> completions = methods(activityRecordClass, "completeResumeLocked");
+            List<Method> requests = methods(starter, "executeRequest");
+            List<Method> binds = new ArrayList<>();
+            for (Method method : manager.getDeclaredMethods()) {
+                Class<?>[] args = method.getParameterTypes();
+                if (!method.getName().equals("attachApplicationLocked") || (args.length != 4 && args.length != 5) ||
+                    args[1] != int.class || args[2] != int.class || args[3] != long.class ||
+                    !"android.app.IApplicationThread".equals(args[0].getName()) ||
+                    (method.getReturnType() != boolean.class && method.getReturnType() != void.class)) continue;
+                binds.add(method);
+            }
+            if (binds.isEmpty()) throw new IllegalStateException("unsupported Application bind surface");
+            List<Method> ready = methods(tasks, "onSystemReady");
+            hookAll(intercepts, "intercept", chain -> {
                 Object result = chain.proceed();
                 if (Boolean.FALSE.equals(result)) {
                     try { if (intercept(chain.getThisObject())) return true; }
-                    catch (Throwable error) { unsupported(); }
+                    catch (Throwable error) { failedOnce("intercept", error); }
                 }
                 return result;
             });
-            hookMethods(taskFragment, "resumeTopActivity", chain -> {
+            hookAll(resumes, "resumeTopActivity", chain -> {
+                // A resumed record already runs in its verified process view; only the
+                // default-account choice is skipped when this one check fails.
                 try { if (beforeResume(chain.getThisObject())) return false; }
-                catch (Throwable error) {
-                    unsupported();
-                    try {
-                        ActivityInfo target = info(topActivity(chain.getThisObject()));
-                        if (target != null && bridge.cache.managed(target.packageName)) return false;
-                    } catch (Throwable ignored) { }
-                }
+                catch (Throwable error) { failedOnce("resume", error); }
                 return chain.proceed();
             });
-            hookMethods(activityRecordClass, "completeResumeLocked", chain -> {
+            hookAll(completions, "completeResumeLocked", chain -> {
                 Object result = chain.proceed();
                 try { completedResume(chain.getThisObject()); }
-                catch (Throwable error) { unsupported(); }
+                catch (Throwable error) { failedOnce("resumed", error); }
                 return result;
             });
-            hookMethods(starter, "executeRequest", chain -> {
+            hookAll(requests, "executeRequest", chain -> {
                 boolean owned = false;
                 try {
                     Object request = chain.getArg(0);
@@ -91,17 +116,11 @@ public final class SystemLaunchHook extends XposedModule {
                 } catch (Throwable ignored) { }
                 return resultToOwner.during(owned, chain::proceed);
             });
-            boolean attachInstalled = false;
-            for (Method method : manager.getDeclaredMethods()) {
-                Class<?>[] args = method.getParameterTypes();
-                if (!method.getName().equals("attachApplicationLocked") || (args.length != 4 && args.length != 5) ||
-                    args[1] != int.class || args[2] != int.class || args[3] != long.class ||
-                    !"android.app.IApplicationThread".equals(args[0].getName()) ||
-                    (method.getReturnType() != boolean.class && method.getReturnType() != void.class)) continue;
+            for (Method method : binds) {
                 hook(method).setId("slice.application-bind").intercept(chain -> {
                     try { if (beforeApplication(chain)) return blockedBindResult(method); }
                     catch (Throwable error) {
-                        unsupported();
+                        failedOnce("bind", error);
                         if (bridge.cache.managedUid((Integer) chain.getArg(2))) {
                             Process.killProcess((Integer) chain.getArg(1));
                             return blockedBindResult(method);
@@ -109,9 +128,7 @@ public final class SystemLaunchHook extends XposedModule {
                     }
                     return chain.proceed();
                 });
-                attachInstalled = true;
             }
-            if (!attachInstalled) throw new IllegalStateException("unsupported Application bind surface");
             for (Constructor<?> constructor : tasks.getDeclaredConstructors()) {
                 hook(constructor).setId("slice.task-service").intercept(chain -> {
                     Object result = chain.proceed();
@@ -119,7 +136,7 @@ public final class SystemLaunchHook extends XposedModule {
                     return result;
                 });
             }
-            hookMethods(tasks, "onSystemReady", chain -> {
+            hookAll(ready, "onSystemReady", chain -> {
                 Object result = chain.proceed();
                 initialize(chain.getThisObject());
                 return result;
@@ -128,14 +145,15 @@ public final class SystemLaunchHook extends XposedModule {
         } catch (Throwable error) { unsupported(); }
     }
 
-    private void hookMethods(Class<?> owner, String name, Hooker hooker) {
-        boolean installed = false;
-        for (Method method : owner.getDeclaredMethods()) {
-            if (!method.getName().equals(name)) continue;
-            hook(method).setId("slice." + name).intercept(hooker);
-            installed = true;
-        }
-        if (!installed) throw new IllegalStateException("unsupported framework surface");
+    private static List<Method> methods(Class<?> owner, String name) {
+        List<Method> found = new ArrayList<>();
+        for (Method method : owner.getDeclaredMethods()) if (method.getName().equals(name)) found.add(method);
+        if (found.isEmpty()) throw new IllegalStateException("unsupported framework surface " + name);
+        return found;
+    }
+
+    private void hookAll(List<Method> methods, String name, Hooker hooker) {
+        for (Method method : methods) hook(method).setId("slice." + name).intercept(hooker);
     }
 
     private void initialize(Object taskService) {
@@ -197,9 +215,12 @@ public final class SystemLaunchHook extends XposedModule {
         ActivityInfo target = info(record);
         if (target == null || !user0Display0(record) || LaunchPolicyCache.GATE.equals(target.name)) return false;
         if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, -1, null, true)) return false;
-        if (context == null || globalLock == null || preparation == null) return true;
+        // Without a preparation path the resume proceeds in the record's existing process view
+        // rather than leaving a paused, untouchable screen.
+        if (context == null || globalLock == null || preparation == null) return false;
         String ticket = bridge.cache.begin(target.packageName, false);
-        if (!bridge.cache.queueGate(ticket)) return true;
+        if (ticket == null || !bridge.cache.ticketPending(ticket)) return false;  // Root is disconnected.
+        if (!bridge.cache.queueGate(ticket)) return true;  // A gate for this ticket is already on its way.
         int expectedTask = taskId(record);
         new Handler(Looper.getMainLooper()).post(() -> {
             try {
@@ -217,7 +238,7 @@ public final class SystemLaunchHook extends XposedModule {
                 }
                 // The potentially blocking start is outside WindowManager's global lock.
                 context.startActivity(gateIntent(ticket));
-            } catch (Throwable error) { bridge.cache.cancel(ticket); unsupported(); }
+            } catch (Throwable error) { bridge.cache.cancel(ticket); failedOnce("gate", error); }
         });
         return true;
     }
@@ -324,5 +345,9 @@ public final class SystemLaunchHook extends XposedModule {
     private void unsupported() {
         if (bridge != null) bridge.disable();
         log(Log.ERROR, "Slice", "Launch support unavailable; configured process starts remain guarded");
+    }
+
+    private void failedOnce(String stage, Throwable error) {
+        log(Log.ERROR, "Slice", "Launch support callback failed at " + stage + "; only this request is affected: " + error);
     }
 }

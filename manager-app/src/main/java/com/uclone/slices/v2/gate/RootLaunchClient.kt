@@ -4,6 +4,7 @@ import com.uclone.slices.v2.runtime.startRootShell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 internal data class PreparedLaunch(val packageName: String, val permit: String, val permitExtra: String)
 
@@ -12,6 +13,8 @@ internal class RootLaunchClient(
     private val processStarter: () -> Process = {
         startRootShell("/data/adb/modules/uclone-slices-v2/bin/slotctl gate")
     },
+    // Covers a force-stop and process verification behind a busy account transaction.
+    private val deadlineMillis: Long = 30_000,
 ) {
     suspend fun prepare(ticket: String): PreparedLaunch? = runInterruptible(Dispatchers.IO) {
         if (!validTicket(ticket)) return@runInterruptible null
@@ -28,6 +31,11 @@ internal class RootLaunchClient(
 
     private fun exchange(request: JSONObject): JSONObject? {
         val process = runCatching { processStarter() }.getOrNull() ?: return null
+        // A blocked pipe read cannot be interrupted; ending the process closes the pipe instead.
+        val deadline = Thread({
+            try { if (!process.waitFor(deadlineMillis, TimeUnit.MILLISECONDS)) process.destroyForcibly() }
+            catch (_: InterruptedException) { }
+        }, "Slice launch deadline").apply { isDaemon = true; start() }
         return try {
             process.outputStream.use { it.write((request.toString() + "\n").toByteArray()) }
             val text = process.inputStream.bufferedReader().use { reader ->
@@ -44,6 +52,7 @@ internal class RootLaunchClient(
         } catch (_: Exception) {
             null
         } finally {
+            deadline.interrupt()
             if (process.isAlive) process.destroy()
         }
     }

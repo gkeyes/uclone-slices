@@ -5,7 +5,7 @@
 
 UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前开发候选版为 **v0.3.5**，Runtime 协议 ID 为 `0.3.5`。单个损坏的账号记录不再让其他 App 无法启动；切换中点开 App 不再断开整条系统连接；停用或移除模块后不再拦截原来登记的 App；保留 0.3.4 的启动门禁锁顺序修正；保留 0.3.3 的共享挂载隔离和运行异常 App 的账号列表；保留 Xposed API 102、启动前默认账号门禁和按进程固定的 CE/DE 视图；Manager 与 KernelSU 模块需成对更新，启用 Vector 的系统框架作用域并重启。完整真机行为验收状态见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。
+当前开发候选版为 **v0.3.6**，Runtime 协议 ID 为 `0.3.6`。系统框架 Hook 单次出错只影响那一次启动，不再停用到重启；准备账号超过 0.3 秒显示进度和取消，30 秒未完成自动放弃；保留 0.3.5 的可用性修正：单个损坏的账号记录不再让其他 App 无法启动；切换中点开 App 不再断开整条系统连接；停用或移除模块后不再拦截原来登记的 App；保留 0.3.4 的启动门禁锁顺序修正；保留 0.3.3 的共享挂载隔离和运行异常 App 的账号列表；保留 Xposed API 102、启动前默认账号门禁和按进程固定的 CE/DE 视图；Manager 与 KernelSU 模块需成对更新，启用 Vector 的系统框架作用域并重启。完整真机行为验收状态见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。
 
 ## 功能
 
@@ -24,7 +24,7 @@ UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空�
 
 | 项目 | 当前范围 |
 |---|---|
-| Android | Android 10 / API 29 及以上；当前真机为 Android 17 / API 37 |
+| Android | Manager 可安装于 Android 10 / API 29 及以上；0.3.x 的启动前切换（系统框架 Hook）需要 Android 13 / API 33 及以上，更低版本不安装该 Hook；当前真机为 Android 17 / API 37 |
 | CPU | arm64 |
 | Root | KernelSU，能够加载模块并授予 Manager 权限 |
 | 用户 | 已解锁的 user0 |
@@ -46,7 +46,7 @@ Release 产物由 GitHub Actions 从同一提交 SHA 生成：
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.3.5`（协议 ID）且启动前切换已就绪。
+4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.3.6`（协议 ID）且启动前切换已就绪。
 
 Release APK 使用固定证书签名，CI 会校验证书；覆盖安装即可，不要卸载或清数据。
 
