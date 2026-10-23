@@ -80,6 +80,16 @@ public final class SystemLaunchHook extends XposedModule {
             }
             if (binds.isEmpty()) throw new IllegalStateException("unsupported Application bind surface");
             List<Method> ready = methods(tasks, "onSystemReady");
+            // Members first read at systemReady are checked here too, so a ROM missing one
+            // disables launch support before any Hook exists rather than leaving the bind
+            // guard live without a Root bridge.
+            FrameworkAccess.requireFields(tasks, "mContext", "mGlobalLock", "mRootWindowContainer");
+            FrameworkAccess.requireFields(manager, "mPidsSelfLocked");
+            FrameworkAccess.requireFields(interceptor, "mAInfo", "mRInfo", "mIntent", "mResolvedType", "mUserId",
+                "mCallingUid", "mCallingPid", "mRealCallingUid", "mRealCallingPid", "mInTask", "mInTaskFragment",
+                "mActivityOptions");
+            FrameworkAccess.requireMethod(Class.forName("com.android.server.wm.RootWindowContainer", false, loader),
+                "getTopDisplayFocusedRootTask");
             hookAll(intercepts, "intercept", chain -> {
                 Object result = chain.proceed();
                 if (Boolean.FALSE.equals(result)) {

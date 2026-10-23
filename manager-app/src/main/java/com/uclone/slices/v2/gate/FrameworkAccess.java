@@ -40,6 +40,15 @@ final class FrameworkAccess {
         return method(owner, name, types).invoke(null, arguments);
     }
 
+    /** Fails unless every named field exists on {@code owner} or one of its superclasses. */
+    static void requireFields(Class<?> owner, String... names) throws NoSuchFieldException {
+        for (String name : names) field(owner, name);
+    }
+
+    static void requireMethod(Class<?> owner, String name, Class<?>... parameters) throws NoSuchMethodException {
+        method(owner, name, parameters);
+    }
+
     private static Field field(Class<?> owner, String name) throws NoSuchFieldException {
         FieldKey key = new FieldKey(owner, name);
         Field cached = FIELDS.get(key);

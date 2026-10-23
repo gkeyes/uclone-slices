@@ -156,6 +156,8 @@ data class SlotsUiState(
     val runtimeReady: Boolean = false,
     val runtimeCompatible: Boolean = false,
     val launchReady: Boolean = false,
+    /** False below Android 13, where the launch hook is never installed. */
+    val launchSupported: Boolean = true,
     val buildId: String = "",
     val initialLoadComplete: Boolean = false,
     val configuredAccountsExpanded: Boolean = true,
@@ -186,6 +188,13 @@ data class SlotsUiState(
         get() = operation !is OperationUiState.Idle
     val operationsAllowed: Boolean
         get() = runtimeReady && runtimeCompatible && launchReady
+
+    /**
+     * Leaving management stays open where launch support can never become ready, so Apps
+     * enrolled before an upgrade are not stranded on Android 10-12.
+     */
+    val unenrollAllowed: Boolean
+        get() = runtimeReady && runtimeCompatible && (launchReady || !launchSupported)
 }
 
 sealed interface UiIntent {

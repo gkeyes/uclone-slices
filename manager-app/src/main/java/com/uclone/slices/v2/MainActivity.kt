@@ -1,5 +1,6 @@
 package com.uclone.slices.v2
 
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -55,6 +56,7 @@ class MainActivity : ComponentActivity() {
                                         R.string.rebind_confirmation_word,
                                     ),
                                 ),
+                                launchSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
                             )
                         }
                     }

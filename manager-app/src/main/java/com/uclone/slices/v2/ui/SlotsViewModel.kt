@@ -40,12 +40,14 @@ internal class SlotsViewModel(
     private val uiPreferences: ManagerUiPreferences = MemoryManagerUiPreferences(),
     private val maintenance: RuntimeMaintenance = NoRuntimeMaintenance(),
     private val labels: SpaceLabels,
+    launchSupported: Boolean = true,
 ) : ViewModel() {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val mutableState = MutableStateFlow(
         SlotsUiState(
             configuredAccountsExpanded = uiPreferences.configuredAccountsExpanded,
             homeAppOrder = uiPreferences.homeAppOrder,
+            launchSupported = launchSupported,
         ),
     )
     private val navigationEvents = Channel<SlotsNavigation>(Channel.UNLIMITED)
@@ -760,7 +762,7 @@ internal class SlotsViewModel(
 
     private fun requestUnenrollApp(packageName: String) {
         val snapshot = state.value
-        if (!snapshot.operationsAllowed) {
+        if (!snapshot.unenrollAllowed) {
             showUnavailableOrMismatch()
             return
         }
@@ -790,7 +792,7 @@ internal class SlotsViewModel(
 
     private fun confirmUnenrollApp() {
         val snapshot = state.value
-        if (!snapshot.operationsAllowed) {
+        if (!snapshot.unenrollAllowed) {
             showUnavailableOrMismatch()
             return
         }
