@@ -168,12 +168,15 @@ impl LaunchGate {
     }
 
     pub fn refresh(&self) -> io::Result<()> {
-        let known = self
-            .lock()?
-            .policies
-            .iter()
-            .map(|policy| (policy.package.clone(), policy.uid))
-            .collect::<BTreeMap<_, _>>();
+        // A fresh daemon has no previous policies yet; the exported discovery still names
+        // every enrolled package, so an unreadable one stays enrolled across restarts.
+        let mut known = exported_enrollment_uids();
+        known.extend(
+            self.lock()?
+                .policies
+                .iter()
+                .map(|policy| (policy.package.clone(), policy.uid)),
+        );
         let policies = load_policies(&self.root, &known).and_then(|policies| {
             export_policy_discovery(&policies)?;
             Ok(policies)
