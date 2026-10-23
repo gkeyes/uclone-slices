@@ -654,7 +654,7 @@ class SlotsViewModelTest {
     }
 
     @Test
-    fun belowAndroid13OnlyUnenrollStaysAvailable() {
+    fun belowAndroid13UnenrollStaysAvailable() {
         val client = GatedProbeRuntimeClient(RuntimeReply.Capabilities(
             TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION,
             launchGateReady = false, processViewReady = false,
@@ -662,7 +662,7 @@ class SlotsViewModelTest {
         client.gate.complete(Unit)
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined, launchSupported = false)
         assertFalse(viewModel.state.value.operationsAllowed)
-        assertTrue(viewModel.state.value.unenrollAllowed)
+        assertTrue(viewModel.state.value.recoveryAllowed)
         val before = client.commands.toList()
         viewModel.onIntent(UiIntent.CreateSlot("Work"))
         assertEquals(before, client.commands)
@@ -675,14 +675,29 @@ class SlotsViewModelTest {
     }
 
     @Test
-    fun aSupportedSystemKeepsUnenrollLockedUntilLaunchSupportIsReady() {
+    fun aHookThatNeverBecomesReadyStillAllowsUnenroll() {
         val client = GatedProbeRuntimeClient(RuntimeReply.Capabilities(
             TEST_RUNTIME_VERSION, TEST_RUNTIME_VERSION,
             launchGateReady = false, processViewReady = true,
         ))
         client.gate.complete(Unit)
         val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
-        assertFalse(viewModel.state.value.unenrollAllowed)
+        assertFalse(viewModel.state.value.operationsAllowed)
+        assertTrue(viewModel.state.value.recoveryAllowed)
+
+        viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
+        viewModel.onIntent(UiIntent.UnenrollConfirmationChanged(true))
+        viewModel.onIntent(UiIntent.ConfirmUnenrollApp)
+
+        assertEquals(RuntimeCommand.Unenroll("com.example.app"), client.commands.last())
+    }
+
+    @Test
+    fun anIncompatibleRuntimeKeepsUnenrollLocked() {
+        val client = GatedProbeRuntimeClient(RuntimeReply.Capabilities("0.0.1", "0.0.1"))
+        client.gate.complete(Unit)
+        val viewModel = slotsViewModel(client, appSource, Dispatchers.Unconfined)
+        assertFalse(viewModel.state.value.recoveryAllowed)
         val before = client.commands.toList()
         viewModel.onIntent(UiIntent.RequestUnenrollApp("com.example.app"))
         assertNull(viewModel.state.value.pendingUnenroll)

@@ -104,7 +104,7 @@ internal fun LandingContent(
                             summary = stringResource(R.string.backup_account_count, snapshot.slots.size),
                             leading = { AppIcon(label, app?.icon, 36.dp) },
                             onClick = { onChooseBackup(snapshot.packageName) },
-                            enabled = slotsState.operationsAllowed,
+                            enabled = slotsState.recoveryAllowed,
                         )
                     }
                 }
