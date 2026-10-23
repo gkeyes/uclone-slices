@@ -4,10 +4,17 @@ import android.app.ActivityOptions
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.view.Gravity
+import android.view.View
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.uclone.slices.v2.R
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** A transparent launch boundary. The target App has not been resumed at this point. */
@@ -17,10 +24,12 @@ class LaunchPreparationActivity : ComponentActivity() {
     private var submitted = false
     private var launchIssued = false
     private var ticket = ""
+    private lateinit var progress: View
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         suppressAnimation()
+        setContentView(progressView())
         ticket = intent.getStringExtra(LaunchPolicyCache.TICKET_EXTRA).orEmpty()
         if (!RootLaunchClient.validTicket(ticket) || savedInstanceState != null) {
             client.cancelAsync(ticket)
@@ -34,8 +43,14 @@ class LaunchPreparationActivity : ComponentActivity() {
         if (submitted || isFinishing || !RootLaunchClient.validTicket(ticket)) return
         submitted = true
         val submittedTicket = ticket
+        // A quick preparation stays invisible; a slow one shows progress and a way out.
+        val reveal = lifecycleScope.launch {
+            delay(PROGRESS_DELAY_MS)
+            progress.visibility = View.VISIBLE
+        }
         lifecycleScope.launch {
             val prepared = client.prepare(submittedTicket)
+            reveal.cancel()
             if (submittedTicket != ticket || !resumed || isFinishing || isDestroyed) {
                 client.cancelAsync(submittedTicket)
                 return@launch
@@ -80,11 +95,43 @@ class LaunchPreparationActivity : ComponentActivity() {
         suppressAnimation()
     }
 
+    private fun progressView(): View {
+        val density = resources.displayMetrics.density
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            visibility = View.INVISIBLE
+            addView(ProgressBar(this@LaunchPreparationActivity))
+            addView(Button(this@LaunchPreparationActivity).apply {
+                setText(android.R.string.cancel)
+                setOnClickListener {
+                    client.cancelAsync(ticket)
+                    finish()
+                }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = (12 * density).toInt() })
+        }
+        progress = panel
+        return FrameLayout(this).apply {
+            addView(panel, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER,
+            ))
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun suppressAnimation() {
         if (Build.VERSION.SDK_INT >= 34) {
             overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, 0, 0)
             overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
         } else overridePendingTransition(0, 0)
+    }
+
+    private companion object {
+        const val PROGRESS_DELAY_MS = 300L
     }
 }

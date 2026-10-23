@@ -154,3 +154,12 @@
 | 读不到的 aggregate 以上次已知 UID 记为未就绪，其他套件策略保持有效；清单列表跳过该套件 | 2026-10-23 审计 R-P2-1（0.2.7 行为） | `one_unreadable_aggregate_does_not_invalidate_other_policies`、`invalid_persisted_aggregate_is_a_state_conflict` |
 | 非就绪套件的 Begin 只拒绝该票据，不断开订阅 | 审计 R-P2-5 / M-P2-2 | `a_begin_for_an_unready_package_keeps_the_system_subscription` |
 | discovery 带本次开机 `boot_id`，system_server 只接受本次开机导出；新增 `uninstall.sh` 删除 `/data/system/uclone-slices-v2` | 审计 R-P2-4 | 打包检查与真机停用/移除验收 |
+
+## v0.3.6：系统框架 Hook 容错与准备进度
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.6`，versionCode 25 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| 安装前先解析全部 Hook 目标，缺一个就整体不装；Android 13 / API 33 以下不装 | 审计 M-P2-4、M-P2-5：`TaskFragment`、`mInTaskFragment`、`mTaskSupervisor` 自 Android 13 起才有 | APK 检查与真机读回 |
+| 运行期单次回调异常只记录并放行该次 resume；Application 绑定异常仍对已登记 UID 失败关闭 | 审计 M-P2-3：一次异常不应停用到重启 | 真机日志 |
+| 准备页 300 ms 后显示进度与取消；Root 辅助程序 30 秒期限后强制结束 | 审计 M-P2-7；30 秒覆盖强停确认（最长约 10 秒）加账号事务排队 | `RootLaunchClientTest` |
