@@ -19,7 +19,7 @@ fn stored_package(root: &Path) -> PackageAggregate {
 fn policy_is_derived_from_the_aggregate_including_a_closed_default() {
     let root = tempfile::tempdir().unwrap();
     let mut aggregate = stored_package(root.path());
-    let first = load_policies(root.path()).unwrap();
+    let first = load_policies(root.path(), &BTreeMap::new()).unwrap();
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].uid, 10123);
     assert_eq!(first[0].default.as_deref(), Some("base"));
@@ -28,7 +28,10 @@ fn policy_is_derived_from_the_aggregate_including_a_closed_default() {
         .unwrap()
         .save(&aggregate)
         .unwrap();
-    assert_eq!(load_policies(root.path()).unwrap()[0].default, None);
+    assert_eq!(
+        load_policies(root.path(), &BTreeMap::new()).unwrap()[0].default,
+        None
+    );
 }
 
 #[test]
@@ -232,4 +235,54 @@ fn process_registry_survives_daemon_restart_but_not_device_reboot() {
     assert!(directory.join("record").exists());
     reset_process_registry(root.path(), "boot-b").unwrap();
     assert!(!directory.exists());
+}
+
+#[test]
+fn one_unreadable_aggregate_does_not_invalidate_other_policies() {
+    let root = tempfile::tempdir().unwrap();
+    stored_package(root.path());
+    let broken = root.path().join("packages").join("com.example.broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(broken.join("aggregate.json"), b"{not-json").unwrap();
+
+    let policies = load_policies(root.path(), &BTreeMap::new()).unwrap();
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0].package, "com.example.app");
+
+    let known = BTreeMap::from([("com.example.broken".to_owned(), 10200)]);
+    let policies = load_policies(root.path(), &known).unwrap();
+    let broken = policies
+        .iter()
+        .find(|policy| policy.package == "com.example.broken")
+        .unwrap();
+    assert_eq!(broken.uid, 10200);
+    assert!(!broken.ready);
+    assert!(
+        policies
+            .iter()
+            .any(|policy| policy.package == "com.example.app")
+    );
+
+    let gate = LaunchGate::new(root.path());
+    gate.refresh().unwrap();
+    assert!(gate.lock().unwrap().policies_valid);
+}
+
+#[test]
+fn a_begin_for_an_unready_package_keeps_the_system_subscription() {
+    let root = tempfile::tempdir().unwrap();
+    let gate = LaunchGate::new(root.path());
+    let (daemon, mut system) = UnixStream::pair().unwrap();
+    let subscriber = Arc::clone(&gate);
+    let handle = thread::spawn(move || subscriber.subscribe(BufReader::new(daemon)));
+    let begin = json!({"type": "begin", "ticket": "a".repeat(64), "package": "com.example.app"});
+    system.write_all(format!("{begin}\n").as_bytes()).unwrap();
+    // An Ack beyond the published revision ends the subscription with its own error,
+    // which proves the refused Begin did not end it first.
+    system
+        .write_all(b"{\"type\":\"ack\",\"revision\":999999}\n")
+        .unwrap();
+    let error = handle.join().unwrap().unwrap_err();
+    assert_eq!(error.to_string(), "invalid revision");
+    assert!(gate.lock().unwrap().tickets.is_empty());
 }

@@ -145,3 +145,12 @@
 |---|---|---|
 | Manager / KernelSU / crate / wire `0.3.4`，versionCode 23 | 系统框架门禁修复随 Manager 发布，Runtime 协议须与 Manager 版本一致 | 版本对齐、共享 fixture |
 | 缓存锁内只排队启动事件，释放后由单独的投递锁按序发送 | 2026-10-23 审计 M-P1-1：发送失败路径取绑定锁，绑定线程持绑定锁查询缓存 | `LaunchPolicyCacheTest` 锁外投递与顺序、发送线程内断开 |
+
+## v0.3.5：Runtime 可用性
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.5`，versionCode 24 | discovery 清单新增 `boot_id`，Manager 与 Runtime 须同版 | 版本对齐、共享 fixture |
+| 读不到的 aggregate 以上次已知 UID 记为未就绪，其他套件策略保持有效；清单列表跳过该套件 | 2026-10-23 审计 R-P2-1（0.2.7 行为） | `one_unreadable_aggregate_does_not_invalidate_other_policies`、`invalid_persisted_aggregate_is_a_state_conflict` |
+| 非就绪套件的 Begin 只拒绝该票据，不断开订阅 | 审计 R-P2-5 / M-P2-2 | `a_begin_for_an_unready_package_keeps_the_system_subscription` |
+| discovery 带本次开机 `boot_id`，system_server 只接受本次开机导出；新增 `uninstall.sh` 删除 `/data/system/uclone-slices-v2` | 审计 R-P2-4 | 打包检查与真机停用/移除验收 |

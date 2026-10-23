@@ -5,7 +5,7 @@
 
 UClone Slices 是一款适用于 Root Android / KernelSU 设备的多账号空间管理工具。它可以为同一个 App 创建多个独立账号空间，并在账号之间快速切换。
 
-当前开发候选版为 **v0.3.4**，Runtime 协议 ID 为 `0.3.4`。修正系统框架启动门禁两把锁顺序相反可能卡死 system_server 的问题；保留 0.3.3 的共享挂载隔离和运行异常 App 的账号列表；保留 Xposed API 102、启动前默认账号门禁和按进程固定的 CE/DE 视图；Manager 与 KernelSU 模块需成对更新，启用 Vector 的系统框架作用域并重启。完整真机行为验收状态见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。
+当前开发候选版为 **v0.3.5**，Runtime 协议 ID 为 `0.3.5`。单个损坏的账号记录不再让其他 App 无法启动；切换中点开 App 不再断开整条系统连接；停用或移除模块后不再拦截原来登记的 App；保留 0.3.4 的启动门禁锁顺序修正；保留 0.3.3 的共享挂载隔离和运行异常 App 的账号列表；保留 Xposed API 102、启动前默认账号门禁和按进程固定的 CE/DE 视图；Manager 与 KernelSU 模块需成对更新，启用 Vector 的系统框架作用域并重启。完整真机行为验收状态见 [docs/DEVICE_QA.md](docs/DEVICE_QA.md)。
 
 ## 功能
 
@@ -46,7 +46,7 @@ Release 产物由 GitHub Actions 从同一提交 SHA 生成：
 1. 安装 Manager APK。
 2. 在 KernelSU 中刷入模块 ZIP。
 3. 重启手机并解锁 user0。
-4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.3.4`（协议 ID）且启动前切换已就绪。
+4. 打开 Manager，授予 Root 权限，确认标题旁的状态点为绿色；运行环境页显示 Runtime 版本 `0.3.5`（协议 ID）且启动前切换已就绪。
 
 Release APK 使用固定证书签名，CI 会校验证书；覆盖安装即可，不要卸载或清数据。
 

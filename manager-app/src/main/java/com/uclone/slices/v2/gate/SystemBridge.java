@@ -41,7 +41,12 @@ final class SystemBridge {
             File file = new File("/data/system/uclone-slices-v2/enrollment.json");
             StructStat metadata = Os.lstat(file.getPath());
             if (metadata.st_uid == 0 && (metadata.st_mode & 0022) == 0 && metadata.st_size <= FRAME_LIMIT) {
-                cache.discovery(new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)));
+                JSONObject manifest = new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+                // The module exports discovery on every boot. A manifest from an earlier boot
+                // means the module is disabled or removed, so its Apps are no longer managed.
+                String boot = new String(Files.readAllBytes(new File("/proc/sys/kernel/random/boot_id").toPath()),
+                    StandardCharsets.UTF_8).trim();
+                if (boot.equals(manifest.optString("boot_id"))) cache.discovery(manifest);
             }
         } catch (Exception ignored) {
             // No launch permission comes from discovery. Zygisk separately discovers
