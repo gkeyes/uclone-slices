@@ -172,3 +172,11 @@
 | 启动通道在等待 user0 解锁前绑定；收敛前最多等系统订阅 30 秒 | 审计 R-P2-2、R-P2-3；system_server 重连退避最长 4 秒 | `ucloned.log` 真机时序 |
 | 无系统订阅时阻止新进程直接成功 | 断线时 system_server 门禁与 Application 绑定均失败关闭，specialize 也要求连接 | `blocking_without_a_system_subscription_does_not_fail_the_transaction` |
 | Rust 与原生 `connect_control` 要求对端 `SO_PEERCRED.uid == 0` | 审计 R-P2-3：抽象名称全网络命名空间共享 | 原生 lifecycle `squatted` |
+
+## v0.3.8：原生启动期限
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.8`，versionCode 27 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| process-view worker 4 秒、companion 等 Runtime 9 秒、App 等批准 9.5 秒 | 审计 N-P2-1：原先各层都从 0 起算 5 秒且 worker 无期限；App 端须短于 ActivityManager 10 秒进程启动上限 | `a_stalled_process_view_worker_is_killed_at_its_deadline`、原生 lifecycle |
+| companion 等不到请求时把通道设为拒绝 | 审计 N-P2-1：App 不必再空等自己的期限 | 原生 lifecycle |

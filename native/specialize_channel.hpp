@@ -66,11 +66,14 @@ class SpecializeChannel {
   }
 
   bool request() { return transition(kPending, kRequested); }
-  bool await_request() { return wait_changed(kPending) == kRequested; }
+  bool await_request() { return wait_changed(kPending, kFrameTimeoutMs) == kRequested; }
   bool approve() { return transition(kRequested, kApproved); }
   void deny() { (void)transition(kRequested, kDenied); }
+  // The companion stops waiting for a request: the App's later request fails at once
+  // instead of waiting out its own approval deadline.
+  void refuse() { (void)transition(kPending, kDenied); }
   bool await_approval() {
-    uint32_t result = wait_changed(kRequested);
+    uint32_t result = wait_changed(kRequested, kApprovalTimeoutMs);
     if (result == kApproved) return true;
     if (result == kDenied) errno = EACCES;
     else if (result != kInvalid) errno = EPROTO;
@@ -104,11 +107,11 @@ class SpecializeChannel {
     return true;
   }
 
-  uint32_t wait_changed(uint32_t expected) {
+  uint32_t wait_changed(uint32_t expected, int timeout_ms) {
     timespec deadline{};
     if (!state_ || clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return kInvalid;
-    deadline.tv_sec += kFrameTimeoutMs / 1000;
-    deadline.tv_nsec += (kFrameTimeoutMs % 1000) * 1000000L;
+    deadline.tv_sec += timeout_ms / 1000;
+    deadline.tv_nsec += (timeout_ms % 1000) * 1000000L;
     if (deadline.tv_nsec >= 1000000000L) { ++deadline.tv_sec; deadline.tv_nsec -= 1000000000L; }
     for (;;) {
       uint32_t value = phase();

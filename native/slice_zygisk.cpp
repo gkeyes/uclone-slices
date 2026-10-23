@@ -195,7 +195,12 @@ void companion(int socket) {
   auto channel = slice::SpecializeChannel::receive(socket);
   if (!channel) { rejected("companion.channel", errno, pid); return; }
   if (!slice::write_all(socket, "ARMED\n")) { rejected("companion.armed", errno, pid); return; }
-  if (!channel->await_request()) { rejected("companion.request", errno, pid); return; }
+  if (!channel->await_request()) {
+    int error = errno;
+    channel->refuse();
+    rejected("companion.request", error, pid);
+    return;
+  }
   // Every subsequent failure wakes the App with a refusal rather than leaving
   // it waiting for the deadline. Only a confirmed Runtime result approves it.
   struct DenyUnlessApproved {
@@ -211,7 +216,7 @@ void companion(int socket) {
       ",\"uid\":" + std::to_string(uid) + ",\"started\":" + std::to_string(started) +
       ",\"package\":\"" + package + "\"}\n";
   if (!slice::write_all(control.get(), frame)) { rejected("companion.control_write", errno, pid); return; }
-  auto response = slice::frame(control.get());
+  auto response = slice::frame(control.get(), slice::kRuntimeReplyTimeoutMs);
   if (response != "{\"ok\":{}}") {
     rejected("companion.control_reply", response ? EACCES : errno, pid); return;
   }
