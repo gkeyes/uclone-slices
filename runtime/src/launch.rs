@@ -245,16 +245,41 @@ impl LaunchGate {
         self.refresh()?;
         let (connection, revision) = {
             let state = self.lock()?;
-            (
-                state
-                    .connection
-                    .as_ref()
-                    .ok_or_else(|| refused("system support disconnected"))?
-                    .id,
-                state.revision,
-            )
+            // Without a system subscription nothing configured can start: system_server
+            // gates and rejects Application binding while disconnected, and specialization
+            // requires a live connection. A later subscription receives the blocked state
+            // with its first snapshot, so there is nothing to wait for here.
+            let Some(connection) = state.connection.as_ref() else {
+                return Ok(());
+            };
+            (connection.id, state.revision)
         };
         self.await_ack(connection, revision)
+    }
+
+    /// Waits a bounded time for system_server to subscribe and acknowledge the current
+    /// snapshot, so boot convergence can issue launch permits. Returns whether it did.
+    pub fn await_system(&self, timeout: Duration) -> io::Result<bool> {
+        let deadline = Instant::now() + timeout;
+        let mut state = self.lock()?;
+        loop {
+            if state
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.ack >= state.revision)
+            {
+                return Ok(true);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            state = self
+                .changed
+                .wait_timeout(state, remaining)
+                .map_err(|_| refused("launch acknowledgement lock failed"))?
+                .0;
+        }
     }
 
     /// The daemon calls this while still holding its account transaction lock. Until
@@ -1175,6 +1200,11 @@ pub fn connect_control() -> io::Result<UnixStream> {
         &socket,
         &SocketAddrUnix::new_abstract_name(SOCKET_NAME.as_bytes())?,
     )?;
+    // Abstract names are shared by every process in the network namespace; only the Root
+    // daemon may answer for it.
+    if rustix::net::sockopt::socket_peercred(&socket)?.uid.as_raw() != 0 {
+        return Err(refused("launch socket is not served by Root"));
+    }
     Ok(UnixStream::from(socket))
 }
 

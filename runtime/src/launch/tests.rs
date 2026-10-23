@@ -286,3 +286,13 @@ fn a_begin_for_an_unready_package_keeps_the_system_subscription() {
     assert_eq!(error.to_string(), "invalid revision");
     assert!(gate.lock().unwrap().tickets.is_empty());
 }
+
+#[test]
+fn blocking_without_a_system_subscription_does_not_fail_the_transaction() {
+    let root = tempfile::tempdir().unwrap();
+    stored_package(root.path());
+    let gate = LaunchGate::new(root.path());
+    gate.block_new_processes("com.example.app").unwrap();
+    assert!(gate.lock().unwrap().blocked.contains("com.example.app"));
+    assert!(!gate.await_system(Duration::from_millis(50)).unwrap());
+}

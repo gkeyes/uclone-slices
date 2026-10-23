@@ -154,6 +154,11 @@ inline int connect_control() {
   timeval timeout{5, 0};
   if (setsockopt(candidate.get(), SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) != 0 ||
       connect(candidate.get(), reinterpret_cast<sockaddr*>(&address), length) != 0) return -1;
+  // Any process can bind an abstract name first; only the Root daemon may answer.
+  ucred peer{};
+  socklen_t size = sizeof(peer);
+  if (getsockopt(candidate.get(), SOL_SOCKET, SO_PEERCRED, &peer, &size) != 0) return -1;
+  if (size != sizeof(peer) || peer.uid != 0) { errno = EACCES; return -1; }
   return dup(candidate.get());
 }
 

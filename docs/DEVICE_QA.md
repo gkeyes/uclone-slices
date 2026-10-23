@@ -1,3 +1,10 @@
+# v0.3.7：开机时序与启动通道（审计 R-P2-2、R-P2-3）
+
+1. 成对覆盖安装 Manager / KernelSU 0.3.7 / 26，手动重启，运行环境页显示 `0.3.7`。
+2. 为一个 App 打开“重启后启动”，重启并解锁：App 被启动；`ucloned.log` 中没有 `system support disconnected`，也没有 `system support not subscribed yet`（如出现则记录解锁到连接的时间）。
+3. 备份进行中重启：解锁后中断的备份被恢复，App 不再停在停用状态。
+4. 主机测试：原生 lifecycle 新增 `squatted`（非 Root 抢先绑定启动名称时拒绝且不调用 Runtime），Rust 覆盖无系统连接时阻止新进程不失败；真机仍需验收。
+
 # v0.3.6：系统框架 Hook 容错与准备进度（审计 M-P2-3、M-P2-4、M-P2-5、M-P2-7）
 
 1. 成对覆盖安装 Manager / KernelSU 0.3.6 / 25，手动重启，运行环境页显示 `0.3.6`。
