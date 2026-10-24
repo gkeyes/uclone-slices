@@ -260,6 +260,10 @@ class LaunchPolicyCacheTest {
         assertTrue(cache.gateRequired(target, uid, -1, null, true, null))
         cache.begin(target, false)
         assertTrue(events.last { it.optString("type") == "begin" }.getBoolean("keep_active"))
+        // An external start replacing that pending ticket decides again and switches.
+        assertTrue(cache.gateRequired(target, uid, 1000, null, false, null))
+        cache.begin(target, true)
+        assertFalse(events.last { it.optString("type") == "begin" }.getBoolean("keep_active"))
         // A fresh launch from outside the session still switches to the default account.
         cache.homeRequested()
         assertTrue(cache.gateRequired(target, uid, 1000, null, false, null))

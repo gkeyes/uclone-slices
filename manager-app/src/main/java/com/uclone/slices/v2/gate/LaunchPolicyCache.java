@@ -145,17 +145,22 @@ final class LaunchPolicyCache {
             sessions.manual(target, uid);
             return false;
         }
-        if (pending.containsKey(target)) return true;
         JSONObject policy = packages.get(target);
-        if (!connected || !valid || policy == null || !policy.optBoolean("ready")) return true;
-        boolean switching = !policy.isNull("default") && !policy.optString("active").equals(policy.optString("default")) &&
+        boolean usable = connected && valid && policy != null && policy.optBoolean("ready");
+        boolean switching = usable && !policy.isNull("default") &&
+            !policy.optString("active").equals(policy.optString("default")) &&
             !sessions.continues(target, callerUid, taskResume);
         // An updated App, or an APK a reboot renumbered, is refused at specialization until root
         // re-binds it, which the preparation step does. The path comparison catches an update
         // before root has refreshed its policy. Inside a session that keeps its account, the
-        // preparation only re-binds and must not switch to the default account.
-        boolean stale = policy.optBoolean("stale") || (sourceDir != null && !sourceDir.equals(policy.optString("apk")));
+        // preparation only re-binds and must not switch to the default account. The reason is
+        // decided per start, before a pending ticket short-circuits, so a replacing start does
+        // not inherit an earlier start's decision.
+        boolean stale = usable &&
+            (policy.optBoolean("stale") || (sourceDir != null && !sourceDir.equals(policy.optString("apk"))));
         if (stale && !switching) keepActive.add(target); else keepActive.remove(target);
+        if (pending.containsKey(target)) return true;
+        if (!usable) return true;
         return stale || switching;
     }
 
