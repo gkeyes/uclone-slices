@@ -164,11 +164,9 @@ where
     /// so the caller does not mark this boot as reconciled and retries the recovery.
     pub fn reconcile_boot(&mut self) -> Result<(), RuntimeError> {
         let recovered = self.recover_account_io_intents();
+        self.restamp_renumbered_apks()?;
         let names = self.packages.list().map_err(adapter_error)?;
         for package in names {
-            if let Err(error) = self.restamp_renumbered_apk(&package) {
-                eprintln!("op=reconcile_boot package={package} step=restamp_apk error={error}");
-            }
             if let Err(error) = self.package_snapshot_with_context(&package, ReadyLoadContext::Boot)
             {
                 eprintln!(
@@ -1676,6 +1674,17 @@ where
 
     fn package_snapshot(&mut self, package: &PackageName) -> Result<PackageSnapshot, RuntimeError> {
         self.package_snapshot_with_context(package, ReadyLoadContext::Interactive)
+    }
+
+    /// Runs at daemon start, as soon as launches can be served, and again in boot convergence
+    /// for a package whose interrupted operation was recovered in between.
+    pub fn restamp_renumbered_apks(&mut self) -> Result<(), RuntimeError> {
+        for package in self.packages.list().map_err(adapter_error)? {
+            if let Err(error) = self.restamp_renumbered_apk(&package) {
+                eprintln!("op=restamp_apk package={package} error={error}");
+            }
+        }
+        Ok(())
     }
 
     /// A reboot can renumber /data. The APK at the same path with the same inode is the same

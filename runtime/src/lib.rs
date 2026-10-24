@@ -11,7 +11,8 @@ mod usecases;
 pub mod validation;
 
 pub use composition::{
-    CompositionError, ProductionRuntime, production, production_with_launch_gate,
+    CompositionError, ProductionRuntime, backup_lease_covers, production,
+    production_with_launch_gate,
 };
 pub use usecases::RuntimeError;
 

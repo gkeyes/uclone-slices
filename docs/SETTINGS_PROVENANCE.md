@@ -222,3 +222,13 @@
 | 开机收敛时，APK 路径、inode、UID 都相同、只有设备号改变的包直接更新记录，不需要签名 | 复查 N3：服务、推送、Provider、Job 启动没有 Activity 可导到准备页，重启后会在 specialize 被拒；同一路径同一 inode 就是同一个文件。真正的更新（inode 或路径改变）仍须经准备页重新绑定 | `boot_restamps_an_apk_whose_device_was_renumbered_but_not_a_replaced_one` |
 | Begin 帧带 `keep_active`：过期但不需要切换账号（同一使用过程、无默认或已在默认）时为 true，root 只重新绑定并为当前账号发许可 | 复查 N2：原先过期判断在使用过程判断之前，后台更新后切回会被换成默认账号 | `aStaleAppInsideItsSessionIsReBoundWithoutSwitchingAccounts`、`a_begin_for_a_stale_package_is_accepted_so_the_gate_can_re_bind_it` |
 | 恢复时发现准备页已显示过的 ticket 仍在，取消它并放行这次恢复 | 复查 N1：准备失败后 system_server 仍留着 ticket，之后恢复被挡住却不再显示准备页；成功的准备会用许可消耗 ticket，所以已显示过还在就表示准备已结束 | `aResumeAfterAnEndedPreparationIsReleasedInsteadOfHeld` |
+
+## v0.3.14：完整审计 2026-10-24 的 G-1、P1-11、R1
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.14`，versionCode 33 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| 排队中的准备页发现最上层是另一个 ticket 的准备页时，取消自己的 ticket（`yieldToGate`） | 审计 G-1：原先直接返回，ticket 留在 pending/queued，之后从最近任务切回都被挡住且不显示准备页 | `aGateQueuedBehindAnotherAppsPreparationIsCancelledNotHeld` |
+| `uclone_archive` 备份前要求该包有 Ready 的备份租约，且请求的账号在租约范围内（`backup_lease_covers`） | 审计旧 P1-11：原先只检查路径形状，App 运行中也能读取账号数据，备份可能不一致 | `the_archive_helper_reads_accounts_only_under_a_ready_backup_lease` |
+| 设备号重新记录在启动通道绑定后立即执行，开机收敛（恢复中断操作之后）再执行一次 | 审计 R1：原先要等解锁和系统订阅，期间后台启动被拒 | `boot_restamps_an_apk_whose_device_was_renumbered_but_not_a_replaced_one` |
+| README 写明隔离范围：只隔离 CE/DE，外部存储、Keystore、AccountManager、Job、FCM 共用 | 审计 P2-A：范围由拥有者决定，先如实写明现状 | 文档 |
