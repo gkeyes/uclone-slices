@@ -691,6 +691,17 @@ impl MemoryAndroidOps {
         }
     }
 
+    pub(crate) fn renumber_device(&mut self, package: &PackageName, device: u64) {
+        if let Some(inspection) = self.inspections.get_mut(package) {
+            let Ok(identity) =
+                PackageIdentity::new(10_000, format!("/data/app/{package}/base.apk"), device, 2)
+            else {
+                return;
+            };
+            inspection.identity = identity;
+        }
+    }
+
     pub(crate) fn change_uid(&mut self, package: &PackageName) {
         if let Some(inspection) = self.inspections.get_mut(package) {
             let Ok(identity) =

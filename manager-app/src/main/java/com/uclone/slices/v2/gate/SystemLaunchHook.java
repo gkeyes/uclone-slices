@@ -230,6 +230,7 @@ public final class SystemLaunchHook extends XposedModule {
         if (context == null || globalLock == null || preparation == null) return false;
         String ticket = bridge.cache.begin(target.packageName, false);
         if (ticket == null || !bridge.cache.ticketPending(ticket)) return false;  // Root is disconnected.
+        if (bridge.cache.releaseShown(ticket)) return false;  // Its preparation already ended.
         if (!bridge.cache.queueGate(ticket)) return true;  // A gate for this ticket is already on its way.
         int expectedTask = taskId(record);
         new Handler(Looper.getMainLooper()).post(() -> {

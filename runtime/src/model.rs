@@ -199,6 +199,14 @@ impl PackageIdentity {
     pub(crate) fn apk_stamp(&self) -> (&str, u64, u64) {
         (&self.apk_path, self.apk_device, self.apk_inode)
     }
+
+    /// The same installed file seen through a renumbered /data device, as after some reboots.
+    pub(crate) fn only_device_differs(&self, installed: &Self) -> bool {
+        self.uid == installed.uid
+            && self.apk_path == installed.apk_path
+            && self.apk_inode == installed.apk_inode
+            && self.apk_device != installed.apk_device
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

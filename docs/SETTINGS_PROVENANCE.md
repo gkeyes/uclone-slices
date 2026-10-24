@@ -213,3 +213,12 @@
 | 策略帧增加 `apk`（绑定时的 APK 路径）和 `stale`（记录的 APK 已不是安装中的文件）；`ready` 含义不变 | 用户回报：App 更新或重启后直接打开会卡屏，只有从 Slices 进入才行。原因是安装记录过期时 specialize 拒绝启动，而只有 Manager 打开时才会重新绑定 | `a_replaced_apk_marks_the_policy_stale_without_changing_readiness`、`a_begin_for_a_stale_package_is_accepted_so_the_gate_can_re_bind_it` |
 | Hook 在 `stale` 或安装路径与 `apk` 不同时走启动准备；准备页读取目标 App 签名随 prepare 送出，root 在 APK 已变时用它重新绑定（与 Manager 打开时相同的 `rebind_package`）后再发许可 | 路径比较让更新后的第一次启动也走准备步骤，不必等 root 刷新策略；签名不符时照旧拒绝 | `anUpdatedOrStaleApkGoesThroughPreparationToBeReBound`、`aPrepareRequestCarriesOnlyAValidSigner`、`a_prepare_request_may_carry_the_installed_signer` |
 | 过期包不发启动许可 | 原先会发许可后在 specialize 被拒、App 卡在启动画面 | 真机验收 |
+
+## v0.3.13：复查 0.3.12 的 N1–N3
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.13`，versionCode 32 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| 开机收敛时，APK 路径、inode、UID 都相同、只有设备号改变的包直接更新记录，不需要签名 | 复查 N3：服务、推送、Provider、Job 启动没有 Activity 可导到准备页，重启后会在 specialize 被拒；同一路径同一 inode 就是同一个文件。真正的更新（inode 或路径改变）仍须经准备页重新绑定 | `boot_restamps_an_apk_whose_device_was_renumbered_but_not_a_replaced_one` |
+| Begin 帧带 `keep_active`：过期但不需要切换账号（同一使用过程、无默认或已在默认）时为 true，root 只重新绑定并为当前账号发许可 | 复查 N2：原先过期判断在使用过程判断之前，后台更新后切回会被换成默认账号 | `aStaleAppInsideItsSessionIsReBoundWithoutSwitchingAccounts`、`a_begin_for_a_stale_package_is_accepted_so_the_gate_can_re_bind_it` |
+| 恢复时发现准备页已显示过的 ticket 仍在，取消它并放行这次恢复 | 复查 N1：准备失败后 system_server 仍留着 ticket，之后恢复被挡住却不再显示准备页；成功的准备会用许可消耗 ticket，所以已显示过还在就表示准备已结束 | `aResumeAfterAnEndedPreparationIsReleasedInsteadOfHeld` |

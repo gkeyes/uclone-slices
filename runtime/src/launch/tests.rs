@@ -103,7 +103,9 @@ fn a_begin_for_a_stale_package_is_accepted_so_the_gate_can_re_bind_it() {
     let subscriber = Arc::clone(&gate);
     let handle = thread::spawn(move || subscriber.subscribe(BufReader::new(daemon)));
     let ticket = "a".repeat(64);
-    let begin = json!({"type": "begin", "ticket": ticket, "package": "com.example.app"});
+    let begin = json!({
+        "type": "begin", "ticket": ticket, "package": "com.example.app", "keep_active": true,
+    });
     system.write_all(format!("{begin}\n").as_bytes()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !gate.ticket_live(&ticket) {
@@ -114,6 +116,7 @@ fn a_begin_for_a_stale_package_is_accepted_so_the_gate_can_re_bind_it() {
         thread::sleep(Duration::from_millis(10));
     }
     assert!(gate.installed_apk_changed("com.example.app").unwrap());
+    assert!(gate.lock().unwrap().keep_active.contains(&ticket));
     system
         .write_all(b"{\"type\":\"ack\",\"revision\":999999}\n")
         .unwrap();
