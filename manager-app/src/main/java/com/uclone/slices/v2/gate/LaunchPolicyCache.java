@@ -26,6 +26,7 @@ final class LaunchPolicyCache {
     static final String PERMIT_EXTRA = MANAGER + ".LAUNCH_PERMIT";
     static final String TICKET_EXTRA = MANAGER + ".LAUNCH_TICKET";
     static final String PACKAGE_EXTRA = MANAGER + ".LAUNCH_PACKAGE";
+    static final String ORIGINAL_EXTRA = MANAGER + ".LAUNCH_ORIGINAL";
     private final String build;
     private final Consumer<JSONObject> send;
     private final SecureRandom random = new SecureRandom();
