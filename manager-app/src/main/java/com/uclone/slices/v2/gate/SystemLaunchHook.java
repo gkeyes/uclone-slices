@@ -241,7 +241,11 @@ public final class SystemLaunchHook extends XposedModule {
                     Object focused = FrameworkAccess.call(rootWindow, "getTopDisplayFocusedRootTask");
                     Object top = topActivity(focused);
                     ActivityInfo topInfo = info(top);
-                    if (topInfo != null && LaunchPolicyCache.GATE.equals(topInfo.name)) return;
+                    if (topInfo != null && LaunchPolicyCache.GATE.equals(topInfo.name)) {
+                        Intent shown = (Intent) field(top, "intent");
+                        bridge.cache.yieldToGate(ticket, shown == null ? null : shown.getStringExtra(LaunchPolicyCache.TICKET_EXTRA));
+                        return;
+                    }
                     if (top == null || taskId(top) != expectedTask) {
                         bridge.cache.cancel(ticket);
                         return;

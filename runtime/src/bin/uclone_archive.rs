@@ -9,8 +9,8 @@ use uclone_slices_runtime::archive::{
     write_response,
 };
 use uclone_slices_runtime::layout::{
-    CE_SLOTS_ROOT, CE_TRANSFERS_ROOT, DE_SLOTS_ROOT, DE_TRANSFERS_ROOT, USER_CE_ROOT, USER_DE_ROOT,
-    manager_cache_roots,
+    CE_SLOTS_ROOT, CE_TRANSFERS_ROOT, DE_SLOTS_ROOT, DE_TRANSFERS_ROOT, RUNTIME_ROOT, USER_CE_ROOT,
+    USER_DE_ROOT, manager_cache_roots,
 };
 use uclone_slices_runtime::validation;
 
@@ -49,6 +49,18 @@ fn run() -> Result<HelperResponse, ArchiveError> {
                     &source.de_path,
                 )?;
             }
+            // Account data is read only while Runtime holds a backup lease: the App is
+            // stopped and its view is on Base, so the archive is consistent.
+            let slots: Vec<&str> = request
+                .sources
+                .iter()
+                .map(|source| source.source_slot.as_str())
+                .collect();
+            require(uclone_slices_runtime::backup_lease_covers(
+                &runtime_root(),
+                &request.package,
+                &slots,
+            ))?;
             let mut sink = write_progress;
             let manifest = create_backup_with_progress(
                 *request,
@@ -91,6 +103,10 @@ fn write_progress(done: u64, total: u64) {
         "{{\"progress\":{{\"done\":{done},\"total\":{total}}}}}"
     );
     let _ = stdout.flush();
+}
+
+fn runtime_root() -> PathBuf {
+    env::var_os("UCLONE_RUNTIME_ROOT").map_or_else(|| PathBuf::from(RUNTIME_ROOT), PathBuf::from)
 }
 
 fn reject_arguments() -> Result<(), ArchiveError> {

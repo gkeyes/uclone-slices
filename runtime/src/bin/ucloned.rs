@@ -101,6 +101,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|error| error.to_string())?;
         prepared
     }))?;
+    // Background starts (boot broadcasts, pushes, jobs) only reach specialization, which
+    // refuses a stale stamp. Re-stamping a reboot's renumbered /data right after the launch
+    // name is bound, before unlock and boot convergence, keeps that window short.
+    let restamp_result = (|| {
+        let _transaction = transaction_lock
+            .lock()
+            .map_err(|_| "transaction lock failed".to_owned())?;
+        let result = production_with_launch_gate(&root, build_id.clone(), Arc::clone(&gate))
+            .map_err(|error| error.to_string())
+            .and_then(|mut runtime| {
+                runtime
+                    .restamp_renumbered_apks()
+                    .map_err(|error| error.to_string())
+            });
+        gate.finish_transaction()
+            .map_err(|error| error.to_string())?;
+        result
+    })();
+    if let Err(error) = restamp_result {
+        eprintln!("ucloned early restamp: {error}");
+    }
     // The launch name is bound before waiting for unlock, which leaves an App no window to
     // claim it first, and lets system_server subscribe while the user is still locked.
     wait_for_user0_ready();

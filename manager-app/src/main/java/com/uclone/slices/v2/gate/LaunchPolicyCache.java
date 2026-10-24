@@ -231,6 +231,16 @@ final class LaunchPolicyCache {
      * dropped such a ticket, so it is released here and that resume proceeds, rather than
      * being held with no gate on screen. The next resume gates again with a new ticket.
      */
+    /**
+     * A queued gate found another preparation already on top. Only that preparation's own
+     * ticket may wait for it; any other ticket is cancelled, so its App's next resume gates
+     * again instead of being held behind a gate that will never show for it.
+     */
+    void yieldToGate(String ticket, String shownTicket) {
+        if (ticket.equals(shownTicket)) return;
+        cancel(ticket);
+    }
+
     boolean releaseShown(String ticket) {
         boolean released;
         synchronized (this) {

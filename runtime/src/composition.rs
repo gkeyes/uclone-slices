@@ -36,6 +36,10 @@ impl ProductionRuntime {
         self.inner.reconcile_boot()
     }
 
+    pub fn restamp_renumbered_apks(&mut self) -> Result<(), RuntimeError> {
+        self.inner.restamp_renumbered_apks()
+    }
+
     pub fn prepare_default_account(
         &mut self,
         package: &str,
@@ -64,6 +68,30 @@ impl ProductionRuntime {
     pub(crate) fn inner_mut(&mut self) -> &mut InnerRuntime {
         &mut self.inner
     }
+}
+
+/// Whether a Ready backup lease of `package` covers every slot in `slots`. The archive helper
+/// reads account data only under such a lease: the App is stopped and its view is on Base.
+pub fn backup_lease_covers(runtime_root: &Path, package: &str, slots: &[&str]) -> bool {
+    use crate::model::{AccountIoKind, AccountIoPhase, AccountIoScope};
+    use crate::ports::PackageStore as _;
+    let Ok(package) = crate::model::PackageName::new(package) else {
+        return false;
+    };
+    let Ok(Some(intent)) = FilePackageStore::open(runtime_root)
+        .and_then(|store| store.load_account_io_intent(&package))
+    else {
+        return false;
+    };
+    intent.kind == AccountIoKind::Backup
+        && intent.phase == AccountIoPhase::Ready
+        && match &intent.scope {
+            Some(AccountIoScope::AllAccounts) => true,
+            Some(AccountIoScope::Account { slot }) => {
+                slots.iter().all(|requested| *requested == slot.as_str())
+            }
+            None => false,
+        }
 }
 
 pub fn production(
@@ -104,4 +132,83 @@ fn compose(
     Ok(ProductionRuntime {
         inner: Runtime::new(packages, slots, android),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+    use crate::model::{
+        AccountIoIntent, AccountIoKind, AccountIoPhase, AccountIoScope, AccountIoToken,
+        PackageName, SlotId,
+    };
+    use crate::ports::PackageStore as _;
+
+    fn save_backup_intent(root: &Path, scope: AccountIoScope, phase: AccountIoPhase) {
+        let intent = AccountIoIntent {
+            schema_version: 2,
+            io_token: AccountIoToken::from_bytes([7; 16]),
+            package: PackageName::new("com.example.app").unwrap(),
+            kind: AccountIoKind::Backup,
+            scope: Some(scope),
+            transfer_id: None,
+            mappings: Vec::new(),
+            archived_state: None,
+            previous_active_slot: SlotId::base(),
+            previous_launch_after_reboot: false,
+            previous_was_running: false,
+            previous_enabled_state: None,
+            maintenance_active: false,
+            phase,
+            completed: Vec::new(),
+        };
+        FilePackageStore::open(root)
+            .unwrap()
+            .save_account_io_intent(&intent)
+            .unwrap();
+    }
+
+    #[test]
+    fn the_archive_helper_reads_accounts_only_under_a_ready_backup_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let package = "com.example.app";
+        assert!(!backup_lease_covers(root.path(), package, &["base"]));
+
+        save_backup_intent(
+            root.path(),
+            AccountIoScope::AllAccounts,
+            AccountIoPhase::Preparing,
+        );
+        assert!(!backup_lease_covers(root.path(), package, &["base"]));
+
+        save_backup_intent(
+            root.path(),
+            AccountIoScope::AllAccounts,
+            AccountIoPhase::Ready,
+        );
+        assert!(backup_lease_covers(
+            root.path(),
+            package,
+            &["base", "slot-1"]
+        ));
+        assert!(!backup_lease_covers(
+            root.path(),
+            "com.example.other",
+            &["base"]
+        ));
+
+        let slot = SlotId::new("slot-1").unwrap();
+        save_backup_intent(
+            root.path(),
+            AccountIoScope::Account { slot },
+            AccountIoPhase::Ready,
+        );
+        assert!(backup_lease_covers(root.path(), package, &["slot-1"]));
+        assert!(!backup_lease_covers(
+            root.path(),
+            package,
+            &["base", "slot-1"]
+        ));
+    }
 }

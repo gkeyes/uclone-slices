@@ -17,7 +17,7 @@ class LaunchPolicyCacheTest {
     private val permit = "a".repeat(64)
 
     private fun cache(events: MutableList<JSONObject> = mutableListOf()): LaunchPolicyCache =
-        LaunchPolicyCache("0.3.13") { events += it }.apply {
+        LaunchPolicyCache("0.3.14") { events += it }.apply {
             managerUid(manager)
             update(JSONObject(resource("system-state.json")))
         }
@@ -177,13 +177,13 @@ class LaunchPolicyCacheTest {
         // would invert that order inside system_server.
         var subject: LaunchPolicyCache? = null
         val delivered = mutableListOf<String>()
-        val cache = LaunchPolicyCache("0.3.13") { frame ->
+        val cache = LaunchPolicyCache("0.3.14") { frame ->
             assertFalse(Thread.holdsLock(subject!!), "frame ${frame.optString("type")} sent under the cache lock")
             delivered += frame.optString("type")
         }
         subject = cache
         cache.managerUid(manager)
-        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.13"))
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.14"))
         val first = cache.begin(target, false)
         assertNotNull(first)
         assertNotEquals(first, cache.begin(target, true))
@@ -202,10 +202,10 @@ class LaunchPolicyCacheTest {
 
     @Test fun aFailedDeliveryCanDisconnectFromTheSendingThread() {
         var subject: LaunchPolicyCache? = null
-        val cache = LaunchPolicyCache("0.3.13") { subject!!.disconnected() }
+        val cache = LaunchPolicyCache("0.3.14") { subject!!.disconnected() }
         subject = cache
         cache.managerUid(manager)
-        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.13"))
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.14"))
         val ticket = cache.begin(target, false)!!
         assertFalse(cache.ticketPending(ticket))
         assertTrue(cache.gateRequired(target, uid, manager, permit, false, null))
@@ -284,6 +284,21 @@ class LaunchPolicyCacheTest {
         assertEquals("cancel", events.last().optString("type"))
         assertNotEquals(ticket, cache.begin(target, false))
         assertFalse(cache.releaseShown("b".repeat(64)))
+    }
+
+    @Test fun aGateQueuedBehindAnotherAppsPreparationIsCancelledNotHeld() {
+        val cache = cache()
+        val other = "c".repeat(64)
+        val ticket = cache.begin(target, false)!!
+        assertTrue(cache.queueGate(ticket))
+        cache.yieldToGate(ticket, ticket)
+        assertTrue(cache.ticketPending(ticket))
+        cache.yieldToGate(ticket, other)
+        assertFalse(cache.ticketPending(ticket))
+        // The next resume gets a new ticket that can be queued and shown.
+        val next = cache.begin(target, false)!!
+        assertNotEquals(ticket, next)
+        assertTrue(cache.queueGate(next))
     }
 
     private fun resource(name: String): String =
