@@ -101,9 +101,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|error| error.to_string())?;
         prepared
     }))?;
+    // The launch name is bound before waiting for unlock, which leaves an App no window to
+    // claim it first, and lets system_server subscribe while the user is still locked.
+    wait_for_user0_ready();
     // Background starts (boot broadcasts, pushes, jobs) only reach specialization, which
-    // refuses a stale stamp. Re-stamping a reboot's renumbered /data right after the launch
-    // name is bound, before unlock and boot convergence, keeps that window short.
+    // refuses a stale stamp. Inspecting an installed APK needs user 0 unlocked, so a reboot's
+    // renumbered /data is re-stamped right after unlock, before waiting for the system
+    // subscription and boot convergence.
     let restamp_result = (|| {
         let _transaction = transaction_lock
             .lock()
@@ -122,9 +126,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(error) = restamp_result {
         eprintln!("ucloned early restamp: {error}");
     }
-    // The launch name is bound before waiting for unlock, which leaves an App no window to
-    // claim it first, and lets system_server subscribe while the user is still locked.
-    wait_for_user0_ready();
     // Boot convergence force-stops and may relaunch Apps, which needs the system
     // subscription. Waiting is bounded; without it convergence still runs and its marker
     // stays unwritten on failure, so the next daemon start in this boot retries it.

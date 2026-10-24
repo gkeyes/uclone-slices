@@ -232,3 +232,11 @@
 | `uclone_archive` 备份前要求该包有 Ready 的备份租约，且请求的账号在租约范围内（`backup_lease_covers`） | 审计旧 P1-11：原先只检查路径形状，App 运行中也能读取账号数据，备份可能不一致 | `the_archive_helper_reads_accounts_only_under_a_ready_backup_lease` |
 | 设备号重新记录在启动通道绑定后立即执行，开机收敛（恢复中断操作之后）再执行一次 | 审计 R1：原先要等解锁和系统订阅，期间后台启动被拒 | `boot_restamps_an_apk_whose_device_was_renumbered_but_not_a_replaced_one` |
 | README 写明隔离范围：只隔离 CE/DE，外部存储、Keystore、AccountManager、Job、FCM 共用 | 审计 P2-A：范围由拥有者决定，先如实写明现状 | 文档 |
+
+## v0.3.15：0.3.14 复查的 R1
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.15`，versionCode 34 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| 提前的设备号重新记录移到 `wait_for_user0_ready()` 之后、等待系统订阅之前 | 复查 0.3.14 R1：放在解锁前时，设有锁屏的 FBE 设备上 `inspect()` 全部失败，提前执行没有效果 | 真机验收 |
+| README 隔离清单补上 ANDROID_ID、运行时权限与 AppOps、通知设置、公共媒体 | 复查 0.3.14：清单不完整 | 文档 |
