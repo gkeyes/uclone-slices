@@ -1,8 +1,10 @@
 package com.uclone.slices.v2.gate
 
+import com.uclone.slices.v2.runtime.SigningIdentity
 import com.uclone.slices.v2.runtime.startRootShell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
@@ -16,9 +18,10 @@ internal class RootLaunchClient(
     // Covers a force-stop and process verification behind a busy account transaction.
     private val deadlineMillis: Long = 30_000,
 ) {
-    suspend fun prepare(ticket: String): PreparedLaunch? = runInterruptible(Dispatchers.IO) {
+    /** [signing] is the target's installed signer, which lets root re-bind an updated App. */
+    suspend fun prepare(ticket: String, signing: SigningIdentity? = null): PreparedLaunch? = runInterruptible(Dispatchers.IO) {
         if (!validTicket(ticket)) return@runInterruptible null
-        val request = JSONObject().put("op", "prepare").put("ticket", ticket)
+        val request = prepareRequest(ticket, signing)
         val response = exchange(request)?.optJSONObject("ok") ?: return@runInterruptible null
         decodePrepared(response)
     }
@@ -60,6 +63,14 @@ internal class RootLaunchClient(
     internal companion object {
         private const val MAX_FRAME = 64 * 1024
         fun validTicket(ticket: String): Boolean = ticket.matches(Regex("[0-9a-f]{64}"))
+
+        fun prepareRequest(ticket: String, signing: SigningIdentity?): JSONObject {
+            val request = JSONObject().put("op", "prepare").put("ticket", ticket)
+            if (signing != null && signing.isValid()) {
+                request.put("signing", JSONObject().put("kind", signing.kind.wire).put("sha256", JSONArray(signing.sha256)))
+            }
+            return request
+        }
 
         fun decodePrepared(value: JSONObject): PreparedLaunch? {
             val packageName = value.optString("package")

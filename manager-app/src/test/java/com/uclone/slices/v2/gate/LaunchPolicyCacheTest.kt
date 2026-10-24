@@ -17,29 +17,29 @@ class LaunchPolicyCacheTest {
     private val permit = "a".repeat(64)
 
     private fun cache(events: MutableList<JSONObject> = mutableListOf()): LaunchPolicyCache =
-        LaunchPolicyCache("0.3.11") { events += it }.apply {
+        LaunchPolicyCache("0.3.12") { events += it }.apply {
             managerUid(manager)
             update(JSONObject(resource("system-state.json")))
         }
 
     private fun manual(cache: LaunchPolicyCache) {
-        assertFalse(cache.gateRequired(target, uid, manager, permit, false))
+        assertFalse(cache.gateRequired(target, uid, manager, permit, false, null))
     }
 
     @Test fun externalStartsRequireDefaultBeforeAnyResume() {
         val cache = cache()
-        assertTrue(cache.gateRequired(target, uid, 1000, null, false))
-        assertTrue(cache.gateRequired(target, uid, -1, null, true))
+        assertTrue(cache.gateRequired(target, uid, 1000, null, false, null))
+        assertTrue(cache.gateRequired(target, uid, -1, null, true, null))
     }
 
     @Test fun aManagerPermitIsSingleUseAndCannotBeClaimedByAnotherApp() {
         val events = mutableListOf<JSONObject>()
         val cache = cache(events)
-        assertTrue(cache.gateRequired(target, uid, 11111, permit, false))
+        assertTrue(cache.gateRequired(target, uid, 11111, permit, false, null))
         manual(cache)
-        assertTrue(cache.gateRequired(target, uid, manager, permit, false))
+        assertTrue(cache.gateRequired(target, uid, manager, permit, false, null))
         assertEquals(1, events.count { it.optString("type") == "consumed" })
-        assertFalse(cache.gateRequired(target, uid, -1, null, true))
+        assertFalse(cache.gateRequired(target, uid, -1, null, true, null))
     }
 
     @Test fun aRepeatedPolicyFrameCannotReviveAConsumedPermit() {
@@ -47,10 +47,10 @@ class LaunchPolicyCacheTest {
         manual(cache)
         val stale = JSONObject(resource("system-state.json")).put("revision", 8)
         cache.update(stale)
-        assertTrue(cache.gateRequired(target, uid, manager, permit, false))
+        assertTrue(cache.gateRequired(target, uid, manager, permit, false, null))
         stale.put("revision", 6)
         assertEquals(8L, cache.update(stale))
-        assertTrue(cache.gateRequired(target, uid, manager, permit, false))
+        assertTrue(cache.gateRequired(target, uid, manager, permit, false, null))
     }
 
     @Test fun cameraPickerAndPaymentChainsPreserveTheChosenAccount() {
@@ -62,10 +62,10 @@ class LaunchPolicyCacheTest {
         cache.resumed("com.example.picker", "Picker", 10125, false, false)
         cache.requested("com.example.payment", 10126, 10125, false)
         cache.resumed("com.example.payment", "Payment", 10126, false, false)
-        assertFalse(cache.gateRequired(target, uid, 10126, null, false))
-        assertFalse(cache.gateRequired(target, uid, -1, null, true))
+        assertFalse(cache.gateRequired(target, uid, 10126, null, false, null))
+        assertFalse(cache.gateRequired(target, uid, -1, null, true, null))
         cache.resumed(target, "Main", uid, false, false)
-        assertFalse(cache.gateRequired(target, uid, uid, null, false))
+        assertFalse(cache.gateRequired(target, uid, uid, null, false, null))
     }
 
     @Test fun anIndependentVisitToTheSamePaymentAppEndsTheTemporaryFlow() {
@@ -76,18 +76,18 @@ class LaunchPolicyCacheTest {
         cache.resumed(target, "Main", uid, false, false)
         cache.requested("com.example.payment", 10126, 10001, false)
         cache.resumed("com.example.payment", "Main", 10126, false, false)
-        assertTrue(cache.gateRequired(target, uid, -1, null, true))
+        assertTrue(cache.gateRequired(target, uid, -1, null, true, null))
     }
 
     @Test fun lockingAndACancelledHomeGestureDoNotEndTheVisit() {
         val cache = cache()
         manual(cache)
         cache.resumed("com.android.systemui", "Keyguard", 1000, false, true)
-        assertFalse(cache.gateRequired(target, uid, -1, null, true))
+        assertFalse(cache.gateRequired(target, uid, -1, null, true, null))
         cache.homeRequested()
-        assertFalse(cache.gateRequired(target, uid, -1, null, true))
+        assertFalse(cache.gateRequired(target, uid, -1, null, true, null))
         cache.resumed("com.example.home", "Home", 10001, true, false)
-        assertTrue(cache.gateRequired(target, uid, -1, null, true))
+        assertTrue(cache.gateRequired(target, uid, -1, null, true, null))
     }
 
     @Test fun aNotificationCreatorUidDoesNotMakeAnExternalClickInternal() {
@@ -96,7 +96,7 @@ class LaunchPolicyCacheTest {
         assertEquals(uid, LaunchSessions.effectiveCaller(uid, 1000, true))
         val cache = cache()
         manual(cache)
-        assertTrue(cache.gateRequired(target, uid, LaunchSessions.effectiveCaller(uid, 1000, false), null, false))
+        assertTrue(cache.gateRequired(target, uid, LaunchSessions.effectiveCaller(uid, 1000, false), null, false, null))
     }
 
     @Test fun leavingCancelsPendingTicketsAndDoesNotIssueAnyLaunchEvent() {
@@ -121,7 +121,7 @@ class LaunchPolicyCacheTest {
         cache.disconnected()
         assertFalse(cache.approvedProcess(target, 42, uid, 123))
         assertFalse(cache.ticketPending(ticket))
-        assertTrue(cache.gateRequired(target, uid, manager, permit, false))
+        assertTrue(cache.gateRequired(target, uid, manager, permit, false, null))
     }
 
     @Test fun repeatedWarmResumeCannotEnqueueAnotherPreparationActivity() {
@@ -158,7 +158,7 @@ class LaunchPolicyCacheTest {
         val next = JSONObject(resource("system-state.json")).put("revision", 8).put("valid", false)
         next.put("permits", JSONArray())
         cache.update(next)
-        assertTrue(cache.gateRequired(target, uid, manager, permit, false))
+        assertTrue(cache.gateRequired(target, uid, manager, permit, false, null))
         assertFalse(cache.approvedProcess(target, 42, uid, 123))
     }
 
@@ -177,13 +177,13 @@ class LaunchPolicyCacheTest {
         // would invert that order inside system_server.
         var subject: LaunchPolicyCache? = null
         val delivered = mutableListOf<String>()
-        val cache = LaunchPolicyCache("0.3.11") { frame ->
+        val cache = LaunchPolicyCache("0.3.12") { frame ->
             assertFalse(Thread.holdsLock(subject!!), "frame ${frame.optString("type")} sent under the cache lock")
             delivered += frame.optString("type")
         }
         subject = cache
         cache.managerUid(manager)
-        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.11"))
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.12"))
         val first = cache.begin(target, false)
         assertNotNull(first)
         assertNotEquals(first, cache.begin(target, true))
@@ -202,13 +202,13 @@ class LaunchPolicyCacheTest {
 
     @Test fun aFailedDeliveryCanDisconnectFromTheSendingThread() {
         var subject: LaunchPolicyCache? = null
-        val cache = LaunchPolicyCache("0.3.11") { subject!!.disconnected() }
+        val cache = LaunchPolicyCache("0.3.12") { subject!!.disconnected() }
         subject = cache
         cache.managerUid(manager)
-        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.11"))
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.12"))
         val ticket = cache.begin(target, false)!!
         assertFalse(cache.ticketPending(ticket))
-        assertTrue(cache.gateRequired(target, uid, manager, permit, false))
+        assertTrue(cache.gateRequired(target, uid, manager, permit, false, null))
     }
 
     @Test fun theRestOfABatchIsDroppedOnceADeliveryDisconnects() {
@@ -233,6 +233,20 @@ class LaunchPolicyCacheTest {
         // The replacing begin was queued for the old connection and must not reach the new one.
         assertEquals(listOf("begin", "cancel"), delivered)
         assertFalse(cache.ticketPending(replacement))
+    }
+
+    @Test fun anUpdatedOrStaleApkGoesThroughPreparationToBeReBound() {
+        val apk = "/data/app/~~a/com.example.app-b/base.apk"
+        val frame = JSONObject(resource("system-state.json")).put("revision", 8)
+        frame.getJSONArray("packages").getJSONObject(0).put("default", "slot-1")
+        val cache = cache().apply { update(frame) }
+        assertFalse(cache.gateRequired(target, uid, 1000, null, false, apk))
+        assertFalse(cache.gateRequired(target, uid, -1, null, true, null))
+        // An update installs a new path before root has refreshed its policy.
+        assertTrue(cache.gateRequired(target, uid, 1000, null, false, "/data/app/~~c/com.example.app-d/base.apk"))
+        frame.put("revision", 9).getJSONArray("packages").getJSONObject(0).put("stale", true)
+        cache.update(frame)
+        assertTrue(cache.gateRequired(target, uid, -1, null, true, apk))
     }
 
     private fun resource(name: String): String =

@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::adapters::{FilePackageStore, FileSlotStorage, SystemAndroidOps};
 use crate::launch::LaunchGate;
 use crate::layout;
+use crate::model::SigningIdentity;
 use crate::ports::AdapterError;
 use crate::usecases::{Runtime, RuntimeError};
 
@@ -44,6 +45,20 @@ impl ProductionRuntime {
             .map_err(|_error| RuntimeError::InvalidRequest)?;
         self.inner
             .prepare_default_account(&package, still_foreground)
+    }
+
+    /// Re-binds an App whose installed APK changed, as the Manager does when it opens, so a
+    /// direct launch after an update or reboot can start without opening the Manager first.
+    pub fn rebind_installed(
+        &mut self,
+        package: &str,
+        signing: &SigningIdentity,
+    ) -> Result<(), RuntimeError> {
+        let package = crate::model::PackageName::new(package)
+            .map_err(|_error| RuntimeError::InvalidRequest)?;
+        self.inner
+            .rebind_package(&package, signing.clone(), false)
+            .map(|_snapshot| ())
     }
 
     pub(crate) fn inner_mut(&mut self) -> &mut InnerRuntime {

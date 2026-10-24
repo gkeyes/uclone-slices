@@ -14,8 +14,11 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.uclone.slices.v2.R
+import com.uclone.slices.v2.apps.installedSigningIdentity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** A transparent launch boundary. The target App has not been resumed at this point. */
 class LaunchPreparationActivity : ComponentActivity() {
@@ -43,30 +46,34 @@ class LaunchPreparationActivity : ComponentActivity() {
         if (submitted || isFinishing || !RootLaunchClient.validTicket(ticket)) return
         submitted = true
         val submittedTicket = ticket
+        val target = intent.getStringExtra(LaunchPolicyCache.PACKAGE_EXTRA)
         // A quick preparation stays invisible; a slow one shows progress and a way out.
         val reveal = lifecycleScope.launch {
             delay(PROGRESS_DELAY_MS)
             progress.visibility = View.VISIBLE
         }
         lifecycleScope.launch {
-            val prepared = client.prepare(submittedTicket)
+            // Root re-binds an App that was updated, or whose APK a reboot renumbered, only with
+            // the signer read here; without it such a launch stays refused instead of frozen.
+            val signing = target?.let { withContext(Dispatchers.IO) { installedSigningIdentity(packageManager, it) } }
+            val prepared = client.prepare(submittedTicket, signing)
             reveal.cancel()
             if (submittedTicket != ticket || !resumed || isFinishing || isDestroyed) {
                 client.cancelAsync(submittedTicket)
                 return@launch
             }
-            val target = prepared?.let { packageManager.getLaunchIntentForPackage(it.packageName) }
-            if (prepared == null || target == null) {
+            val launch = prepared?.let { packageManager.getLaunchIntentForPackage(it.packageName) }
+            if (prepared == null || launch == null) {
                 Toast.makeText(this@LaunchPreparationActivity, R.string.launch_preparation_unavailable, Toast.LENGTH_SHORT).show()
                 client.cancelAsync(ticket)
                 finish()
                 return@launch
             }
-            target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-            target.putExtra(prepared.permitExtra, prepared.permit)
+            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+            launch.putExtra(prepared.permitExtra, prepared.permit)
             launchIssued = true
             try {
-                startActivity(target, ActivityOptions.makeCustomAnimation(this@LaunchPreparationActivity, 0, 0).toBundle())
+                startActivity(launch, ActivityOptions.makeCustomAnimation(this@LaunchPreparationActivity, 0, 0).toBundle())
             } catch (_: Exception) {
                 launchIssued = false
                 client.cancelAsync(ticket)

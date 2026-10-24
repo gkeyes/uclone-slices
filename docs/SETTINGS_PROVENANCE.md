@@ -204,3 +204,12 @@
 | Manager / KernelSU / crate / wire `0.3.11`，versionCode 30 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
 | `force_stop` 在包已完全不在 user0 包列表（且列表含 `android`）时直接成功 | 审计 M-P2-6：卸载后无进程可停，原先卡在 `package_uid` 失败；列表异常或包仍安装但不可管理时照旧失败 | `force_stop_of_an_uninstalled_package_has_nothing_to_stop`、`force_stop_still_fails_for_an_installed_package_it_cannot_manage` |
 | 不可用登记允许取消配置；找不到 App 的不可用登记以包名列在首页 | 审计 M-P2-6：原先已卸载 App 在首页消失且无法移除 | `anUnavailableAccountCanStillBeUnenrolled`、`anUnavailableRegistrationWithoutItsAppIsListedByPackageName` |
+
+## v0.3.12：更新或重启后的直接启动
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.12`，versionCode 31 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| 策略帧增加 `apk`（绑定时的 APK 路径）和 `stale`（记录的 APK 已不是安装中的文件）；`ready` 含义不变 | 用户回报：App 更新或重启后直接打开会卡屏，只有从 Slices 进入才行。原因是安装记录过期时 specialize 拒绝启动，而只有 Manager 打开时才会重新绑定 | `a_replaced_apk_marks_the_policy_stale_without_changing_readiness`、`a_begin_for_a_stale_package_is_accepted_so_the_gate_can_re_bind_it` |
+| Hook 在 `stale` 或安装路径与 `apk` 不同时走启动准备；准备页读取目标 App 签名随 prepare 送出，root 在 APK 已变时用它重新绑定（与 Manager 打开时相同的 `rebind_package`）后再发许可 | 路径比较让更新后的第一次启动也走准备步骤，不必等 root 刷新策略；签名不符时照旧拒绝 | `anUpdatedOrStaleApkGoesThroughPreparationToBeReBound`、`aPrepareRequestCarriesOnlyAValidSigner`、`a_prepare_request_may_carry_the_installed_signer` |
+| 过期包不发启动许可 | 原先会发许可后在 specialize 被拒、App 卡在启动画面 | 真机验收 |

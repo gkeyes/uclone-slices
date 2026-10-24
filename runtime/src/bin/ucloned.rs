@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prepare_root = root.clone();
     let prepare_lock = Arc::clone(&transaction_lock);
     let prepare_build = build_id.clone();
-    gate.start(Arc::new(move |package, ticket| {
+    gate.start(Arc::new(move |package, ticket, signing| {
         let _transaction = prepare_lock
             .lock()
             .map_err(|_| "transaction lock failed".to_owned())?;
@@ -68,9 +68,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(&prepare_gate),
         )
         .map_err(|error| error.to_string())?;
-        let prepared = runtime
-            .prepare_default_account(package, || prepare_gate.ticket_live(ticket))
-            .map_err(|error| error.to_string())
+        // An updated App, or one whose /data device was renumbered by a reboot, is refused
+        // at specialization until re-bound. The Manager's signer reading proves it is the
+        // same App, so the gate re-binds it here instead of requiring the Manager be opened.
+        let rebound = match signing {
+            Some(signing) => match prepare_gate.installed_apk_changed(package) {
+                Ok(true) => runtime
+                    .rebind_installed(package, signing)
+                    .map_err(|error| error.to_string()),
+                Ok(false) => Ok(()),
+                Err(error) => Err(error.to_string()),
+            },
+            None => Ok(()),
+        };
+        let prepared = rebound
+            .and_then(|()| {
+                runtime
+                    .prepare_default_account(package, || prepare_gate.ticket_live(ticket))
+                    .map_err(|error| error.to_string())
+            })
             .and_then(|_| {
                 prepare_gate
                     .permit_prepared(package, ticket)
