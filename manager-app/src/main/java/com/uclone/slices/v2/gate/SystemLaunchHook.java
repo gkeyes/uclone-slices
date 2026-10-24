@@ -173,7 +173,7 @@ public final class SystemLaunchHook extends XposedModule {
             context = (Context) field(service, "mContext");
             globalLock = field(service, "mGlobalLock");
             rootWindow = field(service, "mRootWindowContainer");
-            Intent gate = gateIntent("0");
+            Intent gate = gateIntent("0", "");
             // systemReady precedes CE unlock. Resolve metadata for both boot states;
             // OS launch checks and Runtime's unlock gate still govern actual execution.
             preparation = context.getPackageManager().resolveActivity(gate,
