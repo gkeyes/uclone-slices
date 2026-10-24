@@ -111,20 +111,27 @@ class PackageManagerInstalledApps(
         )
     }.getOrNull()
 
-    private fun signingIdentity(packageInfo: PackageInfo): SigningIdentity? = runCatching {
-        val info = packageInfo.signingInfo ?: return@runCatching null
-        val multiple = info.hasMultipleSigners()
-        val signatures = if (multiple) {
-            info.apkContentsSigners.orEmpty().toList()
-        } else {
-            info.signingCertificateHistory.orEmpty().toList()
-        }
-        signingIdentityFromCertificates(
-            multiple = multiple,
-            certificates = signatures.map { it.toByteArray() },
-        )
-    }.getOrNull()
 }
+
+/** The installed signer of [packageName], or null when it cannot be read. */
+internal fun installedSigningIdentity(packageManager: PackageManager, packageName: String): SigningIdentity? =
+    runCatching {
+        signingIdentity(packageManager.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES))
+    }.getOrNull()
+
+private fun signingIdentity(packageInfo: PackageInfo): SigningIdentity? = runCatching {
+    val info = packageInfo.signingInfo ?: return@runCatching null
+    val multiple = info.hasMultipleSigners()
+    val signatures = if (multiple) {
+        info.apkContentsSigners.orEmpty().toList()
+    } else {
+        info.signingCertificateHistory.orEmpty().toList()
+    }
+    signingIdentityFromCertificates(
+        multiple = multiple,
+        certificates = signatures.map { it.toByteArray() },
+    )
+}.getOrNull()
 
 internal fun signingIdentityFromCertificates(
     multiple: Boolean,

@@ -204,10 +204,10 @@ public final class SystemLaunchHook extends XposedModule {
                 original.removeExtra(LaunchPolicyCache.PERMIT_EXTRA);
             } catch (RuntimeException invalidExtra) { permit = null; }
         }
-        if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, effective, permit, false)) return false;
+        if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, effective, permit, false, target.applicationInfo.sourceDir)) return false;
         if (preparation == null) return false;  // Native + Application-binding guards fail closed until ready.
         String ticket = bridge.cache.begin(target.packageName, true);
-        Intent gate = gateIntent(ticket);
+        Intent gate = gateIntent(ticket, target.packageName);
         FrameworkAccess.set(interceptor, "mIntent", gate);
         FrameworkAccess.set(interceptor, "mRInfo", new ResolveInfo(preparation));
         FrameworkAccess.set(interceptor, "mAInfo", new ActivityInfo(preparation.activityInfo));
@@ -224,7 +224,7 @@ public final class SystemLaunchHook extends XposedModule {
         Object record = topActivity(fragment);
         ActivityInfo target = info(record);
         if (target == null || !user0Display0(record) || LaunchPolicyCache.GATE.equals(target.name)) return false;
-        if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, -1, null, true)) return false;
+        if (!bridge.cache.gateRequired(target.packageName, target.applicationInfo.uid, -1, null, true, target.applicationInfo.sourceDir)) return false;
         // Without a preparation path the resume proceeds in the record's existing process view
         // rather than leaving a paused, untouchable screen.
         if (context == null || globalLock == null || preparation == null) return false;
@@ -247,7 +247,7 @@ public final class SystemLaunchHook extends XposedModule {
                     }
                 }
                 // The potentially blocking start is outside WindowManager's global lock.
-                context.startActivity(gateIntent(ticket));
+                context.startActivity(gateIntent(ticket, target.packageName));
             } catch (Throwable error) { bridge.cache.cancel(ticket); failedOnce("gate", error); }
         });
         return true;
@@ -346,9 +346,10 @@ public final class SystemLaunchHook extends XposedModule {
 
     private static Object field(Object object, String name) throws ReflectiveOperationException { return FrameworkAccess.get(object, name); }
 
-    private static Intent gateIntent(String ticket) {
+    private static Intent gateIntent(String ticket, String packageName) {
         return new Intent().setComponent(new ComponentName(LaunchPolicyCache.MANAGER, LaunchPolicyCache.GATE))
             .putExtra(LaunchPolicyCache.TICKET_EXTRA, ticket)
+            .putExtra(LaunchPolicyCache.PACKAGE_EXTRA, packageName)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS | Intent.FLAG_ACTIVITY_NO_ANIMATION);
     }
 

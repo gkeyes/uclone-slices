@@ -4,8 +4,12 @@ use super::*;
 use crate::model::{PackageIdentity, SlotId};
 
 fn stored_package(root: &Path) -> PackageAggregate {
+    let apk = root.join("base.apk");
+    fs::write(&apk, b"apk").unwrap();
+    let stamp = fs::metadata(&apk).unwrap();
     let package = PackageName::new("com.example.app").unwrap();
-    let identity = PackageIdentity::new(10123, "/data/app/example/base.apk", 1, 2).unwrap();
+    let identity =
+        PackageIdentity::new(10123, apk.to_str().unwrap(), stamp.dev(), stamp.ino()).unwrap();
     let mut aggregate = PackageAggregate::enrolled(package, identity);
     aggregate.set_default_slot(Some(SlotId::base())).unwrap();
     FilePackageStore::open(root)
@@ -68,6 +72,52 @@ fn guessed_or_cancelled_tickets_cannot_authorize_account_preparation() {
     assert!(!gate.ticket_live(&ticket));
     assert!(gate.lock().unwrap().permits.is_empty());
     drop(reader);
+}
+
+#[test]
+fn a_replaced_apk_marks_the_policy_stale_without_changing_readiness() {
+    let root = tempfile::tempdir().unwrap();
+    stored_package(root.path());
+    let policy = &load_policies(root.path(), &BTreeMap::new()).unwrap()[0];
+    assert!(policy.ready && !policy.stale);
+    assert_eq!(policy.apk, root.path().join("base.apk").to_str().unwrap());
+
+    // An update installs a new file; the recorded inode no longer names the installed APK.
+    let update = root.path().join("update.apk");
+    fs::write(&update, b"apk-2").unwrap();
+    fs::rename(&update, root.path().join("base.apk")).unwrap();
+    let policy = &load_policies(root.path(), &BTreeMap::new()).unwrap()[0];
+    assert!(policy.ready && policy.stale);
+
+    fs::remove_file(root.path().join("base.apk")).unwrap();
+    assert!(load_policies(root.path(), &BTreeMap::new()).unwrap()[0].stale);
+}
+
+#[test]
+fn a_begin_for_a_stale_package_is_accepted_so_the_gate_can_re_bind_it() {
+    let root = tempfile::tempdir().unwrap();
+    stored_package(root.path());
+    fs::remove_file(root.path().join("base.apk")).unwrap();
+    let gate = LaunchGate::new(root.path());
+    let (daemon, mut system) = UnixStream::pair().unwrap();
+    let subscriber = Arc::clone(&gate);
+    let handle = thread::spawn(move || subscriber.subscribe(BufReader::new(daemon)));
+    let ticket = "a".repeat(64);
+    let begin = json!({"type": "begin", "ticket": ticket, "package": "com.example.app"});
+    system.write_all(format!("{begin}\n").as_bytes()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !gate.ticket_live(&ticket) {
+        assert!(
+            Instant::now() < deadline,
+            "a stale package's Begin was refused"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(gate.installed_apk_changed("com.example.app").unwrap());
+    system
+        .write_all(b"{\"type\":\"ack\",\"revision\":999999}\n")
+        .unwrap();
+    assert!(handle.join().unwrap().is_err());
 }
 
 #[test]
@@ -151,6 +201,8 @@ fn shared_system_snapshot_is_produced_by_the_root_encoder() {
         active: "slot-1".to_owned(),
         default: Some("base".to_owned()),
         ready: true,
+        apk: "/data/app/~~a/com.example.app-b/base.apk".to_owned(),
+        stale: false,
     });
     state.permits.insert(
         token.clone(),
@@ -196,7 +248,9 @@ fn shared_prepared_response_and_request_use_the_live_private_contract() {
         "../../../protocol/gate-fixtures/prepare.request.json"
     ))
     .unwrap();
-    assert!(matches!(request, Control::Prepare { ticket } if validate_token(&ticket).is_ok()));
+    assert!(
+        matches!(request, Control::Prepare { ticket, signing: None } if validate_token(&ticket).is_ok())
+    );
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -333,4 +387,21 @@ fn previous_discovery_is_read_only_from_an_owned_regular_file() {
         read_enrollment_uids(root.path(), owner),
         BTreeMap::from([("com.example.app".to_owned(), 10123)])
     );
+}
+
+#[test]
+fn a_prepare_request_may_carry_the_installed_signer() {
+    let request = json!({
+        "op": "prepare",
+        "ticket": "b".repeat(64),
+        "signing": {"kind": "lineage", "sha256": ["ab".repeat(32)]},
+    });
+    let request: Control = serde_json::from_value(request).unwrap();
+    assert!(matches!(
+        request,
+        Control::Prepare {
+            signing: Some(_),
+            ..
+        }
+    ));
 }

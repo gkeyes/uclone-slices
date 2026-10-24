@@ -25,6 +25,7 @@ final class LaunchPolicyCache {
     static final String GATE = MANAGER + ".gate.LaunchPreparationActivity";
     static final String PERMIT_EXTRA = MANAGER + ".LAUNCH_PERMIT";
     static final String TICKET_EXTRA = MANAGER + ".LAUNCH_TICKET";
+    static final String PACKAGE_EXTRA = MANAGER + ".LAUNCH_PACKAGE";
     private final String build;
     private final Consumer<JSONObject> send;
     private final SecureRandom random = new SecureRandom();
@@ -128,14 +129,15 @@ final class LaunchPolicyCache {
             policy.optString("active").equals(process.optString("slot"));
     }
 
-    boolean gateRequired(String target, int uid, int callerUid, String token, boolean taskResume) {
+    /** [sourceDir] is the target's installed APK, or null when the caller does not know it. */
+    boolean gateRequired(String target, int uid, int callerUid, String token, boolean taskResume, String sourceDir) {
         boolean required;
-        synchronized (this) { required = gateRequiredLocked(target, uid, callerUid, token, taskResume); }
+        synchronized (this) { required = gateRequiredLocked(target, uid, callerUid, token, taskResume, sourceDir); }
         flush();
         return required;
     }
 
-    private boolean gateRequiredLocked(String target, int uid, int callerUid, String token, boolean taskResume) {
+    private boolean gateRequiredLocked(String target, int uid, int callerUid, String token, boolean taskResume, String sourceDir) {
         if (!managed(target)) return false;
         if (consumePermit(target, callerUid, token)) {
             sessions.manual(target, uid);
@@ -144,6 +146,10 @@ final class LaunchPolicyCache {
         if (pending.containsKey(target)) return true;
         JSONObject policy = packages.get(target);
         if (!connected || !valid || policy == null || !policy.optBoolean("ready")) return true;
+        // An updated App, or an APK a reboot renumbered, is refused at specialization until root
+        // re-binds it, which the preparation step does. The path comparison catches an update
+        // before root has refreshed its policy.
+        if (policy.optBoolean("stale") || (sourceDir != null && !sourceDir.equals(policy.optString("apk")))) return true;
         if (policy.isNull("default") || policy.optString("active").equals(policy.optString("default"))) return false;
         return !sessions.continues(target, callerUid, taskResume);
     }

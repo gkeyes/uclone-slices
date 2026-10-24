@@ -1,3 +1,11 @@
+# v0.3.12：更新或重启后直接打开受管 App
+
+1. 成对覆盖安装 Manager / KernelSU 0.3.12 / 31，手动重启，运行环境页显示 `0.3.12`。
+2. 受管 App 有默认账号时，更新该 App（覆盖安装新版本），不打开 Slices，直接从桌面点开：可能短暂出现启动准备，随后 App 正常进入默认账号，不卡屏。
+3. 手机重启后，不打开 Slices，直接从桌面点开受管 App：同上。`ucloned.log` 没有 `installed APK identity changed`。
+4. 之后打开 Slices，该 App 不再显示需要重新绑定。
+5. 主机测试：Runtime 覆盖 APK 被替换或删除时策略标记 `stale`、过期包的 Begin 仍被接受、prepare 可带签名；Manager 覆盖安装路径变化或 `stale` 时走启动准备、prepare 只携带有效签名。
+
 # v0.3.11：已卸载 App 的移除管理（审计 M-P2-6）
 
 1. 成对覆盖安装 Manager / KernelSU 0.3.11 / 30，手动重启，运行环境页显示 `0.3.11`。

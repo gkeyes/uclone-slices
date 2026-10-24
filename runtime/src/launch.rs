@@ -21,7 +21,9 @@ use serde_json::{Value, json};
 
 use crate::BINARY_BUILD_ID;
 use crate::adapters::FilePackageStore;
-use crate::model::{AccountIoKind, AccountIoPhase, AccountIoScope, PackageAggregate, PackageName};
+use crate::model::{
+    AccountIoKind, AccountIoPhase, AccountIoScope, PackageAggregate, PackageName, SigningIdentity,
+};
 use crate::ports::PackageStore as _;
 
 pub const SOCKET_NAME: &str = "uclone.slices.launch.v1";
@@ -51,7 +53,8 @@ pub fn validate_runtime_namespace() -> io::Result<()> {
     Ok(())
 }
 
-type Prepare = dyn Fn(&str, &str) -> Result<String, String> + Send + Sync + 'static;
+type Prepare =
+    dyn Fn(&str, &str, Option<&SigningIdentity>) -> Result<String, String> + Send + Sync + 'static;
 
 struct ControlPermit(Arc<AtomicUsize>);
 
@@ -68,6 +71,11 @@ struct Policy {
     active: String,
     default: Option<String>,
     ready: bool,
+    /// The APK the package was bound to. The system compares it with the installed path, so
+    /// an update gates the very first direct launch, before any refresh has run.
+    apk: String,
+    /// The recorded APK is no longer the installed file, which specialization refuses.
+    stale: bool,
 }
 
 #[derive(Debug)]
@@ -297,6 +305,18 @@ impl LaunchGate {
             .is_ok_and(|state| state.connection.is_some() && state.tickets.contains_key(ticket))
     }
 
+    /// Whether the package's recorded APK is no longer the installed file. Read from the
+    /// store rather than the published policy, which may predate the update.
+    pub fn installed_apk_changed(&self, package: &str) -> io::Result<bool> {
+        let package = PackageName::new(package).map_err(invalid)?;
+        let aggregate = FilePackageStore::open(&self.root)
+            .map_err(invalid)?
+            .load(&package)
+            .map_err(invalid)?
+            .ok_or_else(|| refused("package is not enrolled"))?;
+        Ok(!installed_apk_unchanged(&aggregate))
+    }
+
     pub fn native_ready(&self) -> bool {
         let expected = fs::read_to_string("/proc/sys/kernel/random/boot_id")
             .map(|boot| format!("{} {}\n", BINARY_BUILD_ID, boot.trim()));
@@ -373,6 +393,16 @@ impl LaunchGate {
                     .any(|policy| policy.package == package && policy.ready)
             {
                 return Err(refused("account is not ready"));
+            }
+            // Specialization would refuse this start and leave the App frozen at launch.
+            if state
+                .policies
+                .iter()
+                .any(|policy| policy.package == package && policy.stale)
+            {
+                return Err(refused(
+                    "installed APK changed; the package must be re-bound",
+                ));
             }
             let slot = state
                 .policies
@@ -488,14 +518,14 @@ impl LaunchGate {
                 }}))
             }
             Control::Cancel { ticket } => self.cancel(&ticket).map(|()| json!({"ok": {}})),
-            Control::Prepare { ticket } => {
+            Control::Prepare { ticket, signing } => {
                 let package = {
                     let mut state = self.lock()?;
                     let package = state.tickets.get(&ticket).cloned();
                     package.filter(|_| state.claimed.insert(ticket.clone()))
                 };
                 match package {
-                    Some(package) => prepare(&package, &ticket)
+                    Some(package) => prepare(&package, &ticket, signing.as_ref())
                         .map_err(refused)
                         .map(|permit| prepared_response(&package, &permit)),
                     None => Err(refused("launch ticket is not live")),
@@ -793,6 +823,9 @@ enum Control {
     Status {},
     Prepare {
         ticket: String,
+        /// The target's current signer as the Manager reads it, for re-binding an updated App.
+        #[serde(default)]
+        signing: Option<SigningIdentity>,
     },
     Cancel {
         ticket: String,
@@ -847,6 +880,8 @@ fn load_policies(root: &Path, known: &BTreeMap<String, u32>) -> io::Result<Vec<P
                         active: String::new(),
                         default: None,
                         ready: false,
+                        apk: String::new(),
+                        stale: true,
                     });
                 }
             }
@@ -869,7 +904,17 @@ fn load_policy(store: &FilePackageStore, package: &PackageName) -> io::Result<Po
             .default_slot()
             .map(|slot| slot.as_str().to_owned()),
         ready: account_ready_to_execute(store, &aggregate)?,
+        apk: aggregate.identity().apk_stamp().0.to_owned(),
+        stale: !installed_apk_unchanged(&aggregate),
     })
+}
+
+/// An App update, or a /data remount that renumbers its device, leaves the recorded APK
+/// stale, and specialization refuses such a start until the package is re-bound. A stale
+/// policy sends a direct launch through the preparation gate, which re-binds first.
+fn installed_apk_unchanged(aggregate: &PackageAggregate) -> bool {
+    let (path, device, inode) = aggregate.identity().apk_stamp();
+    fs::metadata(path).is_ok_and(|apk| apk.dev() == device && apk.ino() == inode)
 }
 
 pub(crate) fn validate_account_for_start(
