@@ -208,6 +208,8 @@ public final class SystemLaunchHook extends XposedModule {
         if (preparation == null) return false;  // Native + Application-binding guards fail closed until ready.
         String ticket = bridge.cache.begin(target.packageName, true);
         Intent gate = gateIntent(ticket, target.packageName);
+        Intent resume = originalLaunch(original, target);
+        if (resume != null) gate.putExtra(LaunchPolicyCache.ORIGINAL_EXTRA, resume);
         FrameworkAccess.set(interceptor, "mIntent", gate);
         FrameworkAccess.set(interceptor, "mRInfo", new ResolveInfo(preparation));
         FrameworkAccess.set(interceptor, "mAInfo", new ActivityInfo(preparation.activityInfo));
@@ -350,6 +352,25 @@ public final class SystemLaunchHook extends XposedModule {
     }
 
     private static Object field(Object object, String name) throws ReflectiveOperationException { return FrameworkAccess.get(object, name); }
+
+    /**
+     * The replaced launch, pinned to the resolved component, for the preparation page to re-issue.
+     * It goes out as the Manager's own start, so the original caller's URI grants and result
+     * forwarding are not carried; a launch that cannot be copied falls back to the home screen.
+     */
+    private static Intent originalLaunch(Intent original, ActivityInfo target) {
+        try {
+            Intent copy = new Intent(original);
+            copy.setComponent(new ComponentName(target.packageName, target.name));
+            copy.setSelector(null);
+            copy.removeFlags(Intent.FLAG_ACTIVITY_FORWARD_RESULT | Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+            return copy;
+        } catch (RuntimeException unreadable) {
+            return null;
+        }
+    }
 
     private static Intent gateIntent(String ticket, String packageName) {
         return new Intent().setComponent(new ComponentName(LaunchPolicyCache.MANAGER, LaunchPolicyCache.GATE))

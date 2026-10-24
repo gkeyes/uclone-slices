@@ -240,3 +240,11 @@
 | Manager / KernelSU / crate / wire `0.3.15`，versionCode 34 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
 | 提前的设备号重新记录移到 `wait_for_user0_ready()` 之后、等待系统订阅之前 | 复查 0.3.14 R1：放在解锁前时，设有锁屏的 FBE 设备上 `inspect()` 全部失败，提前执行没有效果 | 真机验收 |
 | README 隔离清单补上 ANDROID_ID、运行时权限与 AppOps、通知设置、公共媒体 | 复查 0.3.14：清单不完整 | 文档 |
+
+## v0.3.16：经过启动准备时保留原本的打开内容
+
+| 设置 | 来源 | 验证 |
+|---|---|---|
+| Manager / KernelSU / crate / wire `0.3.16`，versionCode 35 | Manager 与 Runtime 版本须一致 | 版本对齐、共享 fixture |
+| Hook 把被替换的启动（固定到解析出的组件，去掉 selector、URI 授权与结果转发旗标）放进准备页 intent 的 `LAUNCH_ORIGINAL` | 审计 M-P2-1 / N4：准备页原先只打开首页，分享、深层链接、通知内容丢失；拥有者 10-24 只批准第一步 | 真机验收 |
+| 准备页只在原启动的包等于 Runtime 准备好的包时重新打开它，失败（例如 App 不对外开放的画面）再退回首页 | 防止借准备页启动其他 App | `OriginalLaunchTest` |

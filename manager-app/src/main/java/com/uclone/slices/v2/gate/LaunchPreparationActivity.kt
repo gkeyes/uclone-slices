@@ -47,6 +47,7 @@ class LaunchPreparationActivity : ComponentActivity() {
         submitted = true
         val submittedTicket = ticket
         val target = intent.getStringExtra(LaunchPolicyCache.PACKAGE_EXTRA)
+        val original = originalLaunch(intent)
         // A quick preparation stays invisible; a slow one shows progress and a way out.
         val reveal = lifecycleScope.launch {
             delay(PROGRESS_DELAY_MS)
@@ -62,19 +63,32 @@ class LaunchPreparationActivity : ComponentActivity() {
                 client.cancelAsync(submittedTicket)
                 return@launch
             }
-            val launch = prepared?.let { packageManager.getLaunchIntentForPackage(it.packageName) }
-            if (prepared == null || launch == null) {
+            // The launch that was replaced comes first; the home screen covers one this page may
+            // not start (a screen the App keeps to itself) and one that named another package.
+            val launches = prepared?.let {
+                listOfNotNull(
+                    original?.takeIf { o -> OriginalLaunch.usable(o.component?.packageName, it.packageName) },
+                    packageManager.getLaunchIntentForPackage(it.packageName),
+                )
+            }.orEmpty()
+            if (prepared == null || launches.isEmpty()) {
                 Toast.makeText(this@LaunchPreparationActivity, R.string.launch_preparation_unavailable, Toast.LENGTH_SHORT).show()
                 client.cancelAsync(ticket)
                 finish()
                 return@launch
             }
-            launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-            launch.putExtra(prepared.permitExtra, prepared.permit)
             launchIssued = true
-            try {
-                startActivity(launch, ActivityOptions.makeCustomAnimation(this@LaunchPreparationActivity, 0, 0).toBundle())
-            } catch (_: Exception) {
+            val started = launches.any { launch ->
+                launch.flags = OriginalLaunch.flags(launch.flags)
+                launch.putExtra(prepared.permitExtra, prepared.permit)
+                try {
+                    startActivity(launch, ActivityOptions.makeCustomAnimation(this@LaunchPreparationActivity, 0, 0).toBundle())
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (!started) {
                 launchIssued = false
                 client.cancelAsync(ticket)
                 Toast.makeText(this@LaunchPreparationActivity, R.string.launch_preparation_unavailable, Toast.LENGTH_SHORT).show()
@@ -101,6 +115,11 @@ class LaunchPreparationActivity : ComponentActivity() {
         super.onPause()
         suppressAnimation()
     }
+
+    private fun originalLaunch(source: Intent): Intent? = runCatching {
+        if (Build.VERSION.SDK_INT >= 33) source.getParcelableExtra(LaunchPolicyCache.ORIGINAL_EXTRA, Intent::class.java)
+        else @Suppress("DEPRECATION") source.getParcelableExtra(LaunchPolicyCache.ORIGINAL_EXTRA)
+    }.getOrNull()
 
     private fun progressView(): View {
         val density = resources.displayMetrics.density
