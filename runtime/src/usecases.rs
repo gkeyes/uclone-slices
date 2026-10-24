@@ -166,6 +166,9 @@ where
         let recovered = self.recover_account_io_intents();
         let names = self.packages.list().map_err(adapter_error)?;
         for package in names {
+            if let Err(error) = self.restamp_renumbered_apk(&package) {
+                eprintln!("op=reconcile_boot package={package} step=restamp_apk error={error}");
+            }
             if let Err(error) = self.package_snapshot_with_context(&package, ReadyLoadContext::Boot)
             {
                 eprintln!(
@@ -1673,6 +1676,41 @@ where
 
     fn package_snapshot(&mut self, package: &PackageName) -> Result<PackageSnapshot, RuntimeError> {
         self.package_snapshot_with_context(package, ReadyLoadContext::Interactive)
+    }
+
+    /// A reboot can renumber /data. The APK at the same path with the same inode is the same
+    /// file, so its stamp is refreshed here without a signer, before any process starts. Without
+    /// this, background starts (services, pushes, jobs) stay refused until the App is opened.
+    fn restamp_renumbered_apk(&mut self, package: &PackageName) -> Result<(), RuntimeError> {
+        let Some(mut aggregate) = self.packages.load(package).map_err(adapter_error)? else {
+            return Ok(());
+        };
+        if !aggregate.is_ready()
+            || self.ensure_no_account_io(package).is_err()
+            || self
+                .packages
+                .load_rebind_intent(package)
+                .map_err(adapter_error)?
+                .is_some()
+        {
+            return Ok(());
+        }
+        let inspection = self
+            .android
+            .inspect(package)
+            .map_err(|error| logged_adapter("restamp_apk", package, "inspect", error))?;
+        if !aggregate
+            .identity()
+            .only_device_differs(&inspection.identity)
+        {
+            return Ok(());
+        }
+        aggregate
+            .rebind_identity(inspection.identity)
+            .map_err(model_error)?;
+        self.packages
+            .save(&aggregate)
+            .map_err(|error| logged_adapter("restamp_apk", package, "save", error))
     }
 
     fn package_snapshot_with_context(

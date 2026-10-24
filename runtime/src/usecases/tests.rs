@@ -3142,3 +3142,33 @@ fn default_account_return_does_not_interrupt_an_account_io_lease() {
         SlotId::base()
     );
 }
+
+#[test]
+fn boot_restamps_an_apk_whose_device_was_renumbered_but_not_a_replaced_one() {
+    let package = package();
+    let (runtime, target) = with_slot();
+    let mut runtime = runtime;
+    runtime.activate_slot(&package, &target).unwrap();
+    let (packages, slots, mut android) = runtime.into_parts();
+    android.renumber_device(&package, 7);
+    let mut runtime = Runtime::new(packages, slots, android);
+
+    runtime.reconcile_boot().unwrap();
+
+    let (packages, slots, mut android) = runtime.into_parts();
+    let aggregate = packages.load(&package).unwrap().unwrap();
+    assert_eq!(aggregate.identity().apk_stamp().1, 7);
+    assert_eq!(aggregate.active_slot(), &target);
+    assert!(slots.contains(&package, &target));
+
+    // A real update changes the inode and still needs the Manager's signer.
+    android.change_identity(&package);
+    let mut runtime = Runtime::new(packages, slots, android);
+    runtime.reconcile_boot().unwrap();
+    let (packages, _slots, _android) = runtime.into_parts();
+    let aggregate = packages.load(&package).unwrap().unwrap();
+    assert_eq!(
+        aggregate.identity().apk_stamp(),
+        (aggregate.identity().apk_stamp().0, 7, 2)
+    );
+}

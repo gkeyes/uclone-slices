@@ -40,6 +40,7 @@ final class LaunchPolicyCache {
     private final Set<String> consumed = new HashSet<>();
     private final Map<String, String> pending = new HashMap<>();
     private final Set<String> shown = new HashSet<>();
+    private final Set<String> keepActive = new HashSet<>();
     private final Set<String> queued = new HashSet<>();
     private boolean connected;
     private boolean valid;
@@ -108,6 +109,7 @@ final class LaunchPolicyCache {
         pending.clear();
         shown.clear();
         queued.clear();
+        keepActive.clear();
         sessions.end();
     }
 
@@ -146,12 +148,15 @@ final class LaunchPolicyCache {
         if (pending.containsKey(target)) return true;
         JSONObject policy = packages.get(target);
         if (!connected || !valid || policy == null || !policy.optBoolean("ready")) return true;
+        boolean switching = !policy.isNull("default") && !policy.optString("active").equals(policy.optString("default")) &&
+            !sessions.continues(target, callerUid, taskResume);
         // An updated App, or an APK a reboot renumbered, is refused at specialization until root
         // re-binds it, which the preparation step does. The path comparison catches an update
-        // before root has refreshed its policy.
-        if (policy.optBoolean("stale") || (sourceDir != null && !sourceDir.equals(policy.optString("apk")))) return true;
-        if (policy.isNull("default") || policy.optString("active").equals(policy.optString("default"))) return false;
-        return !sessions.continues(target, callerUid, taskResume);
+        // before root has refreshed its policy. Inside a session that keeps its account, the
+        // preparation only re-binds and must not switch to the default account.
+        boolean stale = policy.optBoolean("stale") || (sourceDir != null && !sourceDir.equals(policy.optString("apk")));
+        if (stale && !switching) keepActive.add(target); else keepActive.remove(target);
+        return stale || switching;
     }
 
     private boolean consumePermit(String target, int callerUid, String token) {
@@ -207,13 +212,29 @@ final class LaunchPolicyCache {
         String ticket = token.toString();
         pending.put(target, ticket);
         JSONObject frame = message("begin", "ticket", ticket);
-        try { frame.put("package", target); } catch (Exception ignored) { return null; }
+        try { frame.put("package", target).put("keep_active", keepActive.contains(target)); } catch (Exception ignored) { return null; }
         outbox.add(frame);
         return ticket;
     }
 
     synchronized boolean ticketPending(String ticket) { return pending.containsValue(ticket); }
     synchronized boolean ticketShown(String ticket) { return shown.contains(ticket); }
+
+    /**
+     * A resume that finds its gate already shown follows a finished preparation, which failed
+     * or was abandoned: a successful one consumes the ticket through its permit. Root has
+     * dropped such a ticket, so it is released here and that resume proceeds, rather than
+     * being held with no gate on screen. The next resume gates again with a new ticket.
+     */
+    boolean releaseShown(String ticket) {
+        boolean released;
+        synchronized (this) {
+            released = shown.contains(ticket);
+            if (released) cancelLocked(ticket);
+        }
+        flush();
+        return released;
+    }
     synchronized boolean queueGate(String ticket) {
         return ticketPending(ticket) && !shown.contains(ticket) && queued.add(ticket);
     }

@@ -53,8 +53,10 @@ pub fn validate_runtime_namespace() -> io::Result<()> {
     Ok(())
 }
 
-type Prepare =
-    dyn Fn(&str, &str, Option<&SigningIdentity>) -> Result<String, String> + Send + Sync + 'static;
+type Prepare = dyn Fn(&str, &str, Option<&SigningIdentity>, bool) -> Result<String, String>
+    + Send
+    + Sync
+    + 'static;
 
 struct ControlPermit(Arc<AtomicUsize>);
 
@@ -104,6 +106,9 @@ struct State {
     permits: BTreeMap<String, Permit>,
     tickets: BTreeMap<String, String>,
     claimed: BTreeSet<String>,
+    /// Tickets the system opened only to re-bind an updated App inside a session that keeps
+    /// its current account; their preparation must not switch to the default account.
+    keep_active: BTreeSet<String>,
     policies_valid: bool,
     processes: BTreeMap<u32, ProcessRecord>,
     blocked: BTreeSet<String>,
@@ -484,6 +489,7 @@ impl LaunchGate {
         let mut state = self.lock()?;
         state.tickets.remove(ticket);
         state.claimed.remove(ticket);
+        state.keep_active.remove(ticket);
         state
             .permits
             .retain(|_, permit| permit.ticket.as_deref() != Some(ticket));
@@ -519,13 +525,17 @@ impl LaunchGate {
             }
             Control::Cancel { ticket } => self.cancel(&ticket).map(|()| json!({"ok": {}})),
             Control::Prepare { ticket, signing } => {
-                let package = {
+                let (package, keep_active) = {
                     let mut state = self.lock()?;
                     let package = state.tickets.get(&ticket).cloned();
-                    package.filter(|_| state.claimed.insert(ticket.clone()))
+                    let keep_active = state.keep_active.contains(&ticket);
+                    (
+                        package.filter(|_| state.claimed.insert(ticket.clone())),
+                        keep_active,
+                    )
                 };
                 match package {
-                    Some(package) => prepare(&package, &ticket, signing.as_ref())
+                    Some(package) => prepare(&package, &ticket, signing.as_ref(), keep_active)
                         .map_err(refused)
                         .map(|permit| prepared_response(&package, &permit)),
                     None => Err(refused("launch ticket is not live")),
@@ -564,6 +574,7 @@ impl LaunchGate {
             }
             state.tickets.clear();
             state.claimed.clear();
+            state.keep_active.clear();
             state.permits.clear();
             state.next_connection += 1;
             let id = state.next_connection;
@@ -624,7 +635,11 @@ impl LaunchGate {
                             connection.ack = connection.ack.max(revision);
                         }
                     }
-                    SystemEvent::Begin { ticket, package } => {
+                    SystemEvent::Begin {
+                        ticket,
+                        package,
+                        keep_active,
+                    } => {
                         validate_token(&ticket)?;
                         // A Begin can race a switch that just published ready=false, or an
                         // unenrollment the system has not applied yet. Refusing only this
@@ -640,11 +655,15 @@ impl LaunchGate {
                             eprintln!("op=launch_begin package={package} refused=not_ready");
                             continue;
                         }
+                        if keep_active {
+                            state.keep_active.insert(ticket.clone());
+                        }
                         state.tickets.insert(ticket, package);
                     }
                     SystemEvent::Cancel { ticket } => {
                         state.tickets.remove(&ticket);
                         state.claimed.remove(&ticket);
+                        state.keep_active.remove(&ticket);
                         state
                             .permits
                             .retain(|_, permit| permit.ticket.as_deref() != Some(&ticket));
@@ -655,6 +674,7 @@ impl LaunchGate {
                         {
                             state.tickets.remove(&ticket);
                             state.claimed.remove(&ticket);
+                            state.keep_active.remove(&ticket);
                         }
                     }
                     SystemEvent::Verify { .. } => unreachable!(),
@@ -672,6 +692,7 @@ impl LaunchGate {
             state.connection = None;
             state.tickets.clear();
             state.claimed.clear();
+            state.keep_active.clear();
             state.permits.clear();
         }
         drop(state);
@@ -847,6 +868,8 @@ enum SystemEvent {
     Begin {
         ticket: String,
         package: String,
+        #[serde(default)]
+        keep_active: bool,
     },
     Cancel {
         ticket: String,

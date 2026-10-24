@@ -17,7 +17,7 @@ class LaunchPolicyCacheTest {
     private val permit = "a".repeat(64)
 
     private fun cache(events: MutableList<JSONObject> = mutableListOf()): LaunchPolicyCache =
-        LaunchPolicyCache("0.3.12") { events += it }.apply {
+        LaunchPolicyCache("0.3.13") { events += it }.apply {
             managerUid(manager)
             update(JSONObject(resource("system-state.json")))
         }
@@ -177,13 +177,13 @@ class LaunchPolicyCacheTest {
         // would invert that order inside system_server.
         var subject: LaunchPolicyCache? = null
         val delivered = mutableListOf<String>()
-        val cache = LaunchPolicyCache("0.3.12") { frame ->
+        val cache = LaunchPolicyCache("0.3.13") { frame ->
             assertFalse(Thread.holdsLock(subject!!), "frame ${frame.optString("type")} sent under the cache lock")
             delivered += frame.optString("type")
         }
         subject = cache
         cache.managerUid(manager)
-        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.12"))
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.13"))
         val first = cache.begin(target, false)
         assertNotNull(first)
         assertNotEquals(first, cache.begin(target, true))
@@ -202,10 +202,10 @@ class LaunchPolicyCacheTest {
 
     @Test fun aFailedDeliveryCanDisconnectFromTheSendingThread() {
         var subject: LaunchPolicyCache? = null
-        val cache = LaunchPolicyCache("0.3.12") { subject!!.disconnected() }
+        val cache = LaunchPolicyCache("0.3.13") { subject!!.disconnected() }
         subject = cache
         cache.managerUid(manager)
-        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.12"))
+        cache.update(JSONObject(resource("system-state.json")).put("build_id", "0.3.13"))
         val ticket = cache.begin(target, false)!!
         assertFalse(cache.ticketPending(ticket))
         assertTrue(cache.gateRequired(target, uid, manager, permit, false, null))
@@ -247,6 +247,39 @@ class LaunchPolicyCacheTest {
         frame.put("revision", 9).getJSONArray("packages").getJSONObject(0).put("stale", true)
         cache.update(frame)
         assertTrue(cache.gateRequired(target, uid, -1, null, true, apk))
+    }
+
+    @Test fun aStaleAppInsideItsSessionIsReBoundWithoutSwitchingAccounts() {
+        val events = mutableListOf<JSONObject>()
+        val cache = cache(events)
+        manual(cache)
+        cache.resumed(target, "Main", uid, false, false)
+        val frame = JSONObject(resource("system-state.json")).put("revision", 8)
+        frame.getJSONArray("packages").getJSONObject(0).put("stale", true)
+        cache.update(frame)
+        assertTrue(cache.gateRequired(target, uid, -1, null, true, null))
+        cache.begin(target, false)
+        assertTrue(events.last { it.optString("type") == "begin" }.getBoolean("keep_active"))
+        // A fresh launch from outside the session still switches to the default account.
+        cache.homeRequested()
+        assertTrue(cache.gateRequired(target, uid, 1000, null, false, null))
+        cache.begin(target, true)
+        assertFalse(events.last { it.optString("type") == "begin" }.getBoolean("keep_active"))
+    }
+
+    @Test fun aResumeAfterAnEndedPreparationIsReleasedInsteadOfHeld() {
+        val events = mutableListOf<JSONObject>()
+        val cache = cache(events)
+        val ticket = cache.begin(target, false)!!
+        assertTrue(cache.queueGate(ticket))
+        cache.gateShown(ticket)
+        assertFalse(cache.queueGate(ticket))
+        assertTrue(cache.releaseShown(ticket))
+        assertFalse(cache.ticketPending(ticket))
+        assertEquals(ticket, events.last().optString("ticket"))
+        assertEquals("cancel", events.last().optString("type"))
+        assertNotEquals(ticket, cache.begin(target, false))
+        assertFalse(cache.releaseShown("b".repeat(64)))
     }
 
     private fun resource(name: String): String =

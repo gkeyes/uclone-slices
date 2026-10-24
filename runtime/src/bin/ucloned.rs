@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prepare_root = root.clone();
     let prepare_lock = Arc::clone(&transaction_lock);
     let prepare_build = build_id.clone();
-    gate.start(Arc::new(move |package, ticket, signing| {
+    gate.start(Arc::new(move |package, ticket, signing, keep_active| {
         let _transaction = prepare_lock
             .lock()
             .map_err(|_| "transaction lock failed".to_owned())?;
@@ -81,8 +81,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             None => Ok(()),
         };
+        // A gate opened only to re-bind keeps the session's current account.
         let prepared = rebound
             .and_then(|()| {
+                if keep_active {
+                    return Ok(false);
+                }
                 runtime
                     .prepare_default_account(package, || prepare_gate.ticket_live(ticket))
                     .map_err(|error| error.to_string())
