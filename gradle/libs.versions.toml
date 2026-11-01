@@ -4,7 +4,7 @@ agp = "9.4.1"
 compose-bom = "2026.09.00"
 core-ktx = "1.19.1"
 json = "20250517"
-kotlin = "2.2.20"
+kotlin = "2.4.21"
 kotlinx-coroutines = "1.11.0"
 kotlinx-serialization = "1.9.0"
 # iOS 27 Liquid Glass: Kyant0/AndroidLiquidGlass backdrop (AGSL refraction, as in
